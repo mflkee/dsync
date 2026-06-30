@@ -1,0 +1,16 @@
+[project]
+name = "dsync"
+version = "0.1.0"
+description = "Decentralized chezmoi dotfiles sync via NetBird"
+requires-python = ">=3.11"
+dependencies = [
+    "lz4>=4.4.5",
+    "rich>=13.0",
+]
+
+[project.scripts]
+dsync = "dsync.cli:main"
+
+[tool.uv]
+dev-dependencies = []
+package = true
