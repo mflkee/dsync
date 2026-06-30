@@ -575,6 +575,121 @@ WantedBy=timers.target
     return 0
 
 
+def cmd_discover(config: Config):
+    ui.print_header()
+    nb = get_status()
+    if nb is None:
+        ui.print_error("NetBird недоступен")
+        return 1
+
+    ui.print_section("🔍 Поиск машин в NetBird")
+    peers_by_ip = {}
+    peers_by_short = {}
+    import re
+    suffix_re = re.compile(r"-\d+-\d+$")
+
+    def _register(key: str, peer):
+        existing = peers_by_short.get(key)
+        if existing is None:
+            peers_by_short[key] = peer
+        elif not existing.is_connected and peer.is_connected:
+            peers_by_short[key] = peer
+
+    for peer in nb.peers:
+        if peer.fqdn == nb.self_fqdn:
+            continue
+        ip = peer.netbird_ip
+        short = peer.hostname_short
+        peers_by_ip[ip] = peer
+        _register(short, peer)
+        _register(short.replace("-", ""), peer)
+        _register(suffix_re.sub("", short), peer)
+        # Strip well-known prefixes so short aliases like "desktop" can match
+        for prefix in ("archlinux-", "mkair-"):
+            if short.startswith(prefix):
+                stripped = short[len(prefix):]
+                _register(stripped, peer)
+                _register(suffix_re.sub("", stripped), peer)
+
+    machines = config.data.setdefault("machines", {})
+    updated = []
+    skipped = []
+
+    for name, info in list(machines.items()):
+        host = info.get("host", "")
+        user = info.get("user", "mflkee")
+
+        # already an IP
+        if host.replace(".", "").isdigit():
+            skipped.append(name)
+            continue
+
+        short_host = host.removesuffix(".netbird.cloud")
+        peer = peers_by_short.get(short_host, None)
+        if peer is None:
+            for short, p in peers_by_short.items():
+                if name in short or short in name:
+                    peer = p
+                    break
+
+        if peer is None:
+            ui.print_warn(f"{name}: не найден в NetBird")
+            continue
+
+        new_host = peer.fqdn
+        if host != new_host:
+            ui.print_info(f"{name}: {host} → {new_host}")
+            machines[name] = {"host": new_host, "user": user}
+            updated.append(name)
+        else:
+            skipped.append(name)
+
+    # optionally add new peers by short name
+    for peer in nb.peers:
+        short = peer.hostname_short
+        if short in machines:
+            continue
+        if peer.fqdn == nb.self_fqdn:
+            continue
+        # suggest known aliases
+        aliases = {
+            "archlinux-notebook": "notebook",
+            "archlinux-desktop": "desktop",
+            "mkair-server-tmn": "server-tmn",
+            "mkair-server": "server",
+            "antix1": "antix1",
+        }
+
+        name = None
+        # Try to match against aliases that ignore the NetBird -<digits> suffix
+        for prefix, alias in aliases.items():
+            if short.startswith(prefix):
+                name = alias
+                break
+            # also match if peer short is the new suffixed form (e.g. archlinux-desktop-12-158)
+            normalized = re.sub(r"-\d+-\d+$", "", short)
+            if normalized.startswith(prefix):
+                name = alias
+                break
+        if name is None:
+            name = short
+        if name not in machines:
+            ui.print_info(f"Найдена новая машина: {name} → {peer.fqdn}")
+            machines[name] = {"host": peer.fqdn, "user": "mflkee"}
+            updated.append(name)
+
+    if updated:
+        config._save()
+        ui.print_ok(f"Обновлено/добавлено: {', '.join(updated)}")
+    else:
+        ui.print_ok("Изменений не требуется")
+
+    if skipped:
+        ui.print_info(f"Без изменений: {', '.join(skipped)}")
+
+    return 0
+
+
 def main():
     config = Config.ensure_default()
 
@@ -608,6 +723,8 @@ def main():
     timer_p.add_argument("--enable", action="store_true", help="Включить таймер")
     timer_p.add_argument("--disable", action="store_true", help="Выключить таймер")
 
+    sub.add_parser("discover", help="Обновить FQDN/IP машин из NetBird")
+
     # zen subcommand
     zen_p = sub.add_parser("zen", help="Zen Browser: экспорт/импорт профиля")
     zen_sub = zen_p.add_subparsers(dest="zen_action")
@@ -637,6 +754,8 @@ def main():
         return cmd_remove(config, args.name)
     elif args.command == "timer":
         return cmd_timer(config, args.enable, args.disable)
+    elif args.command == "discover":
+        return cmd_discover(config)
     elif args.command == "zen":
         if args.zen_action == "export":
             zen_dest = config.git_source / "dot_config" / "dsync" / "zen.json"
