@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
@@ -46,12 +47,14 @@ class NetBirdStatus:
 
 def get_status() -> Optional[NetBirdStatus]:
     try:
+        env = os.environ.copy()
+        env.update({"LC_ALL": "C", "LANG": "C"})
         result = subprocess.run(
             ["netbird", "status", "--json"],
             capture_output=True,
             text=True,
             timeout=10,
-            env={"LC_ALL": "C", "LANG": "C"},
+            env=env,
         )
         if result.returncode != 0:
             return None
