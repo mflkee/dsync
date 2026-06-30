@@ -454,16 +454,29 @@ def cmd_setup(config: Config):
         ip = resolve_host(host)
         ui.print_info(f"\n  {name} ({user}@{host} → {ip})")
 
+        if host == nb.self_fqdn or ip == nb.self_ip:
+            ui.print_ok("Текущая машина, пропускаю")
+            continue
+
+        if not _check_port(ip):
+            ui.print_warn("  SSH порт 22 недоступен, пропускаю")
+            continue
+
         # check if already accessible
         if check_connectivity(ip, user):
             ui.print_ok("Уже есть доступ")
             continue
 
         ui.print_info("  Копируем ключ...")
-        r = subprocess.run(
-            ["ssh-copy-id", "-i", identity, f"{user}@{ip}"],
-            capture_output=True, text=True, timeout=60,
-        )
+        try:
+            r = subprocess.run(
+                ["ssh-copy-id", "-i", identity, f"{user}@{ip}"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            ui.print_warn("  Таймаут ssh-copy-id, пропускаю")
+            all_ok = False
+            continue
         if r.returncode == 0:
             ui.print_ok("Ключ скопирован")
         else:
