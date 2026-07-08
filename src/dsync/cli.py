@@ -2,6 +2,7 @@ import argparse
 import concurrent.futures
 import ipaddress
 import json
+import logging
 import os
 import re
 import shlex
@@ -26,11 +27,14 @@ from .chezmoi import (
 )
 from .config import Config
 from .conflict import resolve_interactive, safe_pull
+from .log import setup_logging
 from .netbird import Peer, get_status
 from .resolver import resolve_host
 from .ssh_client import check_connectivity
 from .ssh_client import run as ssh_run
 from .zen import export_zen, find_profile, import_zen
+
+logger = logging.getLogger(__name__)
 
 
 def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
@@ -55,6 +59,7 @@ def _sync_git_repo(repo: Path, branch: str, strategy: str, dry_run: bool = False
     Returns True on success, False on failure. In dry-run mode no writes are
     performed to the repository or remote.
     """
+    logger.info("git sync: repo=%s branch=%s dry_run=%s", repo, branch, dry_run)
     gs = git_status(repo)
     if gs.error:
         ui.print_error(f"Ошибка git: {gs.error}")
@@ -177,6 +182,7 @@ def _sync_remote_machine(
         return "success", "будет синхронизировано (dry-run)"
 
     rcmd = _remote_sync_script(str(repo), branch, remote_url)
+    logger.info("SSH %s@%s (%s) dry_run=%s", user, host, ip, dry_run)
     if show_spinner:
         with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
             r = ssh_run(ip, rcmd, user=user, timeout=300)
@@ -184,11 +190,15 @@ def _sync_remote_machine(
         r = ssh_run(ip, rcmd, user=user, timeout=300)
 
     if not r.success:
+        logger.warning("SSH %s failed: %s", host, r.stderr[:200])
         return "failed-error", r.stderr.replace("\n", "; ")[:200]
     if "GIT_CONFLICT" in r.stdout:
+        logger.warning("SSH %s git conflict", host)
         return "failed-conflict", "конфликт git, chezmoi не применялся"
     if "NO_CHEZMOI" in r.stdout:
+        logger.info("SSH %s: chezmoi not installed", host)
         return "skipped-chezmoi", "chezmoi не установлен"
+    logger.info("SSH %s succeeded", host)
     return "success", ""
 
 
@@ -308,7 +318,18 @@ def cmd_status(config: Config):
     return 0
 
 
-def cmd_sync(config: Config, strategy: str = "", dry_run: bool = False, jobs: int = 4):
+def _filter_machines(machines: dict, requested: list[str]) -> dict | None:
+    """Return only requested machines, validating names."""
+    if not requested:
+        return machines
+    unknown = [name for name in requested if name not in machines]
+    if unknown:
+        ui.print_error(f"Неизвестные машины: {', '.join(unknown)}")
+        return None
+    return {name: info for name, info in machines.items() if name in requested}
+
+
+def cmd_sync(config: Config, strategy: str = "", dry_run: bool = False, jobs: int = 4, machines: list[str] | None = None):
     ui.print_header()
     if dry_run:
         ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
@@ -323,23 +344,34 @@ def cmd_sync(config: Config, strategy: str = "", dry_run: bool = False, jobs: in
         ui.print_error("NetBird недоступен — не могу синхронизировать удалённые машины")
         return 1
 
-    machines = config.machines
-    if not machines:
+    all_machines = config.machines
+    if not all_machines:
         ui.print_warn("Нет машин в конфиге для удалённой синхронизации")
         return 0
+
+    selected = _filter_machines(all_machines, machines or [])
+    if selected is None:
+        return 1
+    if not selected:
+        return 0
+
+    if machines:
+        ui.print_info(f"Выбраны машины: {', '.join(machines)}")
 
     remote_url = config.git_remote_url or get_remote_url(repo)
     if not remote_url:
         ui.print_error("Не удалось определить URL git remote. Укажи [git] remote_url в конфиге")
         return 1
 
+    logger.info("remote sync: selected=%s dry_run=%s jobs=%s", list(selected), dry_run, jobs)
     ui.print_section("🔄 Синхронизация с удалёнными машинами")
     result_rows, success_count, fail_count, skip_count = _run_remote_sync(
-        repo, branch, remote_url, nb, machines, dry_run=dry_run, jobs=jobs
+        repo, branch, remote_url, nb, selected, dry_run=dry_run, jobs=jobs
     )
     ui.print_result_table(result_rows)
 
     ui.print_section("📊 Итог")
+    logger.info("remote sync finished: success=%d skipped=%d failed=%d", success_count, skip_count, fail_count)
     if dry_run:
         ui.print_info("Режим dry-run: изменения не применены")
     if success_count:
@@ -399,16 +431,24 @@ def _run_remote_sync(
     return result_rows, success_count, fail_count, skip_count
 
 
-def cmd_push(config: Config, strategy: str = "", dry_run: bool = False, jobs: int = 4):
+def cmd_push(config: Config, strategy: str = "", dry_run: bool = False, jobs: int = 4, machines: list[str] | None = None):
     nb = get_status()
     if nb is None:
         ui.print_error("NetBird недоступен")
         return 1
 
-    if not config.machines:
+    all_machines = config.machines
+    if not all_machines:
         ui.print_error("Нет машин в конфиге")
         ui.print_info("Добавь: dsync add <имя> <host>")
         return 1
+
+    selected = _filter_machines(all_machines, machines or [])
+    if selected is None:
+        return 1
+    if not selected:
+        ui.print_warn("Нет машин для синхронизации")
+        return 0
 
     repo = config.git_source
     branch = config.git_branch
@@ -416,6 +456,9 @@ def cmd_push(config: Config, strategy: str = "", dry_run: bool = False, jobs: in
     ui.print_header()
     if dry_run:
         ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
+
+    if machines:
+        ui.print_info(f"Выбраны машины: {', '.join(machines)}")
 
     if not _sync_git_repo(repo, branch, strategy, dry_run=dry_run):
         return 1
@@ -425,15 +468,17 @@ def cmd_push(config: Config, strategy: str = "", dry_run: bool = False, jobs: in
         ui.print_error("Не удалось определить URL git remote. Укажи [git] remote_url в конфиге")
         return 1
 
+    logger.info("remote push: selected=%s dry_run=%s jobs=%s", list(selected), dry_run, jobs)
     ui.print_section("🔄 Рассылка на машины")
     result_rows, success_count, fail_count, skip_count = _run_remote_sync(
-        repo, branch, remote_url, nb, config.machines, dry_run=dry_run, jobs=jobs
+        repo, branch, remote_url, nb, selected, dry_run=dry_run, jobs=jobs
     )
     ui.print_result_table(result_rows)
 
     if dry_run:
         ui.print_info("Режим dry-run: изменения не применены")
 
+    logger.info("remote push finished: success=%d skipped=%d failed=%d", success_count, skip_count, fail_count)
     return 0 if fail_count == 0 else 1
 
 
@@ -740,17 +785,23 @@ def main():
     config = Config.ensure_default()
 
     parser = argparse.ArgumentParser(prog="dsync", description="Decentralized chezmoi dotfiles sync via NetBird")
+    parser.add_argument("--log-file", help="Путь к файлу логов (по умолчанию из конфига или ~/.local/share/dsync/dsync.log)")
+    parser.add_argument("--verbose", action="store_true", help="Подробное логирование (DEBUG)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Показать статус всех машин")
 
     sync_p = sub.add_parser("sync", help="Полный цикл синхронизации")
+    sync_p.add_argument("machines", nargs="*", help="Имена машин для синхронизации (по умолчанию все)")
+    sync_p.add_argument("--only", action="append", default=[], help="Отфильтровать только указанные машины (можно несколько раз)")
     sync_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов (иначе — интерактивный режим)")
     sync_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано, без изменений")
     sync_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений (по умолчанию 4)")
 
     push_p = sub.add_parser("push", help="Отправить изменения на удалённые машины")
+    push_p.add_argument("machines", nargs="*", help="Имена машин для push (по умолчанию все)")
+    push_p.add_argument("--only", action="append", default=[], help="Отфильтровать только указанные машины (можно несколько раз)")
     push_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов")
     push_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано, без изменений")
@@ -785,6 +836,10 @@ def main():
 
     args = parser.parse_args()
 
+    log_file = args.log_file or str(config.log_file)
+    log_level = "DEBUG" if args.verbose else config.log_level
+    setup_logging(log_file=log_file, level=log_level)
+
     if args.command == "status":
         return cmd_status(config)
     elif args.command == "sync":
@@ -793,6 +848,7 @@ def main():
             getattr(args, "strategy", ""),
             dry_run=args.dry_run,
             jobs=args.jobs,
+            machines=args.machines + args.only,
         )
     elif args.command == "push":
         return cmd_push(
@@ -800,6 +856,7 @@ def main():
             getattr(args, "strategy", ""),
             dry_run=args.dry_run,
             jobs=args.jobs,
+            machines=args.machines + args.only,
         )
     elif args.command == "pull":
         return cmd_pull(

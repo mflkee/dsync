@@ -15,17 +15,23 @@ DEFAULT_CONFIG = """# dsync configuration
 [git]
 source = "~/dotfiles"
 branch = "main"
+# Optional: the URL used to clone the repo on new machines.
+# remote_url = "https://github.com/username/dotfiles.git"
 
-# Optional aliases for NetBird machine discovery.
+# Optional: aliases for NetBird machine discovery.
 # [discover.aliases]
 # archlinux-notebook = "notebook"
 # archlinux-desktop = "desktop"
-# mkair-server-tmn = "server-tmn"
 # mkair-server = "server"
 
-# Optional prefixes stripped from NetBird hostnames before alias lookup.
+# Optional: prefixes stripped from NetBird hostnames before alias lookup.
 # [discover]
 # prefixes = ["archlinux-", "mkair-"]
+
+# Optional: logging settings.
+# [logging]
+# file = "~/.local/share/dsync/dsync.log"
+# level = "INFO"
 """
 
 DEFAULT_DISCOVER_PREFIXES = ("archlinux-", "mkair-")
@@ -72,6 +78,17 @@ class Config:
         if prefixes is None:
             return DEFAULT_DISCOVER_PREFIXES
         return tuple(prefixes)
+
+    @property
+    def log_file(self) -> Path:
+        path = self.data.get("logging", {}).get("file")
+        if path:
+            return Path(path).expanduser()
+        return Path.home() / ".local" / "share" / "dsync" / "dsync.log"
+
+    @property
+    def log_level(self) -> str:
+        return self.data.get("logging", {}).get("level", "INFO")
 
     def add_machine(self, name: str, host: str, user: str = "mflkee"):
         machines = self.data.setdefault("machines", {})

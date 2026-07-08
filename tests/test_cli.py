@@ -50,6 +50,37 @@ def test_sync_remote_machine_dry_run_skips_ssh(monkeypatch, tmp_path: Path):
     assert ssh_called == []
 
 
+def test_filter_machines_selects_subset():
+    machines = {
+        "a": {"host": "a.netbird.cloud"},
+        "b": {"host": "b.netbird.cloud"},
+        "c": {"host": "c.netbird.cloud"},
+    }
+    selected = cli._filter_machines(machines, ["a", "c"])
+    assert selected is not None
+    assert list(selected.keys()) == ["a", "c"]
+
+
+def test_filter_machines_all_when_no_request():
+    machines = {"a": {"host": "a.netbird.cloud"}}
+    selected = cli._filter_machines(machines, [])
+    assert selected is not None
+    assert selected == machines
+
+
+def test_filter_machines_returns_none_on_unknown():
+    machines = {"a": {"host": "a.netbird.cloud"}}
+    selected = cli._filter_machines(machines, ["x"])
+    assert selected is None
+
+
+def test_setup_logging_creates_file(tmp_path: Path):
+    log_file = tmp_path / "dsync.log"
+    path = cli.setup_logging(log_file=str(log_file), level="DEBUG")
+    assert path == log_file
+    assert log_file.exists()
+
+
 def test_run_remote_sync_respects_jobs(monkeypatch, tmp_path: Path):
     nb = MagicMock()
     nb.self_fqdn = "self.netbird.cloud"

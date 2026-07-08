@@ -12,9 +12,12 @@ changes over SSH inside the private mesh network.
 - `dsync status` — show NetBird status, peers, and configured sync targets.
 - `dsync sync` — commit local dotfile changes, push to GitHub, and pull/apply
   them on all configured remote machines.
+- `dsync sync notebook desktop` — sync only specific machines.
+- `dsync sync --only notebook --only desktop` — alternative way to select machines.
 - `dsync sync --dry-run` — preview what `sync` would do without making changes.
 - `dsync sync --jobs 8` — sync up to 8 remote machines in parallel (default: 4).
 - `dsync push` — push current state to remote machines.
+- `dsync push notebook` — push only to a specific machine.
 - `dsync push --dry-run` — preview what `push` would do.
 - `dsync pull` — pull latest dotfiles from GitHub and run `chezmoi apply`.
 - `dsync pull --dry-run` — preview what `pull` would do.
@@ -66,6 +69,11 @@ branch = "main"
 # Optional: prefixes stripped from NetBird hostnames before alias lookup.
 # [discover]
 # prefixes = ["archlinux-", "mkair-"]
+
+# Optional: logging settings.
+# [logging]
+# file = "~/.local/share/dsync/dsync.log"
+# level = "INFO"
 ```
 
 Each `host` must be a NetBird FQDN resolvable inside the mesh. Use the value
