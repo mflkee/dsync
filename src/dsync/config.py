@@ -32,6 +32,10 @@ branch = "main"
 # [logging]
 # file = "~/.local/share/dsync/dsync.log"
 # level = "INFO"
+
+# Optional: projects to sync across machines.
+# [projects]
+# myapp = { path = "~/projects/myapp", remote = "git@github.com:mflkee/myapp.git", machines = ["notebook", "desktop"] }
 """
 
 DEFAULT_DISCOVER_PREFIXES = ("archlinux-", "mkair-")
@@ -89,6 +93,10 @@ class Config:
     @property
     def log_level(self) -> str:
         return self.data.get("logging", {}).get("level", "INFO")
+
+    @property
+    def projects(self) -> dict[str, dict]:
+        return self.data.get("projects", {})
 
     def add_machine(self, name: str, host: str, user: str = "mflkee"):
         machines = self.data.setdefault("machines", {})

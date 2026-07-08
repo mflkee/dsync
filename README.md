@@ -25,6 +25,28 @@ changes over SSH inside the private mesh network.
 - `dsync add <name> <host>` / `dsync remove <name>` — manage machine list.
 - `dsync timer --enable` — run `dsync sync` every 30 minutes via systemd timer.
 - `dsync zen export|import|info` — export/import Zen Browser profile data.
+- `dsync project status` — show status of configured projects.
+- `dsync project sync` — commit, push, and pull projects on remote machines.
+- `dsync project clone` — clone projects on remote machines.
+
+## Project sync
+
+Besides dotfiles, `dsync` can keep arbitrary GitHub projects in sync across
+your machines. Add a `[projects]` section to the config:
+
+```toml
+[projects]
+myapp = { path = "~/projects/myapp", remote = "git@github.com:mflkee/myapp.git", machines = ["notebook", "desktop"] }
+dsync = { path = "~/projects/dsync", remote = "git@github.com:mflkee/dsync.git" }
+```
+
+`machines` is optional; if omitted, the project is synced to all machines in
+`[machines]`.
+
+- `dsync project status` — show local git status for each project.
+- `dsync project sync myapp` — sync a single project.
+- `dsync project sync` — sync all projects.
+- `dsync project clone myapp` — clone the project on remote machines.
 
 ## Install
 
@@ -74,6 +96,10 @@ branch = "main"
 # [logging]
 # file = "~/.local/share/dsync/dsync.log"
 # level = "INFO"
+
+# Optional: projects to sync across machines.
+# [projects]
+# myapp = { path = "~/projects/myapp", remote = "git@github.com:mflkee/myapp.git", machines = ["notebook", "desktop"] }
 ```
 
 Each `host` must be a NetBird FQDN resolvable inside the mesh. Use the value

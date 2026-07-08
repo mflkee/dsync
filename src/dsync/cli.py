@@ -13,7 +13,7 @@ from pathlib import Path
 
 import lz4.block
 
-from . import ui
+from . import project_cli, ui
 from .chezmoi import (
     chezmoi_apply,
     commit,
@@ -827,6 +827,19 @@ def main():
 
     sub.add_parser("discover", help="Обновить FQDN/IP машин из NetBird")
 
+    # project subcommand
+    project_p = sub.add_parser("project", help="Управление проектами")
+    project_sub = project_p.add_subparsers(dest="project_action", required=True)
+    project_sub.add_parser("status", help="Показать статус проектов")
+    project_sync_p = project_sub.add_parser("sync", help="Синхронизировать проекты на машины")
+    project_sync_p.add_argument("projects", nargs="*", help="Имена проектов (по умолчанию все)")
+    project_sync_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано")
+    project_sync_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений")
+    project_clone_p = project_sub.add_parser("clone", help="Клонировать проекты на машины")
+    project_clone_p.add_argument("projects", nargs="*", help="Имена проектов (по умолчанию все)")
+    project_clone_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано")
+    project_clone_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений")
+
     # zen subcommand
     zen_p = sub.add_parser("zen", help="Zen Browser: экспорт/импорт профиля")
     zen_sub = zen_p.add_subparsers(dest="zen_action")
@@ -878,6 +891,23 @@ def main():
         return cmd_timer(config, args.enable, args.disable)
     elif args.command == "discover":
         return cmd_discover(config)
+    elif args.command == "project":
+        if args.project_action == "status":
+            return project_cli.cmd_project_status(config)
+        elif args.project_action == "sync":
+            return project_cli.cmd_project_sync(
+                config,
+                args.projects,
+                dry_run=args.dry_run,
+                jobs=args.jobs,
+            )
+        elif args.project_action == "clone":
+            return project_cli.cmd_project_clone(
+                config,
+                args.projects,
+                dry_run=args.dry_run,
+                jobs=args.jobs,
+            )
     elif args.command == "zen":
         if args.zen_action == "export":
             zen_dest = config.git_source / "dot_config" / "dsync" / "zen.json"
