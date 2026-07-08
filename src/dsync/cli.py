@@ -781,6 +781,56 @@ def cmd_discover(config: Config):
     return 0
 
 
+def cmd_help():
+    ui.print_header()
+
+    quick_start = """[bold cyan]dsync status[/bold cyan]           Показать статус машин и проектов
+[bold cyan]dsync setup[/bold cyan]            Скопировать SSH-ключи на все машины
+[bold cyan]dsync sync[/bold cyan]             Синхронизировать dotfiles
+[bold cyan]dsync project status[/bold cyan]   Показать статус проектов
+[bold cyan]dsync project sync[/bold cyan]   Синхронизировать проекты"""
+    ui.print_panel("🚀 Быстрый старт", quick_start, style="cyan")
+
+    commands = [
+        ["status", "Статус NetBird, chezmoi и машин", "dsync status"],
+        ["sync", "Синхронизировать dotfiles", "dsync sync --dry-run"],
+        ["push", "Отправить dotfiles на машины", "dsync push notebook"],
+        ["pull", "Получить dotfiles и применить", "dsync pull"],
+        ["setup", "Настроить SSH доступ", "dsync setup"],
+        ["add", "Добавить машину", "dsync add desktop archlinux-desktop.netbird.cloud"],
+        ["remove", "Удалить машину", "dsync remove desktop"],
+        ["discover", "Обновить FQDN из NetBird", "dsync discover"],
+        ["timer", "systemd таймер", "dsync timer --enable"],
+        ["project", "Управление проектами", "dsync project status"],
+        ["zen", "Zen Browser профиль", "dsync zen export"],
+    ]
+    ui.print_panel(
+        "📚 Команды",
+        ui._make_table(["Команда", "Описание", "Пример"], commands),
+    )
+
+    flags = [
+        ["--dry-run", "Показать, что будет сделано, без изменений"],
+        ["--jobs N", "Число параллельных SSH (по умолчанию 4)"],
+        ["--verbose", "Подробное логирование"],
+        ["--log-file", "Путь к файлу логов"],
+    ]
+    ui.print_panel(
+        "⚙ Флаги",
+        ui._make_table(["Флаг", "Описание"], flags),
+    )
+
+    ui.print_panel(
+        "📁 Конфигурация",
+        "Файл: [bold]~/.config/dsync/config.toml[/bold]\n"
+        "Секции: [bold]machines[/bold], [bold]git[/bold], [bold]discover[/bold], [bold]logging[/bold], [bold]projects[/bold]",
+        style="dim",
+    )
+
+    ui.print_info("Подробная справка по команде: dsync <команда> --help")
+    return 0
+
+
 def main():
     config = Config.ensure_default()
 
@@ -826,6 +876,8 @@ def main():
     timer_p.add_argument("--disable", action="store_true", help="Выключить таймер")
 
     sub.add_parser("discover", help="Обновить FQDN/IP машин из NetBird")
+
+    sub.add_parser("help", help="Показать справку")
 
     # project subcommand
     project_p = sub.add_parser("project", help="Управление проектами")
@@ -891,6 +943,8 @@ def main():
         return cmd_timer(config, args.enable, args.disable)
     elif args.command == "discover":
         return cmd_discover(config)
+    elif args.command == "help":
+        return cmd_help()
     elif args.command == "project":
         if args.project_action == "status":
             return project_cli.cmd_project_status(config)

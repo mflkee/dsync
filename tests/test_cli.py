@@ -81,6 +81,10 @@ def test_setup_logging_creates_file(tmp_path: Path):
     assert log_file.exists()
 
 
+def test_help_command_runs_without_error():
+    assert cli.cmd_help() == 0
+
+
 def test_run_remote_sync_respects_jobs(monkeypatch, tmp_path: Path):
     nb = MagicMock()
     nb.self_fqdn = "self.netbird.cloud"
