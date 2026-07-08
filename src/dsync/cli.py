@@ -1,4 +1,5 @@
 import argparse
+import concurrent.futures
 import ipaddress
 import json
 import os
@@ -48,10 +49,11 @@ def _is_ip_value(value: str) -> bool:
         return False
 
 
-def _sync_git_repo(repo: Path, branch: str, strategy: str) -> bool:
+def _sync_git_repo(repo: Path, branch: str, strategy: str, dry_run: bool = False) -> bool:
     """Commit local changes, fetch, pull and push to origin.
 
-    Returns True on success, False on failure.
+    Returns True on success, False on failure. In dry-run mode no writes are
+    performed to the repository or remote.
     """
     gs = git_status(repo)
     if gs.error:
@@ -60,47 +62,61 @@ def _sync_git_repo(repo: Path, branch: str, strategy: str) -> bool:
 
     if not gs.is_clean:
         ui.print_section("📤 Локальные изменения")
-        with ui.spinner_ctx("Коммит..."):
-            msg = f"sync: {os.uname().nodename} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            r = commit(repo, msg)
-        if r.success:
-            ui.print_ok("Закоммичено")
+        if dry_run:
+            ui.print_info(f"Будет закоммичено: {gs.staged} staged, {gs.unstaged} unstaged, {gs.untracked} untracked")
         else:
-            ui.print_error(f"Ошибка коммита: {r.stderr}")
-            return False
+            with ui.spinner_ctx("Коммит..."):
+                msg = f"sync: {os.uname().nodename} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                r = commit(repo, msg)
+            if r.success:
+                ui.print_ok("Закоммичено")
+            else:
+                ui.print_error(f"Ошибка коммита: {r.stderr}")
+                return False
     else:
         ui.print_ok("Локально чисто")
 
     ui.print_section("📥 Синхронизация с GitHub")
-    with ui.spinner_ctx("Fetch..."):
-        fetch(repo)
+    if dry_run:
+        # Fetch is read-only; it lets us report ahead/behind accurately.
+        with ui.spinner_ctx("Fetch..."):
+            fetch(repo)
+    else:
+        with ui.spinner_ctx("Fetch..."):
+            fetch(repo)
 
     ahead, behind = diverts_check(repo, branch)
     if behind > 0:
         ui.print_info(f"Удалённых коммитов: {behind}")
-        with ui.spinner_ctx("Pull..."):
-            r, had_conflict = safe_pull(repo, branch)
-        if r.success:
-            ui.print_ok("Pull выполнен")
-        elif had_conflict:
-            ui._print()
-            ui.print_warn("Конфликт при pull!")
-            res = resolve_conflict(repo, branch, strategy)
-            if res is None:
-                return False
+        if dry_run:
+            ui.print_info(f"Будет выполнен git pull --rebase origin {branch}")
         else:
-            ui.print_warn(f"Pull: {r.stderr[:200]}")
+            with ui.spinner_ctx("Pull..."):
+                r, had_conflict = safe_pull(repo, branch)
+            if r.success:
+                ui.print_ok("Pull выполнен")
+            elif had_conflict:
+                ui._print()
+                ui.print_warn("Конфликт при pull!")
+                res = resolve_conflict(repo, branch, strategy)
+                if res is None:
+                    return False
+            else:
+                ui.print_warn(f"Pull: {r.stderr[:200]}")
     else:
         ui.print_ok("Pull не требуется")
 
     if ahead > 0 or gs.ahead > 0:
-        with ui.spinner_ctx("Push..."):
-            r = push(repo, branch)
-        if r.success:
-            ui.print_ok("Запущено на GitHub")
+        if dry_run:
+            ui.print_info(f"Будет выполнен git push origin {branch} ({ahead + gs.ahead} коммитов)")
         else:
-            ui.print_error(f"Ошибка push: {r.stderr}")
-            return False
+            with ui.spinner_ctx("Push..."):
+                r = push(repo, branch)
+            if r.success:
+                ui.print_ok("Запущено на GitHub")
+            else:
+                ui.print_error(f"Ошибка push: {r.stderr}")
+                return False
 
     return True
 
@@ -134,6 +150,8 @@ def _sync_remote_machine(
     nb,
     name: str,
     info: dict,
+    dry_run: bool = False,
+    show_spinner: bool = True,
 ) -> tuple[str, str]:
     """Sync a single remote machine.
 
@@ -155,8 +173,14 @@ def _sync_remote_machine(
     if not _check_port(ip):
         return "skipped-ssh", "SSH порт 22 недоступен"
 
+    if dry_run:
+        return "success", "будет синхронизировано (dry-run)"
+
     rcmd = _remote_sync_script(str(repo), branch, remote_url)
-    with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
+    if show_spinner:
+        with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
+            r = ssh_run(ip, rcmd, user=user, timeout=300)
+    else:
         r = ssh_run(ip, rcmd, user=user, timeout=300)
 
     if not r.success:
@@ -284,12 +308,14 @@ def cmd_status(config: Config):
     return 0
 
 
-def cmd_sync(config: Config, strategy: str = ""):
+def cmd_sync(config: Config, strategy: str = "", dry_run: bool = False, jobs: int = 4):
     ui.print_header()
+    if dry_run:
+        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
     repo = config.git_source
     branch = config.git_branch
 
-    if not _sync_git_repo(repo, branch, strategy):
+    if not _sync_git_repo(repo, branch, strategy, dry_run=dry_run):
         return 1
 
     nb = get_status()
@@ -308,27 +334,14 @@ def cmd_sync(config: Config, strategy: str = ""):
         return 1
 
     ui.print_section("🔄 Синхронизация с удалёнными машинами")
-    success_count = 0
-    fail_count = 0
-    skip_count = 0
-    result_rows: list[list[str]] = []
-
-    for name, info in machines.items():
-        ui.print_info(f"  → {name} ({info['host']})")
-        status, reason = _sync_remote_machine(repo, branch, remote_url, nb, name, info)
-        if status == "success":
-            result_rows.append([name, ui.result_badge("success"), ""])
-            success_count += 1
-        elif status.startswith("skipped-"):
-            result_rows.append([name, ui.result_badge("skipped"), reason])
-            skip_count += 1
-        else:
-            result_rows.append([name, ui.result_badge("failed"), reason])
-            fail_count += 1
-
+    result_rows, success_count, fail_count, skip_count = _run_remote_sync(
+        repo, branch, remote_url, nb, machines, dry_run=dry_run, jobs=jobs
+    )
     ui.print_result_table(result_rows)
 
     ui.print_section("📊 Итог")
+    if dry_run:
+        ui.print_info("Режим dry-run: изменения не применены")
     if success_count:
         ui.print_ok(f"Успешно: {success_count}")
     if skip_count:
@@ -339,7 +352,54 @@ def cmd_sync(config: Config, strategy: str = ""):
     return 0 if fail_count == 0 else 1
 
 
-def cmd_push(config: Config, strategy: str = ""):
+def _run_remote_sync(
+    repo: Path,
+    branch: str,
+    remote_url: str,
+    nb,
+    machines: dict,
+    dry_run: bool,
+    jobs: int,
+) -> tuple[list[list[str]], int, int, int]:
+    """Run remote sync for all machines, optionally in parallel."""
+    items = list(machines.items())
+
+    def _sync_one(item: tuple[str, dict]) -> tuple[str, str, str]:
+        name, info = item
+        status, reason = _sync_remote_machine(
+            repo, branch, remote_url, nb, name, info,
+            dry_run=dry_run, show_spinner=(jobs == 1)
+        )
+        return name, status, reason
+
+    with ui.spinner_ctx("Синхронизация машин..."):
+        if jobs == 1:
+            raw_results = [_sync_one(item) for item in items]
+        else:
+            workers = max(1, min(jobs, len(items)))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                raw_results = list(executor.map(_sync_one, items))
+
+    result_rows: list[list[str]] = []
+    success_count = 0
+    fail_count = 0
+    skip_count = 0
+
+    for name, status, reason in raw_results:
+        if status == "success":
+            result_rows.append([name, ui.result_badge("success"), reason])
+            success_count += 1
+        elif status.startswith("skipped-"):
+            result_rows.append([name, ui.result_badge("skipped"), reason])
+            skip_count += 1
+        else:
+            result_rows.append([name, ui.result_badge("failed"), reason])
+            fail_count += 1
+
+    return result_rows, success_count, fail_count, skip_count
+
+
+def cmd_push(config: Config, strategy: str = "", dry_run: bool = False, jobs: int = 4):
     nb = get_status()
     if nb is None:
         ui.print_error("NetBird недоступен")
@@ -354,8 +414,10 @@ def cmd_push(config: Config, strategy: str = ""):
     branch = config.git_branch
 
     ui.print_header()
+    if dry_run:
+        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
 
-    if not _sync_git_repo(repo, branch, strategy):
+    if not _sync_git_repo(repo, branch, strategy, dry_run=dry_run):
         return 1
 
     remote_url = config.git_remote_url or get_remote_url(repo)
@@ -364,27 +426,21 @@ def cmd_push(config: Config, strategy: str = ""):
         return 1
 
     ui.print_section("🔄 Рассылка на машины")
-    fail_count = 0
-    result_rows: list[list[str]] = []
-
-    for name, info in config.machines.items():
-        ui.print_info(f"  → {name} ({info['host']})")
-        status, reason = _sync_remote_machine(repo, branch, remote_url, nb, name, info)
-        if status == "success":
-            result_rows.append([name, ui.result_badge("success"), ""])
-        elif status.startswith("skipped-"):
-            result_rows.append([name, ui.result_badge("skipped"), reason])
-        else:
-            result_rows.append([name, ui.result_badge("failed"), reason])
-            fail_count += 1
-
+    result_rows, success_count, fail_count, skip_count = _run_remote_sync(
+        repo, branch, remote_url, nb, config.machines, dry_run=dry_run, jobs=jobs
+    )
     ui.print_result_table(result_rows)
+
+    if dry_run:
+        ui.print_info("Режим dry-run: изменения не применены")
 
     return 0 if fail_count == 0 else 1
 
 
-def cmd_pull(config: Config, strategy: str = ""):
+def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
     ui.print_header()
+    if dry_run:
+        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
     repo = config.git_source
     branch = config.git_branch
 
@@ -394,18 +450,25 @@ def cmd_pull(config: Config, strategy: str = ""):
     ahead, behind = diverts_check(repo, branch)
     if behind > 0:
         ui.print_info(f"Удалённых коммитов: {behind}")
-        with ui.spinner_ctx("Pull..."):
-            r, had_conflict = safe_pull(repo, branch)
-        if r.success:
-            ui.print_ok("Git pull выполнен")
-        elif had_conflict:
-            ui._print()
-            ui.print_warn("Конфликт при pull!")
-            res = resolve_conflict(repo, branch, strategy)
-            if res is None:
-                return 1
+        if dry_run:
+            ui.print_info(f"Будет выполнен git pull --rebase origin {branch}")
+        else:
+            with ui.spinner_ctx("Pull..."):
+                r, had_conflict = safe_pull(repo, branch)
+            if r.success:
+                ui.print_ok("Git pull выполнен")
+            elif had_conflict:
+                ui._print()
+                ui.print_warn("Конфликт при pull!")
+                res = resolve_conflict(repo, branch, strategy)
+                if res is None:
+                    return 1
     else:
         ui.print_ok("Уже актуально")
+
+    if dry_run:
+        ui.print_info("Будет выполнен chezmoi apply")
+        return 0
 
     with ui.spinner_ctx("chezmoi apply..."):
         r = chezmoi_apply()
@@ -684,14 +747,19 @@ def main():
     sync_p = sub.add_parser("sync", help="Полный цикл синхронизации")
     sync_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов (иначе — интерактивный режим)")
+    sync_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано, без изменений")
+    sync_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений (по умолчанию 4)")
 
     push_p = sub.add_parser("push", help="Отправить изменения на удалённые машины")
     push_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов")
+    push_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано, без изменений")
+    push_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений (по умолчанию 4)")
 
     pull_p = sub.add_parser("pull", help="Получить изменения и применить chezmoi")
     pull_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов")
+    pull_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано, без изменений")
     sub.add_parser("setup", help="Настроить SSH доступ к машинам")
 
     add_p = sub.add_parser("add", help="Добавить машину в конфиг")
@@ -720,11 +788,25 @@ def main():
     if args.command == "status":
         return cmd_status(config)
     elif args.command == "sync":
-        return cmd_sync(config, getattr(args, "strategy", ""))
+        return cmd_sync(
+            config,
+            getattr(args, "strategy", ""),
+            dry_run=args.dry_run,
+            jobs=args.jobs,
+        )
     elif args.command == "push":
-        return cmd_push(config, getattr(args, "strategy", ""))
+        return cmd_push(
+            config,
+            getattr(args, "strategy", ""),
+            dry_run=args.dry_run,
+            jobs=args.jobs,
+        )
     elif args.command == "pull":
-        return cmd_pull(config, getattr(args, "strategy", ""))
+        return cmd_pull(
+            config,
+            getattr(args, "strategy", ""),
+            dry_run=args.dry_run,
+        )
     elif args.command == "setup":
         return cmd_setup(config)
     elif args.command == "add":

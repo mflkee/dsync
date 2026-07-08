@@ -12,8 +12,12 @@ changes over SSH inside the private mesh network.
 - `dsync status` — show NetBird status, peers, and configured sync targets.
 - `dsync sync` — commit local dotfile changes, push to GitHub, and pull/apply
   them on all configured remote machines.
+- `dsync sync --dry-run` — preview what `sync` would do without making changes.
+- `dsync sync --jobs 8` — sync up to 8 remote machines in parallel (default: 4).
 - `dsync push` — push current state to remote machines.
+- `dsync push --dry-run` — preview what `push` would do.
 - `dsync pull` — pull latest dotfiles from GitHub and run `chezmoi apply`.
+- `dsync pull --dry-run` — preview what `pull` would do.
 - `dsync setup` — copy SSH keys to all configured machines.
 - `dsync add <name> <host>` / `dsync remove <name>` — manage machine list.
 - `dsync timer --enable` — run `dsync sync` every 30 minutes via systemd timer.
