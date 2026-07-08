@@ -6,11 +6,34 @@ requires-python = ">=3.11"
 dependencies = [
     "lz4>=4.4.5",
     "rich>=13.0",
+    "tomli-w>=1.0.0",
 ]
 
 [project.scripts]
 dsync = "dsync.cli:main"
 
+[dependency-groups]
+dev = [
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+    "pytest>=8.0",
+]
+
 [tool.uv]
-dev-dependencies = []
 package = true
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+module = "lz4.*"
+ignore_missing_imports = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

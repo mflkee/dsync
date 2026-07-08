@@ -1,7 +1,6 @@
 import subprocess
-from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
 
 
 @dataclass
@@ -41,7 +40,7 @@ def _git(repo_path: Path, args: list[str], timeout: int = 30) -> GitResult:
             stderr=result.stderr.strip(),
             returncode=result.returncode,
         )
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         return GitResult(success=False, stderr="git command timed out", returncode=-1)
     except FileNotFoundError:
         return GitResult(success=False, stderr="git not found", returncode=-2)
@@ -98,6 +97,14 @@ def pull(repo_path: Path, branch: str = "main") -> GitResult:
 
 def fetch(repo_path: Path) -> GitResult:
     return _git(repo_path, ["fetch", "origin"], timeout=30)
+
+
+def get_remote_url(repo_path: Path, remote: str = "origin") -> str | None:
+    """Return the URL of the given git remote, or None if it does not exist."""
+    r = _git(repo_path, ["remote", "get-url", remote])
+    if r.success:
+        return r.stdout
+    return None
 
 
 def push(repo_path: Path, branch: str = "main") -> GitResult:

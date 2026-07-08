@@ -67,9 +67,16 @@ def get_status() -> Optional[NetBirdStatus]:
     status.self_ip = data.get("netbirdIp", "").split("/")[0]
     status.daemon_status = data.get("daemonStatus", "")
 
-    peers_data = data.get("peers", {})
-    details = peers_data.get("details") or []
+    peers_data = data.get("peers") or {}
+    if isinstance(peers_data, dict):
+        details = peers_data.get("details") or []
+    elif isinstance(peers_data, list):
+        details = peers_data
+    else:
+        details = []
     for p in details:
+        if not isinstance(p, dict):
+            continue
         peer = Peer(
             fqdn=p.get("fqdn", ""),
             netbird_ip=p.get("netbirdIp", ""),

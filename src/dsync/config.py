@@ -1,6 +1,7 @@
 import tomllib
-import os
 from pathlib import Path
+
+import tomli_w
 
 CONFIG_DIR = Path.home() / ".config" / "dsync"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
@@ -14,7 +15,20 @@ DEFAULT_CONFIG = """# dsync configuration
 [git]
 source = "~/dotfiles"
 branch = "main"
+
+# Optional aliases for NetBird machine discovery.
+# [discover.aliases]
+# archlinux-notebook = "notebook"
+# archlinux-desktop = "desktop"
+# mkair-server-tmn = "server-tmn"
+# mkair-server = "server"
+
+# Optional prefixes stripped from NetBird hostnames before alias lookup.
+# [discover]
+# prefixes = ["archlinux-", "mkair-"]
 """
+
+DEFAULT_DISCOVER_PREFIXES = ("archlinux-", "mkair-")
 
 
 class Config:
@@ -44,6 +58,21 @@ class Config:
     def git_branch(self) -> str:
         return self.data.get("git", {}).get("branch", "main")
 
+    @property
+    def git_remote_url(self) -> str | None:
+        return self.data.get("git", {}).get("remote_url")
+
+    @property
+    def discover_aliases(self) -> dict[str, str]:
+        return self.data.get("discover", {}).get("aliases", {})
+
+    @property
+    def discover_prefixes(self) -> tuple[str, ...]:
+        prefixes = self.data.get("discover", {}).get("prefixes")
+        if prefixes is None:
+            return DEFAULT_DISCOVER_PREFIXES
+        return tuple(prefixes)
+
     def add_machine(self, name: str, host: str, user: str = "mflkee"):
         machines = self.data.setdefault("machines", {})
         machines[name] = {"host": host, "user": user}
@@ -51,17 +80,8 @@ class Config:
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        lines = ["# dsync configuration\n"]
-        lines.append("[machines]\n")
-        for name, info in self.data.get("machines", {}).items():
-            host = info.get("host", "")
-            user = info.get("user", "mflkee")
-            lines.append(f'{name} = {{ host = "{host}", user = "{user}" }}\n')
-        git = self.data.get("git", {})
-        lines.append("\n[git]\n")
-        lines.append(f'source = "{git.get("source", str(CHEZMOI_SOURCE))}"\n')
-        lines.append(f'branch = "{git.get("branch", "main")}"\n')
-        self.path.write_text("".join(lines))
+        with self.path.open("wb") as f:
+            tomli_w.dump(self.data, f)
 
     @classmethod
     def ensure_default(cls):

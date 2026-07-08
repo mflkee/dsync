@@ -1,25 +1,35 @@
 import argparse
-import subprocess
+import ipaddress
+import json
 import os
+import re
 import shlex
 import socket
-import sys
-import json
-from pathlib import Path
+import subprocess
 from datetime import datetime
+from pathlib import Path
+
+import lz4.block
 
 from . import ui
-from .config import Config
-from .netbird import get_status
-from .ssh_client import run as ssh_run, check_connectivity
-from .chezmoi import get_status as git_status, commit, fetch, pull, push, chezmoi_apply, diverts_check
-from .resolver import resolve_host
-from .conflict import (
-    safe_pull, has_conflict, is_rebasing, rebase_abort,
-    get_conflicted_files, show_diff_summary, resolve_interactive
+from .chezmoi import (
+    chezmoi_apply,
+    commit,
+    diverts_check,
+    fetch,
+    get_remote_url,
+    push,
 )
-from .zen import export_zen, import_zen, find_profile
-import lz4.block
+from .chezmoi import (
+    get_status as git_status,
+)
+from .config import Config
+from .conflict import resolve_interactive, safe_pull
+from .netbird import Peer, get_status
+from .resolver import resolve_host
+from .ssh_client import check_connectivity
+from .ssh_client import run as ssh_run
+from .zen import export_zen, find_profile, import_zen
 
 
 def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
@@ -28,6 +38,134 @@ def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
             return True
     except (socket.timeout, ConnectionRefusedError, OSError):
         return False
+
+
+def _is_ip_value(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _sync_git_repo(repo: Path, branch: str, strategy: str) -> bool:
+    """Commit local changes, fetch, pull and push to origin.
+
+    Returns True on success, False on failure.
+    """
+    gs = git_status(repo)
+    if gs.error:
+        ui.print_error(f"Ошибка git: {gs.error}")
+        return False
+
+    if not gs.is_clean:
+        ui.print_section("📤 Локальные изменения")
+        with ui.spinner_ctx("Коммит..."):
+            msg = f"sync: {os.uname().nodename} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            r = commit(repo, msg)
+        if r.success:
+            ui.print_ok("Закоммичено")
+        else:
+            ui.print_error(f"Ошибка коммита: {r.stderr}")
+            return False
+    else:
+        ui.print_ok("Локально чисто")
+
+    ui.print_section("📥 Синхронизация с GitHub")
+    with ui.spinner_ctx("Fetch..."):
+        fetch(repo)
+
+    ahead, behind = diverts_check(repo, branch)
+    if behind > 0:
+        ui.print_info(f"Удалённых коммитов: {behind}")
+        with ui.spinner_ctx("Pull..."):
+            r, had_conflict = safe_pull(repo, branch)
+        if r.success:
+            ui.print_ok("Pull выполнен")
+        elif had_conflict:
+            ui._print()
+            ui.print_warn("Конфликт при pull!")
+            res = resolve_conflict(repo, branch, strategy)
+            if res is None:
+                return False
+        else:
+            ui.print_warn(f"Pull: {r.stderr[:200]}")
+    else:
+        ui.print_ok("Pull не требуется")
+
+    if ahead > 0 or gs.ahead > 0:
+        with ui.spinner_ctx("Push..."):
+            r = push(repo, branch)
+        if r.success:
+            ui.print_ok("Запущено на GitHub")
+        else:
+            ui.print_error(f"Ошибка push: {r.stderr}")
+            return False
+
+    return True
+
+
+def _remote_sync_script(repo_path: str, branch: str, remote_url: str) -> str:
+    """Build the shell script run on remote machines via SSH."""
+    return f"""export PATH="$HOME/.local/bin:$PATH"
+C="$(command -v chezmoi)"
+if [ -d {shlex.quote(repo_path)}/.git ]; then
+  cd {shlex.quote(repo_path)}
+  git fetch origin {shlex.quote(branch)} 2>&1 || true
+  git reset HEAD . 2>/dev/null
+  git checkout -- . 2>/dev/null
+  git clean -fd 2>/dev/null
+  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
+    git rebase --abort 2>/dev/null
+    echo "GIT_CONFLICT"
+    exit 0
+  fi
+else
+  rm -rf {shlex.quote(repo_path)} && git clone {shlex.quote(remote_url)} {shlex.quote(repo_path)}
+fi
+if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
+cd {shlex.quote(repo_path)} && "$C" apply --no-sudo 2>/dev/null || "$C" apply 2>/dev/null || true"""
+
+
+def _sync_remote_machine(
+    repo: Path,
+    branch: str,
+    remote_url: str,
+    nb,
+    name: str,
+    info: dict,
+) -> tuple[str, str]:
+    """Sync a single remote machine.
+
+    Returns (status, message). Status is one of:
+    success, skipped-offline, skipped-current, skipped-ssh, skipped-chezmoi,
+    failed-conflict, failed-error.
+    """
+    host = info["host"]
+    user = info.get("user", "mflkee")
+
+    if host == nb.self_fqdn:
+        return "skipped-current", "текущая машина"
+
+    peer = next((p for p in nb.peers if p.fqdn == host), None)
+    if peer and not peer.is_connected:
+        return "skipped-offline", "офлайн"
+
+    ip = resolve_host(host)
+    if not _check_port(ip):
+        return "skipped-ssh", "SSH порт 22 недоступен"
+
+    rcmd = _remote_sync_script(str(repo), branch, remote_url)
+    with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
+        r = ssh_run(ip, rcmd, user=user, timeout=300)
+
+    if not r.success:
+        return "failed-error", r.stderr.replace("\n", "; ")[:200]
+    if "GIT_CONFLICT" in r.stdout:
+        return "failed-conflict", "конфликт git, chezmoi не применялся"
+    if "NO_CHEZMOI" in r.stdout:
+        return "skipped-chezmoi", "chezmoi не установлен"
+    return "success", ""
 
 
 def resolve_conflict(repo: Path, branch: str, strategy: str) -> bool | None:
@@ -134,65 +272,18 @@ def cmd_status(config: Config):
                         ui.print_warn(f"    🔴 {peer.status}")
                 else:
                     offline.append(name)
-                    ui.print_warn(f"    ⚫ Не найден в NetBird")
+                    ui.print_warn("    ⚫ Не найден в NetBird")
 
     return 0
 
 
 def cmd_sync(config: Config, strategy: str = ""):
     ui.print_header()
-    hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
 
-    gs = git_status(repo)
-    if gs.error:
-        ui.print_error(f"Ошибка git: {gs.error}")
+    if not _sync_git_repo(repo, branch, strategy):
         return 1
-
-    if not gs.is_clean:
-        ui.print_section("📤 Локальные изменения")
-        with ui.spinner_ctx("Коммит..."):
-            msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            r = commit(repo, msg)
-        if r.success:
-            ui.print_ok("Закоммичено")
-        else:
-            ui.print_error(f"Ошибка коммита: {r.stderr}")
-            return 1
-    else:
-        ui.print_ok("Локально чисто")
-
-    ui.print_section("📥 Синхронизация с GitHub")
-    with ui.spinner_ctx("Fetch..."):
-        fetch(repo)
-
-    ahead, behind = diverts_check(repo, branch)
-    if behind > 0:
-        ui.print_info(f"Удалённых коммитов: {behind}")
-        with ui.spinner_ctx("Pull..."):
-            r, had_conflict = safe_pull(repo, branch)
-        if r.success:
-            ui.print_ok("Pull выполнен")
-        elif had_conflict:
-            ui._print()
-            ui.print_warn("Конфликт при pull!")
-            res = resolve_conflict(repo, branch, strategy)
-            if res is None:
-                return 1
-        else:
-            ui.print_warn(f"Pull: {r.stderr[:200]}")
-    else:
-        ui.print_ok("Pull не требуется")
-
-    if ahead > 0 or gs.ahead > 0:
-        with ui.spinner_ctx("Push..."):
-            r = push(repo, branch)
-        if r.success:
-            ui.print_ok("Запущено на GitHub")
-        else:
-            ui.print_error(f"Ошибка push: {r.stderr}")
-            return 1
 
     nb = get_status()
     if nb is None:
@@ -204,69 +295,27 @@ def cmd_sync(config: Config, strategy: str = ""):
         ui.print_warn("Нет машин в конфиге для удалённой синхронизации")
         return 0
 
+    remote_url = config.git_remote_url or get_remote_url(repo)
+    if not remote_url:
+        ui.print_error("Не удалось определить URL git remote. Укажи [git] remote_url в конфиге")
+        return 1
+
     ui.print_section("🔄 Синхронизация с удалёнными машинами")
     success_count = 0
     fail_count = 0
     skip_count = 0
 
     for name, info in machines.items():
-        host = info["host"]
-        user = info.get("user", "mflkee")
-
-        if host == nb.self_fqdn:
-            continue
-
-        peer = next((p for p in nb.peers if p.fqdn == host), None)
-        if peer and not peer.is_connected:
-            ui.print_warn(f"  {name} ({host}) — офлайн, пропускаю")
+        ui.print_info(f"  → {name} ({info['host']})")
+        status, reason = _sync_remote_machine(repo, branch, remote_url, nb, name, info)
+        if status == "success":
+            ui.print_ok(f"{name}: синхронизировано")
+            success_count += 1
+        elif status.startswith("skipped-"):
+            ui.print_warn(f"{name}: {reason}, пропускаю")
             skip_count += 1
-            continue
-        if not peer:
-            ui.print_warn(f"  {name} ({host}) — не найден в NetBird, пробую подключиться...")
-
-        ui.print_info(f"  → {name} ({host})")
-
-        ip = resolve_host(host)
-        if not _check_port(ip):
-            ui.print_warn(f"    SSH порт 22 недоступен, пропускаю")
-            skip_count += 1
-            continue
-
-        repo_path = str(config.git_source)
-        rcmd = f"""export PATH="$HOME/.local/bin:$PATH"
-C="$(command -v chezmoi)"
-if [ -d {shlex.quote(repo_path)}/.git ]; then
-  cd {shlex.quote(repo_path)}
-  git fetch origin {shlex.quote(branch)} 2>&1 || true
-  git reset HEAD . 2>/dev/null
-  git checkout -- . 2>/dev/null
-  git clean -fd 2>/dev/null
-  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
-    git rebase --abort 2>/dev/null
-    echo "GIT_CONFLICT"
-    exit 0
-  fi
-else
-  rm -rf {shlex.quote(repo_path)} && git clone https://github.com/mflkee/dotfiles.git {shlex.quote(repo_path)}
-fi
-if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
-cd {shlex.quote(repo_path)} && "$C" apply --no-sudo 2>/dev/null || "$C" apply 2>/dev/null || true"""
-        with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
-            r = ssh_run(ip, rcmd, user=user, timeout=300)
-
-        if r.success:
-            if "GIT_CONFLICT" in r.stdout:
-                ui.print_warn(f"{name}: конфликт git, chezmoi не применялся")
-                fail_count += 1
-            elif "NO_CHEZMOI" in r.stdout:
-                ui.print_warn(f"{name}: chezmoi не установлен, пропускаю")
-                skip_count += 1
-            else:
-                ui.print_ok(f"{name}: синхронизировано")
-                success_count += 1
         else:
-            err = r.stderr.replace("\n", "; ")
-            ui.print_error(f"{name}: {err[:200]}")
+            ui.print_error(f"{name}: {reason}")
             fail_count += 1
 
     ui.print_section("📊 Итог")
@@ -291,107 +340,34 @@ def cmd_push(config: Config, strategy: str = ""):
         ui.print_info("Добавь: dsync add <имя> <host>")
         return 1
 
-    hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
 
     ui.print_header()
 
-    gs = git_status(repo)
-    if gs.error:
-        ui.print_error(f"Git: {gs.error}")
+    if not _sync_git_repo(repo, branch, strategy):
         return 1
 
-    if not gs.is_clean:
-        with ui.spinner_ctx("Коммит..."):
-            msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            r = commit(repo, msg)
-        if r.success:
-            ui.print_ok("Закоммичено")
-        else:
-            ui.print_error(f"Ошибка: {r.stderr}")
-            return 1
-    else:
-        ui.print_ok("Изменений нет")
-
-    ui.print_section("📥 Синхронизация с GitHub")
-    with ui.spinner_ctx("Fetch..."):
-        fetch(repo)
-
-    ahead, behind = diverts_check(repo, branch)
-    if behind > 0:
-        ui.print_info(f"Удалённых коммитов: {behind}")
-        with ui.spinner_ctx("Pull..."):
-            r, had_conflict = safe_pull(repo, branch)
-        if r.success:
-            ui.print_ok("Pull выполнен")
-        elif had_conflict:
-            ui._print()
-            ui.print_warn("Конфликт при pull!")
-            res = resolve_conflict(repo, branch, strategy)
-            if res is None:
-                return 1
-    else:
-        ui.print_ok("Pull не требуется")
-
-    if ahead > 0 or gs.ahead > 0:
-        with ui.spinner_ctx("Push..."):
-            r = push(repo, branch)
-        if r.success:
-            ui.print_ok("Запущено на GitHub")
-        else:
-            ui.print_error(f"Ошибка push: {r.stderr}")
-            return 1
+    remote_url = config.git_remote_url or get_remote_url(repo)
+    if not remote_url:
+        ui.print_error("Не удалось определить URL git remote. Укажи [git] remote_url в конфиге")
+        return 1
 
     ui.print_section("🔄 Рассылка на машины")
+    fail_count = 0
+
     for name, info in config.machines.items():
-        host = info["host"]
-        user = info.get("user", "mflkee")
-
-        if host == nb.self_fqdn:
-            continue
-
-        peer = next((p for p in nb.peers if p.fqdn == host), None)
-        if peer and not peer.is_connected:
-            ui.print_warn(f"  {name} — офлайн")
-            continue
-        ui.print_info(f"  → {name}")
-        ip = resolve_host(host)
-        if not _check_port(ip):
-            ui.print_warn(f"    SSH порт 22 недоступен, пропускаю")
-            continue
-        repo_path = str(repo)
-        rcmd = f"""export PATH="$HOME/.local/bin:$PATH"
-C="$(command -v chezmoi)"
-if [ -d {shlex.quote(repo_path)}/.git ]; then
-  cd {shlex.quote(repo_path)}
-  git fetch origin {shlex.quote(branch)} 2>&1 || true
-  git reset HEAD . 2>/dev/null
-  git checkout -- . 2>/dev/null
-  git clean -fd 2>/dev/null
-  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
-    git rebase --abort 2>/dev/null
-    echo "GIT_CONFLICT"
-    exit 0
-  fi
-else
-  rm -rf {shlex.quote(repo_path)} && git clone https://github.com/mflkee/dotfiles.git {shlex.quote(repo_path)}
-fi
-if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
-cd {shlex.quote(repo_path)} && "$C" apply --no-sudo 2>/dev/null || "$C" apply 2>/dev/null || true"""
-        with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
-            r = ssh_run(ip, rcmd, user=user, timeout=300)
-        if r.success:
-            if "GIT_CONFLICT" in r.stdout:
-                ui.print_warn(f"{name}: конфликт git, chezmoi не применялся")
-            elif "NO_CHEZMOI" in r.stdout:
-                ui.print_warn(f"{name}: chezmoi не установлен, пропускаю")
-            else:
-                ui.print_ok(f"{name}: OK")
+        ui.print_info(f"  → {name} ({info['host']})")
+        status, reason = _sync_remote_machine(repo, branch, remote_url, nb, name, info)
+        if status == "success":
+            ui.print_ok(f"{name}: OK")
+        elif status.startswith("skipped-"):
+            ui.print_warn(f"{name}: {reason}")
         else:
-            ui.print_error(f"{name}: {r.stderr[:150]}")
+            ui.print_error(f"{name}: {reason}")
+            fail_count += 1
 
-    return 0
+    return 0 if fail_count == 0 else 1
 
 
 def cmd_pull(config: Config, strategy: str = ""):
@@ -583,10 +559,10 @@ def cmd_discover(config: Config):
         return 1
 
     ui.print_section("🔍 Поиск машин в NetBird")
-    peers_by_ip = {}
-    peers_by_short = {}
-    import re
+    peers_by_short: dict[str, Peer] = {}
     suffix_re = re.compile(r"-\d+-\d+$")
+    aliases = config.discover_aliases
+    prefixes = config.discover_prefixes
 
     def _register(key: str, peer):
         existing = peers_by_short.get(key)
@@ -598,14 +574,12 @@ def cmd_discover(config: Config):
     for peer in nb.peers:
         if peer.fqdn == nb.self_fqdn:
             continue
-        ip = peer.netbird_ip
         short = peer.hostname_short
-        peers_by_ip[ip] = peer
         _register(short, peer)
         _register(short.replace("-", ""), peer)
         _register(suffix_re.sub("", short), peer)
-        # Strip well-known prefixes so short aliases like "desktop" can match
-        for prefix in ("archlinux-", "mkair-"):
+        # Strip configured prefixes so short aliases can match
+        for prefix in prefixes:
             if short.startswith(prefix):
                 stripped = short[len(prefix):]
                 _register(stripped, peer)
@@ -620,7 +594,7 @@ def cmd_discover(config: Config):
         user = info.get("user", "mflkee")
 
         # already an IP
-        if host.replace(".", "").isdigit():
+        if _is_ip_value(host):
             skipped.append(name)
             continue
 
@@ -651,24 +625,12 @@ def cmd_discover(config: Config):
             continue
         if peer.fqdn == nb.self_fqdn:
             continue
-        # suggest known aliases
-        aliases = {
-            "archlinux-notebook": "notebook",
-            "archlinux-desktop": "desktop",
-            "mkair-server-tmn": "server-tmn",
-            "mkair-server": "server",
-            "antix1": "antix1",
-        }
 
         name = None
+        normalized = suffix_re.sub("", short)
         # Try to match against aliases that ignore the NetBird -<digits> suffix
         for prefix, alias in aliases.items():
-            if short.startswith(prefix):
-                name = alias
-                break
-            # also match if peer short is the new suffixed form (e.g. archlinux-desktop-12-158)
-            normalized = re.sub(r"-\d+-\d+$", "", short)
-            if normalized.startswith(prefix):
+            if short.startswith(prefix) or normalized.startswith(prefix):
                 name = alias
                 break
         if name is None:

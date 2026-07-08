@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import ui
-from .chezmoi import _git, GitResult
+from .chezmoi import GitResult, _git
 
 
 def has_conflict(repo_path: Path) -> bool:
@@ -145,7 +145,7 @@ def resolve_interactive(repo_path: Path, branch: str = "main") -> Optional[bool]
     ui._print()
 
     ui.print_info("Выбери действие:")
-    ui.print_info(f"  {ui.green('1')} — оставить {ui.bold('локальную')} версию (git pull -X theirs)")
+    ui.print_info(f"  {ui.green('1')} — оставить {ui.bold('локальную')} версию (git pull -X ours)")
     ui.print_info(f"  {ui.green('2')} — оставить {ui.bold('удалённую')} версию (git reset --hard origin/{branch})")
     ui.print_info(f"  {ui.green('3')} — {ui.bold('отменить')} синхронизацию (ничего не менять)")
 
@@ -162,7 +162,7 @@ def resolve_interactive(repo_path: Path, branch: str = "main") -> Optional[bool]
         if not r.success:
             ui.print_error(f"fetch: {r.stderr}")
             return None
-        r = _git(repo_path, ["pull", "-X", "theirs", "origin", branch], timeout=60)
+        r = _git(repo_path, ["pull", "-X", "ours", "origin", branch], timeout=60)
         if r.success:
             ui.print_ok("Конфликт разрешён: оставлена локальная версия")
             return True

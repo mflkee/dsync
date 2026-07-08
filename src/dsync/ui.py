@@ -1,22 +1,24 @@
-import sys
 from contextlib import contextmanager
+from typing import Any
+
+_console: Any = None
 
 try:
-    from rich.console import Console as _RichConsole
-    from rich.table import Table as _RichTable
-    from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich import box as _box
+    from rich.console import Console as _RichConsole
     from rich.markup import escape as rich_escape
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.table import Table as _RichTable
 
     RICH = True
     _console = _RichConsole()
 except ImportError:
     RICH = False
 
-    class _RichConsole:
+    class _FallbackConsole:
         pass
 
-    _console = _RichConsole()
+    _console = _FallbackConsole()
 
 
 def escape(text: str) -> str:
@@ -134,7 +136,7 @@ def print_table(columns, rows):
 @contextmanager
 def spinner_ctx(message: str = "Working..."):
     if RICH:
-        progress = Progress(SpinnerColumn(), TextColumn(f"{{task.description}}"), transient=True)
+        progress = Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True)
         with progress:
             task = progress.add_task(message, total=None)
             yield
@@ -142,4 +144,4 @@ def spinner_ctx(message: str = "Working..."):
     else:
         print(f"  {dim('⟳')}  {message}", end="", flush=True)
         yield
-        print("\r", end="", flush=True)
+        print("\r" + " " * (len(message) + 6) + "\r", end="", flush=True)

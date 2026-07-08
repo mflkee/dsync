@@ -1,5 +1,4 @@
 import socket
-from typing import Optional
 
 from .netbird import get_status
 

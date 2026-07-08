@@ -1,3 +1,4 @@
+import os
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
@@ -31,13 +32,16 @@ def run(
     ssh_cmd.append(f"{user}@{host}")
     ssh_cmd.append(command)
 
+    env = os.environ.copy()
+    env.update({"LC_ALL": "C", "LANG": "C"})
+
     try:
         result = subprocess.run(
             ssh_cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={"LC_ALL": "C", "LANG": "C"},
+            env=env,
         )
         return SSHResult(
             stdout=result.stdout.strip(),

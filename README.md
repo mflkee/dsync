@@ -49,6 +49,19 @@ server   = { host = "mkair-server.netbird.cloud", user = "mflkee" }
 [git]
 source = "~/dotfiles"
 branch = "main"
+# Optional: the URL used to clone the repo on new machines.
+# Defaults to the local repo's origin remote.
+# remote_url = "https://github.com/username/dotfiles.git"
+
+# Optional: aliases for `dsync discover` to map NetBird hostnames to short names.
+# [discover.aliases]
+# archlinux-notebook = "notebook"
+# archlinux-desktop = "desktop"
+# mkair-server = "server"
+
+# Optional: prefixes stripped from NetBird hostnames before alias lookup.
+# [discover]
+# prefixes = ["archlinux-", "mkair-"]
 ```
 
 Each `host` must be a NetBird FQDN resolvable inside the mesh. Use the value

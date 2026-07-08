@@ -1,7 +1,6 @@
 """Zen Browser profile export/import for dsync."""
 
 import json
-import os
 import re
 import uuid
 from pathlib import Path
@@ -280,7 +279,6 @@ def import_zen(source: Path) -> bool:
         old_spaces_count = len(local.get("spaces", []))
         old_groups_count = len(local.get("groups", []))
         old_folders_count = len(local.get("folders", []))
-        old_tabs_count = len(local.get("tabs", []))
 
         # Merge spaces
         if export.get("spaces") is not None:
@@ -356,7 +354,7 @@ def import_zen(source: Path) -> bool:
         new_folders = len(local.get("folders", [])) - old_folders_count
         total_tabs = len(local.get("tabs", []))
 
-        ui.print_ok(f"zen-sessions.jsonlz4 — обновлён")
+        ui.print_ok("zen-sessions.jsonlz4 — обновлён")
         if new_spaces > 0:
             ui.print_info(f"  Добавлено рабочих пространств: {new_spaces}")
         if new_groups > 0:
