@@ -207,72 +207,79 @@ def cmd_status(config: Config):
         ui.print_error("NetBird недоступен")
         return 1
 
-    ui.print_status_line("🖥", ui.bold(nb.self_hostname_short), nb.daemon_status)
-    ui.print_info(f"IP: {nb.self_ip}  FQDN: {nb.self_fqdn}")
+    self_rows = [
+        ["Хост", nb.self_hostname_short],
+        ["NetBird IP", nb.self_ip or "—"],
+        ["FQDN", nb.self_fqdn or "—"],
+        ["Daemon", ui.status_badge(nb.daemon_status)],
+    ]
+    ui.print_panel("🖥 Эта машина", ui._make_kv_table(self_rows))
 
     gs = git_status(config.git_source)
-    ui.print_section("📁 Состояние chezmoi")
     if gs.error:
-        ui.print_error(f"Git: {gs.error}")
-    elif gs.is_clean:
-        ui.print_ok("Чисто")
-        if gs.ahead > 0:
-            ui.print_info(f"Впереди на {gs.ahead} коммитов (нужен push)")
-        if gs.behind > 0:
-            ui.print_info(f"Позади на {gs.behind} коммитов (нужен pull)")
+        ui.print_panel("📁 Состояние chezmoi", ui.red(f"Git: {gs.error}"), style="red")
     else:
-        parts = []
-        if gs.staged:
-            parts.append(f"{gs.staged} staged")
-        if gs.unstaged:
-            parts.append(f"{gs.unstaged} unstaged")
-        if gs.untracked:
-            parts.append(f"{gs.untracked} untracked")
-        ui.print_warn(f"Изменения: {', '.join(parts)}")
-        if gs.ahead > 0:
-            ui.print_info(f"Впереди на {gs.ahead} коммитов")
+        status_text = "[green]Чисто[/green]" if ui.RICH else "Чисто"
+        if not gs.is_clean:
+            parts = []
+            if gs.staged:
+                parts.append(f"{gs.staged} staged")
+            if gs.unstaged:
+                parts.append(f"{gs.unstaged} unstaged")
+            if gs.untracked:
+                parts.append(f"{gs.untracked} untracked")
+            status_text = f"[yellow]{', '.join(parts)}[/yellow]" if ui.RICH else ', '.join(parts)
+        git_rows = [
+            ["Ветка", gs.current_branch or "—"],
+            ["Статус", status_text],
+            ["Впереди", str(gs.ahead)],
+            ["Позади", str(gs.behind)],
+            ["Remote", "да" if gs.has_remote else "нет"],
+        ]
+        ui.print_panel("📁 Состояние chezmoi", ui._make_kv_table(git_rows))
 
-    ui.print_section("🌐 Машины в NetBird")
-    table_cols = ["Имя", "Статус", "FQDN", "IP", "Лат.", "Тип"]
-    table_rows = []
+    peer_rows = []
     for peer in nb.peers:
-        name = peer.hostname_short
-        s = ui.status_dot(peer.status)
-        table_rows.append([
-            name,
-            f"{s} {peer.status}",
+        peer_rows.append([
+            peer.hostname_short,
+            ui.status_badge(peer.status),
             peer.fqdn,
-            peer.netbird_ip,
+            peer.netbird_ip or "—",
             peer.latency_ms,
             peer.connection_type,
         ])
-    ui.print_table(table_cols, table_rows)
-
-    ui.print_section("⚙ Целевые машины (из конфига)")
-    machines = config.machines
-    if not machines:
-        ui.print_warn("Машины не настроены. Используй: dsync add <имя> <host>")
+    if peer_rows:
+        ui.print_panel(
+            "🌐 Машины в NetBird",
+            ui._make_table(["Имя", "Статус", "FQDN", "IP", "Лат.", "Тип"], peer_rows),
+        )
     else:
-        online = []
-        offline = []
-        for name, info in machines.items():
-            host = info["host"]
-            ui.print_info(f"  {name} → {host}")
-            if host == nb.self_fqdn:
-                online.append(name)
-                ui.print_ok(f"    🟢 Connected (текущая машина)  IP: {nb.self_ip}")
-            else:
-                peer = next((p for p in nb.peers if p.fqdn == host), None)
-                if peer:
-                    if peer.is_connected:
-                        online.append(name)
-                        ui.print_ok(f"    🟢 {peer.status}  IP: {peer.netbird_ip}")
-                    else:
-                        offline.append(name)
-                        ui.print_warn(f"    🔴 {peer.status}")
-                else:
-                    offline.append(name)
-                    ui.print_warn("    ⚫ Не найден в NetBird")
+        ui.print_panel("🌐 Машины в NetBird", ui.dim("Нет пиров"))
+
+    machine_rows = []
+    for name, info in config.machines.items():
+        host = info["host"]
+        if host == nb.self_fqdn:
+            machine_rows.append([name, host, ui.status_badge("online"), nb.self_ip, "текущая"])
+            continue
+        peer = next((p for p in nb.peers if p.fqdn == host), None)
+        if peer:
+            machine_rows.append([
+                name,
+                host,
+                ui.status_badge(peer.status),
+                peer.netbird_ip or "—",
+                peer.connection_type,
+            ])
+        else:
+            machine_rows.append([name, host, ui.status_badge("offline"), "—", "не в NetBird"])
+    if machine_rows:
+        ui.print_panel(
+            "⚙ Целевые машины",
+            ui._make_table(["Имя", "FQDN", "Статус", "IP", "Тип"], machine_rows),
+        )
+    else:
+        ui.print_warn("Машины не настроены. Используй: dsync add <имя> <host>")
 
     return 0
 
@@ -304,19 +311,22 @@ def cmd_sync(config: Config, strategy: str = ""):
     success_count = 0
     fail_count = 0
     skip_count = 0
+    result_rows: list[list[str]] = []
 
     for name, info in machines.items():
         ui.print_info(f"  → {name} ({info['host']})")
         status, reason = _sync_remote_machine(repo, branch, remote_url, nb, name, info)
         if status == "success":
-            ui.print_ok(f"{name}: синхронизировано")
+            result_rows.append([name, ui.result_badge("success"), ""])
             success_count += 1
         elif status.startswith("skipped-"):
-            ui.print_warn(f"{name}: {reason}, пропускаю")
+            result_rows.append([name, ui.result_badge("skipped"), reason])
             skip_count += 1
         else:
-            ui.print_error(f"{name}: {reason}")
+            result_rows.append([name, ui.result_badge("failed"), reason])
             fail_count += 1
+
+    ui.print_result_table(result_rows)
 
     ui.print_section("📊 Итог")
     if success_count:
@@ -355,17 +365,20 @@ def cmd_push(config: Config, strategy: str = ""):
 
     ui.print_section("🔄 Рассылка на машины")
     fail_count = 0
+    result_rows: list[list[str]] = []
 
     for name, info in config.machines.items():
         ui.print_info(f"  → {name} ({info['host']})")
         status, reason = _sync_remote_machine(repo, branch, remote_url, nb, name, info)
         if status == "success":
-            ui.print_ok(f"{name}: OK")
+            result_rows.append([name, ui.result_badge("success"), ""])
         elif status.startswith("skipped-"):
-            ui.print_warn(f"{name}: {reason}")
+            result_rows.append([name, ui.result_badge("skipped"), reason])
         else:
-            ui.print_error(f"{name}: {reason}")
+            result_rows.append([name, ui.result_badge("failed"), reason])
             fail_count += 1
+
+    ui.print_result_table(result_rows)
 
     return 0 if fail_count == 0 else 1
 
@@ -423,41 +436,44 @@ def cmd_setup(config: Config):
         subprocess.run(["ssh-keygen", "-t", "ed25519", "-f", identity, "-N", ""], check=True)
         ui.print_ok("SSH-ключ создан")
 
+    result_rows: list[list[str]] = []
     all_ok = True
     for name, info in machines.items():
         host = info["host"]
         user = info.get("user", "mflkee")
         ip = resolve_host(host)
-        ui.print_info(f"\n  {name} ({user}@{host} → {ip})")
 
         if host == nb.self_fqdn or ip == nb.self_ip:
-            ui.print_ok("Текущая машина, пропускаю")
+            result_rows.append([name, host, ui.result_badge("success"), "текущая машина"])
             continue
 
         if not _check_port(ip):
-            ui.print_warn("  SSH порт 22 недоступен, пропускаю")
+            result_rows.append([name, host, ui.result_badge("skipped"), "SSH порт 22 недоступен"])
+            all_ok = False
             continue
 
         # check if already accessible
         if check_connectivity(ip, user):
-            ui.print_ok("Уже есть доступ")
+            result_rows.append([name, host, ui.result_badge("success"), "доступ уже есть"])
             continue
 
-        ui.print_info("  Копируем ключ...")
+        ui.print_info(f"  Копируем ключ для {name}...")
         try:
             r = subprocess.run(
                 ["ssh-copy-id", "-i", identity, f"{user}@{ip}"],
                 capture_output=True, text=True, timeout=30,
             )
         except subprocess.TimeoutExpired:
-            ui.print_warn("  Таймаут ssh-copy-id, пропускаю")
+            result_rows.append([name, host, ui.result_badge("skipped"), "таймаут ssh-copy-id"])
             all_ok = False
             continue
         if r.returncode == 0:
-            ui.print_ok("Ключ скопирован")
+            result_rows.append([name, host, ui.result_badge("success"), "ключ скопирован"])
         else:
-            ui.print_error(f"Не удалось: {r.stderr[:200]}")
+            result_rows.append([name, host, ui.result_badge("failed"), r.stderr[:200]])
             all_ok = False
+
+    ui.print_result_table(result_rows)
 
     ui.print_section("🌐 DNS / hosts")
 
@@ -586,8 +602,9 @@ def cmd_discover(config: Config):
                 _register(suffix_re.sub("", stripped), peer)
 
     machines = config.data.setdefault("machines", {})
-    updated = []
-    skipped = []
+    updated_rows: list[list[str]] = []
+    skipped: list[str] = []
+    not_found: list[str] = []
 
     for name, info in list(machines.items()):
         host = info.get("host", "")
@@ -607,14 +624,13 @@ def cmd_discover(config: Config):
                     break
 
         if peer is None:
-            ui.print_warn(f"{name}: не найден в NetBird")
+            not_found.append(name)
             continue
 
         new_host = peer.fqdn
         if host != new_host:
-            ui.print_info(f"{name}: {host} → {new_host}")
+            updated_rows.append([name, host, new_host])
             machines[name] = {"host": new_host, "user": user}
-            updated.append(name)
         else:
             skipped.append(name)
 
@@ -636,18 +652,23 @@ def cmd_discover(config: Config):
         if name is None:
             name = short
         if name not in machines:
-            ui.print_info(f"Найдена новая машина: {name} → {peer.fqdn}")
+            updated_rows.append([name, "—", peer.fqdn])
             machines[name] = {"host": peer.fqdn, "user": "mflkee"}
-            updated.append(name)
 
-    if updated:
+    if updated_rows:
         config._save()
-        ui.print_ok(f"Обновлено/добавлено: {', '.join(updated)}")
+        ui.print_panel(
+            "🔍 Обновлено/добавлено",
+            ui._make_table(["Имя", "Было", "Стало"], updated_rows),
+            style="green",
+        )
     else:
         ui.print_ok("Изменений не требуется")
 
     if skipped:
         ui.print_info(f"Без изменений: {', '.join(skipped)}")
+    if not_found:
+        ui.print_warn(f"Не найдены в NetBird: {', '.join(not_found)}")
 
     return 0
 
