@@ -14,6 +14,7 @@ from .netbird import get_status
 from .ssh_client import run as ssh_run, check_connectivity
 from .chezmoi import get_status as git_status, commit, fetch, pull, push, chezmoi_apply, diverts_check
 from .resolver import resolve_host
+from .project_cli import cmd_project_status, cmd_project_sync, cmd_project_clone
 from .conflict import (
     safe_pull, has_conflict, is_rebasing, rebase_abort,
     get_conflicted_files, show_diff_summary, resolve_interactive
@@ -732,6 +733,19 @@ def main():
     zen_sub.add_parser("import", help="Импорт профиля Zen из dotfiles")
     zen_sub.add_parser("info", help="Показать информацию о профиле Zen")
 
+    # project subcommand
+    project_p = sub.add_parser("project", help="Синхронизация проектов")
+    project_sub = project_p.add_subparsers(dest="project_action", required=True)
+    project_sub.add_parser("status", help="Статус проектов")
+    project_sync_p = project_sub.add_parser("sync", help="Синхронизировать проекты")
+    project_sync_p.add_argument("names", nargs="*", help="Имена проектов (если не указаны — все)")
+    project_sync_p.add_argument("--dry-run", action="store_true", help="Режим сухого прогона")
+    project_sync_p.add_argument("--jobs", "-j", type=int, default=4, help="Количество параллельных задач")
+    project_clone_p = project_sub.add_parser("clone", help="Клонировать проекты на удалённые машины")
+    project_clone_p.add_argument("names", nargs="*", help="Имена проектов")
+    project_clone_p.add_argument("--dry-run", action="store_true", help="Режим сухого прогона")
+    project_clone_p.add_argument("--jobs", "-j", type=int, default=4, help="Количество параллельных задач")
+
     args = parser.parse_args()
 
     if args.command == "status":
@@ -799,6 +813,13 @@ def main():
                 return 0
             ui.print_error("Профиль не найден")
             return 1
+    elif args.command == "project":
+        if args.project_action == "status":
+            return cmd_project_status(config)
+        elif args.project_action == "sync":
+            return cmd_project_sync(config, args.names, dry_run=args.dry_run, jobs=args.jobs)
+        elif args.project_action == "clone":
+            return cmd_project_clone(config, args.names, dry_run=args.dry_run, jobs=args.jobs)
     return 1
 
 
