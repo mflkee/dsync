@@ -1,8 +1,12 @@
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
+
+
+SUFFIX_RE = re.compile(r"-\d+-\d+$")
 
 
 @dataclass
@@ -43,6 +47,21 @@ class NetBirdStatus:
     @property
     def self_hostname_short(self) -> str:
         return self.self_fqdn.removesuffix(".netbird.cloud")
+
+    def is_self(self, host: str) -> bool:
+        """Return True if host/IP/FQDN refers to the local NetBird peer."""
+        if not host or not self.self_fqdn:
+            return False
+        if host == self.self_fqdn:
+            return True
+        if host == self.self_ip:
+            return True
+
+        def _norm(h: str) -> str:
+            h = h.removesuffix(".netbird.cloud")
+            return SUFFIX_RE.sub("", h)
+
+        return _norm(host) == _norm(self.self_fqdn)
 
 
 def get_status() -> Optional[NetBirdStatus]:

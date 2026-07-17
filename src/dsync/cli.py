@@ -1,40 +1,25 @@
 import argparse
-import concurrent.futures
-import ipaddress
-import json
-import logging
+import subprocess
 import os
-import re
 import shlex
 import socket
-import subprocess
-from datetime import datetime
+import sys
+import json
 from pathlib import Path
+from datetime import datetime
 
-import lz4.block
-
-from . import project_cli, ui
-from .chezmoi import (
-    chezmoi_apply,
-    commit,
-    diverts_check,
-    fetch,
-    get_remote_url,
-    push,
-)
-from .chezmoi import (
-    get_status as git_status,
-)
+from . import ui
 from .config import Config
-from .conflict import resolve_interactive, safe_pull
-from .log import setup_logging
-from .netbird import Peer, get_status
+from .netbird import get_status
+from .ssh_client import run as ssh_run, check_connectivity
+from .chezmoi import get_status as git_status, commit, fetch, pull, push, chezmoi_apply, diverts_check
 from .resolver import resolve_host
-from .ssh_client import check_connectivity
-from .ssh_client import run as ssh_run
-from .zen import export_zen, find_profile, import_zen
-
-logger = logging.getLogger(__name__)
+from .conflict import (
+    safe_pull, has_conflict, is_rebasing, rebase_abort,
+    get_conflicted_files, show_diff_summary, resolve_interactive
+)
+from .zen import export_zen, import_zen, find_profile
+import lz4.block
 
 
 def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
@@ -43,163 +28,6 @@ def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
             return True
     except (socket.timeout, ConnectionRefusedError, OSError):
         return False
-
-
-def _is_ip_value(value: str) -> bool:
-    try:
-        ipaddress.ip_address(value)
-        return True
-    except ValueError:
-        return False
-
-
-def _sync_git_repo(repo: Path, branch: str, strategy: str, dry_run: bool = False) -> bool:
-    """Commit local changes, fetch, pull and push to origin.
-
-    Returns True on success, False on failure. In dry-run mode no writes are
-    performed to the repository or remote.
-    """
-    logger.info("git sync: repo=%s branch=%s dry_run=%s", repo, branch, dry_run)
-    gs = git_status(repo)
-    if gs.error:
-        ui.print_error(f"Ошибка git: {gs.error}")
-        return False
-
-    if not gs.is_clean:
-        ui.print_section("📤 Локальные изменения")
-        if dry_run:
-            ui.print_info(f"Будет закоммичено: {gs.staged} staged, {gs.unstaged} unstaged, {gs.untracked} untracked")
-        else:
-            with ui.spinner_ctx("Коммит..."):
-                msg = f"sync: {os.uname().nodename} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                r = commit(repo, msg)
-            if r.success:
-                ui.print_ok("Закоммичено")
-            else:
-                ui.print_error(f"Ошибка коммита: {r.stderr}")
-                return False
-    else:
-        ui.print_ok("Локально чисто")
-
-    ui.print_section("📥 Синхронизация с GitHub")
-    if dry_run:
-        # Fetch is read-only; it lets us report ahead/behind accurately.
-        with ui.spinner_ctx("Fetch..."):
-            fetch(repo)
-    else:
-        with ui.spinner_ctx("Fetch..."):
-            fetch(repo)
-
-    ahead, behind = diverts_check(repo, branch)
-    if behind > 0:
-        ui.print_info(f"Удалённых коммитов: {behind}")
-        if dry_run:
-            ui.print_info(f"Будет выполнен git pull --rebase origin {branch}")
-        else:
-            with ui.spinner_ctx("Pull..."):
-                r, had_conflict = safe_pull(repo, branch)
-            if r.success:
-                ui.print_ok("Pull выполнен")
-            elif had_conflict:
-                ui._print()
-                ui.print_warn("Конфликт при pull!")
-                res = resolve_conflict(repo, branch, strategy)
-                if res is None:
-                    return False
-            else:
-                ui.print_warn(f"Pull: {r.stderr[:200]}")
-    else:
-        ui.print_ok("Pull не требуется")
-
-    if ahead > 0 or gs.ahead > 0:
-        if dry_run:
-            ui.print_info(f"Будет выполнен git push origin {branch} ({ahead + gs.ahead} коммитов)")
-        else:
-            with ui.spinner_ctx("Push..."):
-                r = push(repo, branch)
-            if r.success:
-                ui.print_ok("Запущено на GitHub")
-            else:
-                ui.print_error(f"Ошибка push: {r.stderr}")
-                return False
-
-    return True
-
-
-def _remote_sync_script(repo_path: str, branch: str, remote_url: str) -> str:
-    """Build the shell script run on remote machines via SSH."""
-    return f"""export PATH="$HOME/.local/bin:$PATH"
-C="$(command -v chezmoi)"
-if [ -d {shlex.quote(repo_path)}/.git ]; then
-  cd {shlex.quote(repo_path)}
-  git fetch origin {shlex.quote(branch)} 2>&1 || true
-  git reset HEAD . 2>/dev/null
-  git checkout -- . 2>/dev/null
-  git clean -fd 2>/dev/null
-  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
-    git rebase --abort 2>/dev/null
-    echo "GIT_CONFLICT"
-    exit 0
-  fi
-else
-  rm -rf {shlex.quote(repo_path)} && git clone {shlex.quote(remote_url)} {shlex.quote(repo_path)}
-fi
-if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
-cd {shlex.quote(repo_path)} && "$C" apply --no-sudo 2>/dev/null || "$C" apply 2>/dev/null || true"""
-
-
-def _sync_remote_machine(
-    repo: Path,
-    branch: str,
-    remote_url: str,
-    nb,
-    name: str,
-    info: dict,
-    dry_run: bool = False,
-    show_spinner: bool = True,
-) -> tuple[str, str]:
-    """Sync a single remote machine.
-
-    Returns (status, message). Status is one of:
-    success, skipped-offline, skipped-current, skipped-ssh, skipped-chezmoi,
-    failed-conflict, failed-error.
-    """
-    host = info["host"]
-    user = info.get("user", "mflkee")
-
-    if host == nb.self_fqdn:
-        return "skipped-current", "текущая машина"
-
-    peer = next((p for p in nb.peers if p.fqdn == host), None)
-    if peer and not peer.is_connected:
-        return "skipped-offline", "офлайн"
-
-    ip = resolve_host(host)
-    if not _check_port(ip):
-        return "skipped-ssh", "SSH порт 22 недоступен"
-
-    if dry_run:
-        return "success", "будет синхронизировано (dry-run)"
-
-    rcmd = _remote_sync_script(str(repo), branch, remote_url)
-    logger.info("SSH %s@%s (%s) dry_run=%s", user, host, ip, dry_run)
-    if show_spinner:
-        with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
-            r = ssh_run(ip, rcmd, user=user, timeout=300)
-    else:
-        r = ssh_run(ip, rcmd, user=user, timeout=300)
-
-    if not r.success:
-        logger.warning("SSH %s failed: %s", host, r.stderr[:200])
-        return "failed-error", r.stderr.replace("\n", "; ")[:200]
-    if "GIT_CONFLICT" in r.stdout:
-        logger.warning("SSH %s git conflict", host)
-        return "failed-conflict", "конфликт git, chezmoi не применялся"
-    if "NO_CHEZMOI" in r.stdout:
-        logger.info("SSH %s: chezmoi not installed", host)
-        return "skipped-chezmoi", "chezmoi не установлен"
-    logger.info("SSH %s succeeded", host)
-    return "success", ""
 
 
 def resolve_conflict(repo: Path, branch: str, strategy: str) -> bool | None:
@@ -241,139 +69,207 @@ def cmd_status(config: Config):
         ui.print_error("NetBird недоступен")
         return 1
 
-    self_rows = [
-        ["Хост", nb.self_hostname_short],
-        ["NetBird IP", nb.self_ip or "—"],
-        ["FQDN", nb.self_fqdn or "—"],
-        ["Daemon", ui.status_badge(nb.daemon_status)],
-    ]
-    ui.print_panel("🖥 Эта машина", ui._make_kv_table(self_rows))
+    ui.print_status_line("🖥", ui.bold(nb.self_hostname_short), nb.daemon_status)
+    ui.print_info(f"IP: {nb.self_ip}  FQDN: {nb.self_fqdn}")
 
     gs = git_status(config.git_source)
+    ui.print_section("📁 Состояние chezmoi")
     if gs.error:
-        ui.print_panel("📁 Состояние chezmoi", ui.red(f"Git: {gs.error}"), style="red")
+        ui.print_error(f"Git: {gs.error}")
+    elif gs.is_clean:
+        ui.print_ok("Чисто")
+        if gs.ahead > 0:
+            ui.print_info(f"Впереди на {gs.ahead} коммитов (нужен push)")
+        if gs.behind > 0:
+            ui.print_info(f"Позади на {gs.behind} коммитов (нужен pull)")
     else:
-        status_text = "[green]Чисто[/green]" if ui.RICH else "Чисто"
-        if not gs.is_clean:
-            parts = []
-            if gs.staged:
-                parts.append(f"{gs.staged} staged")
-            if gs.unstaged:
-                parts.append(f"{gs.unstaged} unstaged")
-            if gs.untracked:
-                parts.append(f"{gs.untracked} untracked")
-            status_text = f"[yellow]{', '.join(parts)}[/yellow]" if ui.RICH else ', '.join(parts)
-        git_rows = [
-            ["Ветка", gs.current_branch or "—"],
-            ["Статус", status_text],
-            ["Впереди", str(gs.ahead)],
-            ["Позади", str(gs.behind)],
-            ["Remote", "да" if gs.has_remote else "нет"],
-        ]
-        ui.print_panel("📁 Состояние chezmoi", ui._make_kv_table(git_rows))
+        parts = []
+        if gs.staged:
+            parts.append(f"{gs.staged} staged")
+        if gs.unstaged:
+            parts.append(f"{gs.unstaged} unstaged")
+        if gs.untracked:
+            parts.append(f"{gs.untracked} untracked")
+        ui.print_warn(f"Изменения: {', '.join(parts)}")
+        if gs.ahead > 0:
+            ui.print_info(f"Впереди на {gs.ahead} коммитов")
 
-    peer_rows = []
+    ui.print_section("🌐 Машины в NetBird")
+    table_cols = ["Имя", "Статус", "FQDN", "IP", "Лат.", "Тип"]
+    table_rows = []
     for peer in nb.peers:
-        peer_rows.append([
-            peer.hostname_short,
-            ui.status_badge(peer.status),
+        name = peer.hostname_short
+        s = ui.status_dot(peer.status)
+        table_rows.append([
+            name,
+            f"{s} {peer.status}",
             peer.fqdn,
-            peer.netbird_ip or "—",
+            peer.netbird_ip,
             peer.latency_ms,
             peer.connection_type,
         ])
-    if peer_rows:
-        ui.print_panel(
-            "🌐 Машины в NetBird",
-            ui._make_table(["Имя", "Статус", "FQDN", "IP", "Лат.", "Тип"], peer_rows),
-        )
-    else:
-        ui.print_panel("🌐 Машины в NetBird", ui.dim("Нет пиров"))
+    ui.print_table(table_cols, table_rows)
 
-    machine_rows = []
-    for name, info in config.machines.items():
-        host = info["host"]
-        if host == nb.self_fqdn:
-            machine_rows.append([name, host, ui.status_badge("online"), nb.self_ip, "текущая"])
-            continue
-        peer = next((p for p in nb.peers if p.fqdn == host), None)
-        if peer:
-            machine_rows.append([
-                name,
-                host,
-                ui.status_badge(peer.status),
-                peer.netbird_ip or "—",
-                peer.connection_type,
-            ])
-        else:
-            machine_rows.append([name, host, ui.status_badge("offline"), "—", "не в NetBird"])
-    if machine_rows:
-        ui.print_panel(
-            "⚙ Целевые машины",
-            ui._make_table(["Имя", "FQDN", "Статус", "IP", "Тип"], machine_rows),
-        )
-    else:
+    ui.print_section("⚙ Целевые машины (из конфига)")
+    machines = config.machines
+    if not machines:
         ui.print_warn("Машины не настроены. Используй: dsync add <имя> <host>")
+    else:
+        online = []
+        offline = []
+        for name, info in machines.items():
+            host = info["host"]
+            ui.print_info(f"  {name} → {host}")
+            if nb.is_self(host):
+                online.append(name)
+                ui.print_ok(f"    🟢 Connected (текущая машина)  IP: {nb.self_ip}")
+            else:
+                peer = next((p for p in nb.peers if p.fqdn == host), None)
+                if peer:
+                    if peer.is_connected:
+                        online.append(name)
+                        ui.print_ok(f"    🟢 {peer.status}  IP: {peer.netbird_ip}")
+                    else:
+                        offline.append(name)
+                        ui.print_warn(f"    🔴 {peer.status}")
+                else:
+                    offline.append(name)
+                    ui.print_warn(f"    ⚫ Не найден в NetBird")
 
     return 0
 
 
-def _filter_machines(machines: dict, requested: list[str]) -> dict | None:
-    """Return only requested machines, validating names."""
-    if not requested:
-        return machines
-    unknown = [name for name in requested if name not in machines]
-    if unknown:
-        ui.print_error(f"Неизвестные машины: {', '.join(unknown)}")
-        return None
-    return {name: info for name, info in machines.items() if name in requested}
-
-
-def cmd_sync(config: Config, strategy: str = "", dry_run: bool = False, jobs: int = 4, machines: list[str] | None = None):
+def cmd_sync(config: Config, strategy: str = ""):
     ui.print_header()
-    if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
+    hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
 
-    if not _sync_git_repo(repo, branch, strategy, dry_run=dry_run):
+    gs = git_status(repo)
+    if gs.error:
+        ui.print_error(f"Ошибка git: {gs.error}")
         return 1
+
+    if not gs.is_clean:
+        ui.print_section("📤 Локальные изменения")
+        with ui.spinner_ctx("Коммит..."):
+            msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            r = commit(repo, msg)
+        if r.success:
+            ui.print_ok("Закоммичено")
+        else:
+            ui.print_error(f"Ошибка коммита: {r.stderr}")
+            return 1
+    else:
+        ui.print_ok("Локально чисто")
+
+    ui.print_section("📥 Синхронизация с GitHub")
+    with ui.spinner_ctx("Fetch..."):
+        fetch(repo)
+
+    ahead, behind = diverts_check(repo, branch)
+    if behind > 0:
+        ui.print_info(f"Удалённых коммитов: {behind}")
+        with ui.spinner_ctx("Pull..."):
+            r, had_conflict = safe_pull(repo, branch)
+        if r.success:
+            ui.print_ok("Pull выполнен")
+        elif had_conflict:
+            ui._print()
+            ui.print_warn("Конфликт при pull!")
+            res = resolve_conflict(repo, branch, strategy)
+            if res is None:
+                return 1
+        else:
+            ui.print_warn(f"Pull: {r.stderr[:200]}")
+    else:
+        ui.print_ok("Pull не требуется")
+
+    if ahead > 0 or gs.ahead > 0:
+        with ui.spinner_ctx("Push..."):
+            r = push(repo, branch)
+        if r.success:
+            ui.print_ok("Запущено на GitHub")
+        else:
+            ui.print_error(f"Ошибка push: {r.stderr}")
+            return 1
 
     nb = get_status()
     if nb is None:
         ui.print_error("NetBird недоступен — не могу синхронизировать удалённые машины")
         return 1
 
-    all_machines = config.machines
-    if not all_machines:
+    machines = config.machines
+    if not machines:
         ui.print_warn("Нет машин в конфиге для удалённой синхронизации")
         return 0
 
-    selected = _filter_machines(all_machines, machines or [])
-    if selected is None:
-        return 1
-    if not selected:
-        return 0
-
-    if machines:
-        ui.print_info(f"Выбраны машины: {', '.join(machines)}")
-
-    remote_url = config.git_remote_url or get_remote_url(repo)
-    if not remote_url:
-        ui.print_error("Не удалось определить URL git remote. Укажи [git] remote_url в конфиге")
-        return 1
-
-    logger.info("remote sync: selected=%s dry_run=%s jobs=%s", list(selected), dry_run, jobs)
     ui.print_section("🔄 Синхронизация с удалёнными машинами")
-    result_rows, success_count, fail_count, skip_count = _run_remote_sync(
-        repo, branch, remote_url, nb, selected, dry_run=dry_run, jobs=jobs
-    )
-    ui.print_result_table(result_rows)
+    success_count = 0
+    fail_count = 0
+    skip_count = 0
+
+    for name, info in machines.items():
+        host = info["host"]
+        user = info.get("user", "mflkee")
+
+        if nb.is_self(host):
+            continue
+
+        peer = next((p for p in nb.peers if p.fqdn == host), None)
+        if peer and not peer.is_connected:
+            ui.print_warn(f"  {name} ({host}) — офлайн, пропускаю")
+            skip_count += 1
+            continue
+        if not peer:
+            ui.print_warn(f"  {name} ({host}) — не найден в NetBird, пробую подключиться...")
+
+        ui.print_info(f"  → {name} ({host})")
+
+        ip = resolve_host(host)
+        if not _check_port(ip):
+            ui.print_warn(f"    SSH порт 22 недоступен, пропускаю")
+            skip_count += 1
+            continue
+
+        repo_path = str(config.git_source)
+        rcmd = f"""export PATH="$HOME/.local/bin:$PATH"
+C="$(command -v chezmoi)"
+if [ -d {shlex.quote(repo_path)}/.git ]; then
+  cd {shlex.quote(repo_path)}
+  git fetch origin {shlex.quote(branch)} 2>&1 || true
+  git reset HEAD . 2>/dev/null
+  git checkout -- . 2>/dev/null
+  git clean -fd 2>/dev/null
+  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
+    git rebase --abort 2>/dev/null
+    echo "GIT_CONFLICT"
+    exit 0
+  fi
+else
+  rm -rf {shlex.quote(repo_path)} && git clone https://github.com/mflkee/dotfiles.git {shlex.quote(repo_path)}
+fi
+if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
+cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true"""
+        with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
+            r = ssh_run(ip, rcmd, user=user, timeout=300)
+
+        if r.success:
+            if "GIT_CONFLICT" in r.stdout:
+                ui.print_warn(f"{name}: конфликт git, chezmoi не применялся")
+                fail_count += 1
+            elif "NO_CHEZMOI" in r.stdout:
+                ui.print_warn(f"{name}: chezmoi не установлен, пропускаю")
+                skip_count += 1
+            else:
+                ui.print_ok(f"{name}: синхронизировано")
+                success_count += 1
+        else:
+            err = r.stderr.replace("\n", "; ")
+            ui.print_error(f"{name}: {err[:200]}")
+            fail_count += 1
 
     ui.print_section("📊 Итог")
-    logger.info("remote sync finished: success=%d skipped=%d failed=%d", success_count, skip_count, fail_count)
-    if dry_run:
-        ui.print_info("Режим dry-run: изменения не применены")
     if success_count:
         ui.print_ok(f"Успешно: {success_count}")
     if skip_count:
@@ -384,108 +280,122 @@ def cmd_sync(config: Config, strategy: str = "", dry_run: bool = False, jobs: in
     return 0 if fail_count == 0 else 1
 
 
-def _run_remote_sync(
-    repo: Path,
-    branch: str,
-    remote_url: str,
-    nb,
-    machines: dict,
-    dry_run: bool,
-    jobs: int,
-) -> tuple[list[list[str]], int, int, int]:
-    """Run remote sync for all machines, optionally in parallel."""
-    items = list(machines.items())
-
-    def _sync_one(item: tuple[str, dict]) -> tuple[str, str, str]:
-        name, info = item
-        status, reason = _sync_remote_machine(
-            repo, branch, remote_url, nb, name, info,
-            dry_run=dry_run, show_spinner=(jobs == 1)
-        )
-        return name, status, reason
-
-    with ui.spinner_ctx("Синхронизация машин..."):
-        if jobs == 1:
-            raw_results = [_sync_one(item) for item in items]
-        else:
-            workers = max(1, min(jobs, len(items)))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                raw_results = list(executor.map(_sync_one, items))
-
-    result_rows: list[list[str]] = []
-    success_count = 0
-    fail_count = 0
-    skip_count = 0
-
-    for name, status, reason in raw_results:
-        if status == "success":
-            result_rows.append([name, ui.result_badge("success"), reason])
-            success_count += 1
-        elif status.startswith("skipped-"):
-            result_rows.append([name, ui.result_badge("skipped"), reason])
-            skip_count += 1
-        else:
-            result_rows.append([name, ui.result_badge("failed"), reason])
-            fail_count += 1
-
-    return result_rows, success_count, fail_count, skip_count
-
-
-def cmd_push(config: Config, strategy: str = "", dry_run: bool = False, jobs: int = 4, machines: list[str] | None = None):
+def cmd_push(config: Config, strategy: str = ""):
     nb = get_status()
     if nb is None:
         ui.print_error("NetBird недоступен")
         return 1
 
-    all_machines = config.machines
-    if not all_machines:
+    if not config.machines:
         ui.print_error("Нет машин в конфиге")
         ui.print_info("Добавь: dsync add <имя> <host>")
         return 1
 
-    selected = _filter_machines(all_machines, machines or [])
-    if selected is None:
-        return 1
-    if not selected:
-        ui.print_warn("Нет машин для синхронизации")
-        return 0
-
+    hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
 
     ui.print_header()
-    if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
 
-    if machines:
-        ui.print_info(f"Выбраны машины: {', '.join(machines)}")
-
-    if not _sync_git_repo(repo, branch, strategy, dry_run=dry_run):
+    gs = git_status(repo)
+    if gs.error:
+        ui.print_error(f"Git: {gs.error}")
         return 1
 
-    remote_url = config.git_remote_url or get_remote_url(repo)
-    if not remote_url:
-        ui.print_error("Не удалось определить URL git remote. Укажи [git] remote_url в конфиге")
-        return 1
+    if not gs.is_clean:
+        with ui.spinner_ctx("Коммит..."):
+            msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            r = commit(repo, msg)
+        if r.success:
+            ui.print_ok("Закоммичено")
+        else:
+            ui.print_error(f"Ошибка: {r.stderr}")
+            return 1
+    else:
+        ui.print_ok("Изменений нет")
 
-    logger.info("remote push: selected=%s dry_run=%s jobs=%s", list(selected), dry_run, jobs)
+    ui.print_section("📥 Синхронизация с GitHub")
+    with ui.spinner_ctx("Fetch..."):
+        fetch(repo)
+
+    ahead, behind = diverts_check(repo, branch)
+    if behind > 0:
+        ui.print_info(f"Удалённых коммитов: {behind}")
+        with ui.spinner_ctx("Pull..."):
+            r, had_conflict = safe_pull(repo, branch)
+        if r.success:
+            ui.print_ok("Pull выполнен")
+        elif had_conflict:
+            ui._print()
+            ui.print_warn("Конфликт при pull!")
+            res = resolve_conflict(repo, branch, strategy)
+            if res is None:
+                return 1
+    else:
+        ui.print_ok("Pull не требуется")
+
+    if ahead > 0 or gs.ahead > 0:
+        with ui.spinner_ctx("Push..."):
+            r = push(repo, branch)
+        if r.success:
+            ui.print_ok("Запущено на GitHub")
+        else:
+            ui.print_error(f"Ошибка push: {r.stderr}")
+            return 1
+
     ui.print_section("🔄 Рассылка на машины")
-    result_rows, success_count, fail_count, skip_count = _run_remote_sync(
-        repo, branch, remote_url, nb, selected, dry_run=dry_run, jobs=jobs
-    )
-    ui.print_result_table(result_rows)
+    for name, info in config.machines.items():
+        host = info["host"]
+        user = info.get("user", "mflkee")
 
-    if dry_run:
-        ui.print_info("Режим dry-run: изменения не применены")
+        if nb.is_self(host):
+            continue
 
-    logger.info("remote push finished: success=%d skipped=%d failed=%d", success_count, skip_count, fail_count)
-    return 0 if fail_count == 0 else 1
+        peer = next((p for p in nb.peers if p.fqdn == host), None)
+        if peer and not peer.is_connected:
+            ui.print_warn(f"  {name} — офлайн")
+            continue
+        ui.print_info(f"  → {name}")
+        ip = resolve_host(host)
+        if not _check_port(ip):
+            ui.print_warn(f"    SSH порт 22 недоступен, пропускаю")
+            continue
+        repo_path = str(repo)
+        rcmd = f"""export PATH="$HOME/.local/bin:$PATH"
+C="$(command -v chezmoi)"
+if [ -d {shlex.quote(repo_path)}/.git ]; then
+  cd {shlex.quote(repo_path)}
+  git fetch origin {shlex.quote(branch)} 2>&1 || true
+  git reset HEAD . 2>/dev/null
+  git checkout -- . 2>/dev/null
+  git clean -fd 2>/dev/null
+  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
+    git rebase --abort 2>/dev/null
+    echo "GIT_CONFLICT"
+    exit 0
+  fi
+else
+  rm -rf {shlex.quote(repo_path)} && git clone https://github.com/mflkee/dotfiles.git {shlex.quote(repo_path)}
+fi
+if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
+cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true"""
+        with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
+            r = ssh_run(ip, rcmd, user=user, timeout=300)
+        if r.success:
+            if "GIT_CONFLICT" in r.stdout:
+                ui.print_warn(f"{name}: конфликт git, chezmoi не применялся")
+            elif "NO_CHEZMOI" in r.stdout:
+                ui.print_warn(f"{name}: chezmoi не установлен, пропускаю")
+            else:
+                ui.print_ok(f"{name}: OK")
+        else:
+            ui.print_error(f"{name}: {r.stderr[:150]}")
+
+    return 0
 
 
-def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
+def cmd_pull(config: Config, strategy: str = ""):
     ui.print_header()
-    if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
     repo = config.git_source
     branch = config.git_branch
 
@@ -495,25 +405,18 @@ def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
     ahead, behind = diverts_check(repo, branch)
     if behind > 0:
         ui.print_info(f"Удалённых коммитов: {behind}")
-        if dry_run:
-            ui.print_info(f"Будет выполнен git pull --rebase origin {branch}")
-        else:
-            with ui.spinner_ctx("Pull..."):
-                r, had_conflict = safe_pull(repo, branch)
-            if r.success:
-                ui.print_ok("Git pull выполнен")
-            elif had_conflict:
-                ui._print()
-                ui.print_warn("Конфликт при pull!")
-                res = resolve_conflict(repo, branch, strategy)
-                if res is None:
-                    return 1
+        with ui.spinner_ctx("Pull..."):
+            r, had_conflict = safe_pull(repo, branch)
+        if r.success:
+            ui.print_ok("Git pull выполнен")
+        elif had_conflict:
+            ui._print()
+            ui.print_warn("Конфликт при pull!")
+            res = resolve_conflict(repo, branch, strategy)
+            if res is None:
+                return 1
     else:
         ui.print_ok("Уже актуально")
-
-    if dry_run:
-        ui.print_info("Будет выполнен chezmoi apply")
-        return 0
 
     with ui.spinner_ctx("chezmoi apply..."):
         r = chezmoi_apply()
@@ -544,44 +447,41 @@ def cmd_setup(config: Config):
         subprocess.run(["ssh-keygen", "-t", "ed25519", "-f", identity, "-N", ""], check=True)
         ui.print_ok("SSH-ключ создан")
 
-    result_rows: list[list[str]] = []
     all_ok = True
     for name, info in machines.items():
         host = info["host"]
         user = info.get("user", "mflkee")
         ip = resolve_host(host)
+        ui.print_info(f"\n  {name} ({user}@{host} → {ip})")
 
-        if host == nb.self_fqdn or ip == nb.self_ip:
-            result_rows.append([name, host, ui.result_badge("success"), "текущая машина"])
+        if nb.is_self(host) or ip == nb.self_ip:
+            ui.print_ok("Текущая машина, пропускаю")
             continue
 
         if not _check_port(ip):
-            result_rows.append([name, host, ui.result_badge("skipped"), "SSH порт 22 недоступен"])
-            all_ok = False
+            ui.print_warn("  SSH порт 22 недоступен, пропускаю")
             continue
 
         # check if already accessible
         if check_connectivity(ip, user):
-            result_rows.append([name, host, ui.result_badge("success"), "доступ уже есть"])
+            ui.print_ok("Уже есть доступ")
             continue
 
-        ui.print_info(f"  Копируем ключ для {name}...")
+        ui.print_info("  Копируем ключ...")
         try:
             r = subprocess.run(
                 ["ssh-copy-id", "-i", identity, f"{user}@{ip}"],
                 capture_output=True, text=True, timeout=30,
             )
         except subprocess.TimeoutExpired:
-            result_rows.append([name, host, ui.result_badge("skipped"), "таймаут ssh-copy-id"])
+            ui.print_warn("  Таймаут ssh-copy-id, пропускаю")
             all_ok = False
             continue
         if r.returncode == 0:
-            result_rows.append([name, host, ui.result_badge("success"), "ключ скопирован"])
+            ui.print_ok("Ключ скопирован")
         else:
-            result_rows.append([name, host, ui.result_badge("failed"), r.stderr[:200]])
+            ui.print_error(f"Не удалось: {r.stderr[:200]}")
             all_ok = False
-
-    ui.print_result_table(result_rows)
 
     ui.print_section("🌐 DNS / hosts")
 
@@ -683,10 +583,10 @@ def cmd_discover(config: Config):
         return 1
 
     ui.print_section("🔍 Поиск машин в NetBird")
-    peers_by_short: dict[str, Peer] = {}
+    peers_by_ip = {}
+    peers_by_short = {}
+    import re
     suffix_re = re.compile(r"-\d+-\d+$")
-    aliases = config.discover_aliases
-    prefixes = config.discover_prefixes
 
     def _register(key: str, peer):
         existing = peers_by_short.get(key)
@@ -698,28 +598,29 @@ def cmd_discover(config: Config):
     for peer in nb.peers:
         if peer.fqdn == nb.self_fqdn:
             continue
+        ip = peer.netbird_ip
         short = peer.hostname_short
+        peers_by_ip[ip] = peer
         _register(short, peer)
         _register(short.replace("-", ""), peer)
         _register(suffix_re.sub("", short), peer)
-        # Strip configured prefixes so short aliases can match
-        for prefix in prefixes:
+        # Strip well-known prefixes so short aliases like "desktop" can match
+        for prefix in ("archlinux-", "mkair-"):
             if short.startswith(prefix):
                 stripped = short[len(prefix):]
                 _register(stripped, peer)
                 _register(suffix_re.sub("", stripped), peer)
 
     machines = config.data.setdefault("machines", {})
-    updated_rows: list[list[str]] = []
-    skipped: list[str] = []
-    not_found: list[str] = []
+    updated = []
+    skipped = []
 
     for name, info in list(machines.items()):
         host = info.get("host", "")
         user = info.get("user", "mflkee")
 
         # already an IP
-        if _is_ip_value(host):
+        if host.replace(".", "").isdigit():
             skipped.append(name)
             continue
 
@@ -732,13 +633,14 @@ def cmd_discover(config: Config):
                     break
 
         if peer is None:
-            not_found.append(name)
+            ui.print_warn(f"{name}: не найден в NetBird")
             continue
 
         new_host = peer.fqdn
         if host != new_host:
-            updated_rows.append([name, host, new_host])
+            ui.print_info(f"{name}: {host} → {new_host}")
             machines[name] = {"host": new_host, "user": user}
+            updated.append(name)
         else:
             skipped.append(name)
 
@@ -749,85 +651,42 @@ def cmd_discover(config: Config):
             continue
         if peer.fqdn == nb.self_fqdn:
             continue
+        # suggest known aliases
+        aliases = {
+            "archlinux-notebook": "notebook",
+            "archlinux-desktop": "desktop",
+            "mkair-server-tmn": "server-tmn",
+            "mkair-server": "server",
+            "antix1": "antix1",
+        }
 
         name = None
-        normalized = suffix_re.sub("", short)
         # Try to match against aliases that ignore the NetBird -<digits> suffix
         for prefix, alias in aliases.items():
-            if short.startswith(prefix) or normalized.startswith(prefix):
+            if short.startswith(prefix):
+                name = alias
+                break
+            # also match if peer short is the new suffixed form (e.g. archlinux-desktop-12-158)
+            normalized = re.sub(r"-\d+-\d+$", "", short)
+            if normalized.startswith(prefix):
                 name = alias
                 break
         if name is None:
             name = short
         if name not in machines:
-            updated_rows.append([name, "—", peer.fqdn])
+            ui.print_info(f"Найдена новая машина: {name} → {peer.fqdn}")
             machines[name] = {"host": peer.fqdn, "user": "mflkee"}
+            updated.append(name)
 
-    if updated_rows:
+    if updated:
         config._save()
-        ui.print_panel(
-            "🔍 Обновлено/добавлено",
-            ui._make_table(["Имя", "Было", "Стало"], updated_rows),
-            style="green",
-        )
+        ui.print_ok(f"Обновлено/добавлено: {', '.join(updated)}")
     else:
         ui.print_ok("Изменений не требуется")
 
     if skipped:
         ui.print_info(f"Без изменений: {', '.join(skipped)}")
-    if not_found:
-        ui.print_warn(f"Не найдены в NetBird: {', '.join(not_found)}")
 
-    return 0
-
-
-def cmd_help():
-    ui.print_header()
-
-    quick_start = """[bold cyan]dsync status[/bold cyan]           Показать статус машин и проектов
-[bold cyan]dsync setup[/bold cyan]            Скопировать SSH-ключи на все машины
-[bold cyan]dsync sync[/bold cyan]             Синхронизировать dotfiles
-[bold cyan]dsync project status[/bold cyan]   Показать статус проектов
-[bold cyan]dsync project sync[/bold cyan]   Синхронизировать проекты"""
-    ui.print_panel("🚀 Быстрый старт", quick_start, style="cyan")
-
-    commands = [
-        ["status", "Статус NetBird, chezmoi и машин", "dsync status"],
-        ["sync", "Синхронизировать dotfiles", "dsync sync --dry-run"],
-        ["push", "Отправить dotfiles на машины", "dsync push notebook"],
-        ["pull", "Получить dotfiles и применить", "dsync pull"],
-        ["setup", "Настроить SSH доступ", "dsync setup"],
-        ["add", "Добавить машину", "dsync add desktop archlinux-desktop.netbird.cloud"],
-        ["remove", "Удалить машину", "dsync remove desktop"],
-        ["discover", "Обновить FQDN из NetBird", "dsync discover"],
-        ["timer", "systemd таймер", "dsync timer --enable"],
-        ["project", "Управление проектами", "dsync project status"],
-        ["zen", "Zen Browser профиль", "dsync zen export"],
-    ]
-    ui.print_panel(
-        "📚 Команды",
-        ui._make_table(["Команда", "Описание", "Пример"], commands),
-    )
-
-    flags = [
-        ["--dry-run", "Показать, что будет сделано, без изменений"],
-        ["--jobs N", "Число параллельных SSH (по умолчанию 4)"],
-        ["--verbose", "Подробное логирование"],
-        ["--log-file", "Путь к файлу логов"],
-    ]
-    ui.print_panel(
-        "⚙ Флаги",
-        ui._make_table(["Флаг", "Описание"], flags),
-    )
-
-    ui.print_panel(
-        "📁 Конфигурация",
-        "Файл: [bold]~/.config/dsync/config.toml[/bold]\n"
-        "Секции: [bold]machines[/bold], [bold]git[/bold], [bold]discover[/bold], [bold]logging[/bold], [bold]projects[/bold]",
-        style="dim",
-    )
-
-    ui.print_info("Подробная справка по команде: dsync <команда> --help")
     return 0
 
 
@@ -835,32 +694,21 @@ def main():
     config = Config.ensure_default()
 
     parser = argparse.ArgumentParser(prog="dsync", description="Decentralized chezmoi dotfiles sync via NetBird")
-    parser.add_argument("--log-file", help="Путь к файлу логов (по умолчанию из конфига или ~/.local/share/dsync/dsync.log)")
-    parser.add_argument("--verbose", action="store_true", help="Подробное логирование (DEBUG)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Показать статус всех машин")
 
     sync_p = sub.add_parser("sync", help="Полный цикл синхронизации")
-    sync_p.add_argument("machines", nargs="*", help="Имена машин для синхронизации (по умолчанию все)")
-    sync_p.add_argument("--only", action="append", default=[], help="Отфильтровать только указанные машины (можно несколько раз)")
     sync_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов (иначе — интерактивный режим)")
-    sync_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано, без изменений")
-    sync_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений (по умолчанию 4)")
 
     push_p = sub.add_parser("push", help="Отправить изменения на удалённые машины")
-    push_p.add_argument("machines", nargs="*", help="Имена машин для push (по умолчанию все)")
-    push_p.add_argument("--only", action="append", default=[], help="Отфильтровать только указанные машины (можно несколько раз)")
     push_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов")
-    push_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано, без изменений")
-    push_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений (по умолчанию 4)")
 
     pull_p = sub.add_parser("pull", help="Получить изменения и применить chezmoi")
     pull_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов")
-    pull_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано, без изменений")
     sub.add_parser("setup", help="Настроить SSH доступ к машинам")
 
     add_p = sub.add_parser("add", help="Добавить машину в конфиг")
@@ -877,21 +725,6 @@ def main():
 
     sub.add_parser("discover", help="Обновить FQDN/IP машин из NetBird")
 
-    sub.add_parser("help", help="Показать справку")
-
-    # project subcommand
-    project_p = sub.add_parser("project", help="Управление проектами")
-    project_sub = project_p.add_subparsers(dest="project_action", required=True)
-    project_sub.add_parser("status", help="Показать статус проектов")
-    project_sync_p = project_sub.add_parser("sync", help="Синхронизировать проекты на машины")
-    project_sync_p.add_argument("projects", nargs="*", help="Имена проектов (по умолчанию все)")
-    project_sync_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано")
-    project_sync_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений")
-    project_clone_p = project_sub.add_parser("clone", help="Клонировать проекты на машины")
-    project_clone_p.add_argument("projects", nargs="*", help="Имена проектов (по умолчанию все)")
-    project_clone_p.add_argument("--dry-run", action="store_true", help="Показать, что будет сделано")
-    project_clone_p.add_argument("--jobs", type=int, default=4, help="Число параллельных SSH-подключений")
-
     # zen subcommand
     zen_p = sub.add_parser("zen", help="Zen Browser: экспорт/импорт профиля")
     zen_sub = zen_p.add_subparsers(dest="zen_action")
@@ -901,34 +734,14 @@ def main():
 
     args = parser.parse_args()
 
-    log_file = args.log_file or str(config.log_file)
-    log_level = "DEBUG" if args.verbose else config.log_level
-    setup_logging(log_file=log_file, level=log_level)
-
     if args.command == "status":
         return cmd_status(config)
     elif args.command == "sync":
-        return cmd_sync(
-            config,
-            getattr(args, "strategy", ""),
-            dry_run=args.dry_run,
-            jobs=args.jobs,
-            machines=args.machines + args.only,
-        )
+        return cmd_sync(config, getattr(args, "strategy", ""))
     elif args.command == "push":
-        return cmd_push(
-            config,
-            getattr(args, "strategy", ""),
-            dry_run=args.dry_run,
-            jobs=args.jobs,
-            machines=args.machines + args.only,
-        )
+        return cmd_push(config, getattr(args, "strategy", ""))
     elif args.command == "pull":
-        return cmd_pull(
-            config,
-            getattr(args, "strategy", ""),
-            dry_run=args.dry_run,
-        )
+        return cmd_pull(config, getattr(args, "strategy", ""))
     elif args.command == "setup":
         return cmd_setup(config)
     elif args.command == "add":
@@ -943,25 +756,6 @@ def main():
         return cmd_timer(config, args.enable, args.disable)
     elif args.command == "discover":
         return cmd_discover(config)
-    elif args.command == "help":
-        return cmd_help()
-    elif args.command == "project":
-        if args.project_action == "status":
-            return project_cli.cmd_project_status(config)
-        elif args.project_action == "sync":
-            return project_cli.cmd_project_sync(
-                config,
-                args.projects,
-                dry_run=args.dry_run,
-                jobs=args.jobs,
-            )
-        elif args.project_action == "clone":
-            return project_cli.cmd_project_clone(
-                config,
-                args.projects,
-                dry_run=args.dry_run,
-                jobs=args.jobs,
-            )
     elif args.command == "zen":
         if args.zen_action == "export":
             zen_dest = config.git_source / "dot_config" / "dsync" / "zen.json"

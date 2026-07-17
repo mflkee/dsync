@@ -128,7 +128,7 @@ def diverts_check(repo_path: Path, branch: str = "main") -> tuple[int, int]:
 def chezmoi_apply(timeout: int = 120) -> GitResult:
     try:
         result = subprocess.run(
-            ["chezmoi", "apply"],
+            ["chezmoi", "apply", "--force"],
             capture_output=True,
             text=True,
             timeout=timeout,
