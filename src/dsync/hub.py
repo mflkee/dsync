@@ -104,7 +104,9 @@ def remote_hub_script(root: str) -> str:
     Выводит строки HUB|name|status|detail для парсинга на локальной стороне.
     """
     return f"""export PATH="$HOME/.local/bin:$PATH"
-root={shlex.quote(root)}
+root=$(awk -F'"' '/^\\[hub\\]/{{f=1;next}} /^\\[/{{f=0}} f && /root/{{print $2}}' "$HOME/.config/dsync/config.toml" 2>/dev/null)
+root=${{root:-{shlex.quote(root)}}}
+root="${{root/#\\~/$HOME}}"
 [ -d "$root" ] || {{ echo "HUB_ERROR|no root dir $root"; exit 0; }}
 for d in "$root"/*/.git; do
   [ -d "$d" ] || continue
