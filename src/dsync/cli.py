@@ -15,6 +15,10 @@ from .ssh_client import run as ssh_run, check_connectivity
 from .chezmoi import get_status as git_status, commit, fetch, pull, push, chezmoi_apply, diverts_check
 from .resolver import resolve_host
 from .project_cli import cmd_project_status, cmd_project_sync, cmd_project_clone
+from .hub_cli import (
+    auto_self_update, cmd_self_status, cmd_self_update,
+    cmd_hub_status, cmd_hub_pull,
+)
 from .conflict import (
     safe_pull, has_conflict, is_rebasing, rebase_abort,
     get_conflicted_files, show_diff_summary, resolve_interactive
@@ -140,11 +144,15 @@ def cmd_status(config: Config):
     return 0
 
 
-def cmd_sync(config: Config, strategy: str = ""):
+def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_hub: bool = True):
     ui.print_header()
     hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
+
+    if self_update:
+        ui.print_section("🔄 Проверка версии dsync")
+        auto_self_update()
 
     gs = git_status(repo)
     if gs.error:
@@ -277,6 +285,9 @@ cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" 
         ui.print_info(f"Пропущено (офлайн): {skip_count}")
     if fail_count:
         ui.print_error(f"Ошибок: {fail_count}")
+
+    if run_hub:
+        cmd_hub_pull(config, local_only=False, jobs=4)
 
     return 0 if fail_count == 0 else 1
 
@@ -702,6 +713,10 @@ def main():
     sync_p = sub.add_parser("sync", help="Полный цикл синхронизации")
     sync_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов (иначе — интерактивный режим)")
+    sync_p.add_argument("--no-self-update", action="store_true",
+                        help="Не обновлять dsync перед синхронизацией")
+    sync_p.add_argument("--no-hub", action="store_true",
+                        help="Не выполнять hub pull репозиториев в конце")
 
     push_p = sub.add_parser("push", help="Отправить изменения на удалённые машины")
     push_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
@@ -746,12 +761,30 @@ def main():
     project_clone_p.add_argument("--dry-run", action="store_true", help="Режим сухого прогона")
     project_clone_p.add_argument("--jobs", "-j", type=int, default=4, help="Количество параллельных задач")
 
+    # self subcommand
+    self_p = sub.add_parser("self", help="Самообновление dsync")
+    self_sub = self_p.add_subparsers(dest="self_action", required=True)
+    self_sub.add_parser("status", help="Статус версии dsync")
+    self_sub.add_parser("update", help="Обновить dsync до последней версии")
+
+    # hub subcommand
+    hub_p = sub.add_parser("hub", help="Массовый pull всех git-репозиториев")
+    hub_sub = hub_p.add_subparsers(dest="hub_action", required=True)
+    hub_status_p = hub_sub.add_parser("status", help="Статус всех репозиториев в hub")
+    hub_status_p.add_argument("--jobs", "-j", type=int, default=4, help="Количество параллельных задач")
+    hub_pull_p = hub_sub.add_parser("pull", help="Pull всех репозиториев (ff-only, dirty пропускаются)")
+    hub_pull_p.add_argument("--local", action="store_true", help="Только локально, без SSH на машины")
+    hub_pull_p.add_argument("--dry-run", action="store_true", help="Режим сухого прогона")
+    hub_pull_p.add_argument("--jobs", "-j", type=int, default=4, help="Количество параллельных задач")
+
     args = parser.parse_args()
 
     if args.command == "status":
         return cmd_status(config)
     elif args.command == "sync":
-        return cmd_sync(config, getattr(args, "strategy", ""))
+        return cmd_sync(config, getattr(args, "strategy", ""),
+                        self_update=not args.no_self_update,
+                        run_hub=not args.no_hub)
     elif args.command == "push":
         return cmd_push(config, getattr(args, "strategy", ""))
     elif args.command == "pull":
@@ -820,6 +853,16 @@ def main():
             return cmd_project_sync(config, args.names, dry_run=args.dry_run, jobs=args.jobs)
         elif args.project_action == "clone":
             return cmd_project_clone(config, args.names, dry_run=args.dry_run, jobs=args.jobs)
+    elif args.command == "self":
+        if args.self_action == "status":
+            return cmd_self_status()
+        elif args.self_action == "update":
+            return cmd_self_update()
+    elif args.command == "hub":
+        if args.hub_action == "status":
+            return cmd_hub_status(config, jobs=args.jobs)
+        elif args.hub_action == "pull":
+            return cmd_hub_pull(config, local_only=args.local, dry_run=args.dry_run, jobs=args.jobs)
     return 1
 
 
