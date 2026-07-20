@@ -36,6 +36,10 @@ branch = "main"
 # Optional: projects to sync across machines.
 # [projects]
 # myapp = { path = "~/projects/myapp", remote = "git@github.com:mflkee/myapp.git", machines = ["notebook", "desktop"] }
+
+# Optional: hub — массовый pull всех git-репозиториев в общей папке.
+# [hub]
+# root = "~/projects"
 """
 
 DEFAULT_DISCOVER_PREFIXES = ("archlinux-", "mkair-")
@@ -97,6 +101,11 @@ class Config:
     @property
     def projects(self) -> dict[str, dict]:
         return self.data.get("projects", {})
+
+    @property
+    def hub_root(self) -> Path:
+        root = self.data.get("hub", {}).get("root", "~/projects")
+        return Path(root).expanduser()
 
     def add_machine(self, name: str, host: str, user: str = "mflkee"):
         machines = self.data.setdefault("machines", {})
