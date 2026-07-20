@@ -35,6 +35,22 @@ def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
         return False
 
 
+def _theme_export() -> bool:
+    try:
+        r = subprocess.run(["noctalia-theme-export"], capture_output=True, text=True, timeout=10)
+        return r.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _theme_apply() -> bool:
+    try:
+        r = subprocess.run(["noctalia-theme-apply"], capture_output=True, text=True, timeout=10)
+        return r.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
 def resolve_conflict(repo: Path, branch: str, strategy: str) -> bool | None:
     """Resolve git conflict.
     Returns True (keep local), False (keep remote), None (abort).
@@ -154,6 +170,12 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
         ui.print_section("🔄 Проверка версии dsync")
         auto_self_update()
 
+    ui.print_section("🎨 Noctalia тема")
+    if _theme_export():
+        ui.print_ok("Тема экспортирована")
+    else:
+        ui.print_info("noctalia-theme-export: пропускаю (не найден или ошибка)")
+
     gs = git_status(repo)
     if gs.error:
         ui.print_error(f"Ошибка git: {gs.error}")
@@ -259,7 +281,8 @@ else
   rm -rf {shlex.quote(repo_path)} && git clone https://github.com/mflkee/dotfiles.git {shlex.quote(repo_path)}
 fi
 if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
-cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true"""
+cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true
+noctalia-theme-apply 2>/dev/null || true"""
         with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
             r = ssh_run(ip, rcmd, user=user, timeout=300)
 
@@ -308,6 +331,9 @@ def cmd_push(config: Config, strategy: str = ""):
     branch = config.git_branch
 
     ui.print_header()
+
+    if _theme_export():
+        ui.print_ok("Noctalia тема экспортирована")
 
     gs = git_status(repo)
     if gs.error:
@@ -390,7 +416,8 @@ else
   rm -rf {shlex.quote(repo_path)} && git clone https://github.com/mflkee/dotfiles.git {shlex.quote(repo_path)}
 fi
 if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
-cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true"""
+cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true
+noctalia-theme-apply 2>/dev/null || true"""
         with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
             r = ssh_run(ip, rcmd, user=user, timeout=300)
         if r.success:
@@ -436,6 +463,9 @@ def cmd_pull(config: Config, strategy: str = ""):
         ui.print_ok("chezmoi apply — OK")
     else:
         ui.print_warn(f"chezmoi apply: {r.stderr[:200]}" if r.stderr else "chezmoi apply: предупреждения")
+
+    if _theme_apply():
+        ui.print_ok("Noctalia тема применена")
 
     return 0
 
