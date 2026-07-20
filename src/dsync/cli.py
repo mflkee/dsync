@@ -1,4 +1,5 @@
 import argparse
+import concurrent.futures
 import json
 import os
 import shlex
@@ -44,7 +45,7 @@ def _theme_export() -> bool:
     try:
         r = subprocess.run(["noctalia-theme-export"], capture_output=True, text=True, timeout=10)
         return r.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 
@@ -52,8 +53,104 @@ def _theme_apply() -> bool:
     try:
         r = subprocess.run(["noctalia-theme-apply"], capture_output=True, text=True, timeout=10)
         return r.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def _filter_machines(config: Config, only: list[str]) -> dict:
+    """Return machines from config filtered by names; empty filter = all."""
+    machines = config.machines
+    if not only:
+        return machines
+    unknown = [n for n in only if n not in machines]
+    for n in unknown:
+        ui.print_warn(f"Машина '{n}' не найдена в конфиге")
+    return {n: i for n, i in machines.items() if n in only}
+
+
+def _remote_sync_script(repo_path: str, branch: str, remote_url: str) -> str:
+    return f"""export PATH="$HOME/.local/bin:$PATH"
+C="$(command -v chezmoi)"
+if [ -d {shlex.quote(repo_path)}/.git ]; then
+  cd {shlex.quote(repo_path)}
+  git fetch origin {shlex.quote(branch)} 2>&1 || true
+  git reset HEAD . 2>/dev/null
+  git checkout -- . 2>/dev/null
+  git clean -fd 2>/dev/null
+  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
+    git rebase --abort 2>/dev/null
+    echo "GIT_CONFLICT"
+    exit 0
+  fi
+else
+  rm -rf {shlex.quote(repo_path)} && git clone {shlex.quote(remote_url)} {shlex.quote(repo_path)}
+fi
+if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
+cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true
+noctalia-theme-apply 2>/dev/null || true"""
+
+
+def _sync_machine(item, nb, repo_path: str, branch: str, remote_url: str, dry_run: bool):
+    """Sync one remote machine. Returns (name, status, detail)."""
+    name, info = item
+    host = info["host"]
+    user = info.get("user", "mflkee")
+
+    if nb.is_self(host):
+        return name, "self", ""
+    peer = next((p for p in nb.peers if p.fqdn == host), None)
+    if peer and not peer.is_connected:
+        return name, "skipped", "офлайн"
+    ip = resolve_host(host)
+    if not _check_port(ip):
+        return name, "skipped", "SSH порт 22 недоступен"
+    if dry_run:
+        return name, "dry", "готова к синхронизации"
+
+    rcmd = _remote_sync_script(repo_path, branch, remote_url)
+    r = ssh_run(ip, rcmd, user=user, timeout=300)
+    if not r.success:
+        return name, "failed", r.stderr.replace("\n", "; ")[:200]
+    if "GIT_CONFLICT" in r.stdout:
+        return name, "conflict", "конфликт git, chezmoi не применялся"
+    if "NO_CHEZMOI" in r.stdout:
+        return name, "no_chezmoi", "chezmoi не установлен"
+    return name, "success", ""
+
+
+def _sync_machines_parallel(machines: dict, nb, repo_path: str, branch: str,
+                            remote_url: str, dry_run: bool, jobs: int):
+    """Sync machines in parallel, print per-machine results. Returns (ok, skip, fail)."""
+    items = list(machines.items())
+    with ui.spinner_ctx(f"SSH на {len(items)} машин(ы)..."):
+        if jobs <= 1 or len(items) <= 1:
+            results = [_sync_machine(it, nb, repo_path, branch, remote_url, dry_run) for it in items]
+        else:
+            workers = max(1, min(jobs, len(items)))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                results = list(ex.map(
+                    lambda it: _sync_machine(it, nb, repo_path, branch, remote_url, dry_run), items))
+
+    ok = skip = fail = 0
+    for name, status, detail in results:
+        if status == "self":
+            continue
+        if status == "success":
+            ui.print_ok(f"{name}: синхронизировано")
+            ok += 1
+        elif status == "dry":
+            ui.print_info(f"{name}: {detail} (dry-run)")
+            ok += 1
+        elif status in ("skipped", "no_chezmoi"):
+            ui.print_info(f"{name}: {detail}, пропускаю")
+            skip += 1
+        elif status == "conflict":
+            ui.print_warn(f"{name}: {detail}")
+            fail += 1
+        else:
+            ui.print_error(f"{name}: {detail}")
+            fail += 1
+    return ok, skip, fail
 
 
 def resolve_conflict(repo: Path, branch: str, strategy: str) -> bool | None:
@@ -165,21 +262,26 @@ def cmd_status(config: Config):
     return 0
 
 
-def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_hub: bool = True):
+def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_hub: bool = True,
+             only: list[str] | None = None, dry_run: bool = False, jobs: int = 4):
     ui.print_header()
+    if dry_run:
+        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
     hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
+    remote_url = config.git_remote_url or "https://github.com/mflkee/dotfiles.git"
 
-    if self_update:
+    if self_update and not dry_run:
         ui.print_section("🔄 Проверка версии dsync")
         auto_self_update()
 
-    ui.print_section("🎨 Noctalia тема")
-    if _theme_export():
-        ui.print_ok("Тема экспортирована")
-    else:
-        ui.print_info("noctalia-theme-export: пропускаю (не найден или ошибка)")
+    if not dry_run:
+        ui.print_section("🎨 Noctalia тема")
+        if _theme_export():
+            ui.print_ok("Тема экспортирована")
+        else:
+            ui.print_info("noctalia-theme-export: пропускаю (не найден или ошибка)")
 
     gs = git_status(repo)
     if gs.error:
@@ -187,15 +289,18 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
         return 1
 
     if not gs.is_clean:
-        ui.print_section("📤 Локальные изменения")
-        with ui.spinner_ctx("Коммит..."):
-            msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            r = commit(repo, msg)
-        if r.success:
-            ui.print_ok("Закоммичено")
+        if dry_run:
+            ui.print_info("Есть локальные изменения — будут закоммичены")
         else:
-            ui.print_error(f"Ошибка коммита: {r.stderr}")
-            return 1
+            ui.print_section("📤 Локальные изменения")
+            with ui.spinner_ctx("Коммит..."):
+                msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                r = commit(repo, msg)
+            if r.success:
+                ui.print_ok("Закоммичено")
+            else:
+                ui.print_error(f"Ошибка коммита: {r.stderr}")
+                return 1
     else:
         ui.print_ok("Локально чисто")
 
@@ -206,105 +311,49 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
     ahead, behind = diverts_check(repo, branch)
     if behind > 0:
         ui.print_info(f"Удалённых коммитов: {behind}")
-        with ui.spinner_ctx("Pull..."):
-            r, had_conflict = safe_pull(repo, branch)
-        if r.success:
-            ui.print_ok("Pull выполнен")
-        elif had_conflict:
-            ui._print()
-            ui.print_warn("Конфликт при pull!")
-            res = resolve_conflict(repo, branch, strategy)
-            if res is None:
-                return 1
+        if dry_run:
+            ui.print_info("Будет выполнен pull")
         else:
-            ui.print_warn(f"Pull: {r.stderr[:200]}")
+            with ui.spinner_ctx("Pull..."):
+                r, had_conflict = safe_pull(repo, branch)
+            if r.success:
+                ui.print_ok("Pull выполнен")
+            elif had_conflict:
+                ui._print()
+                ui.print_warn("Конфликт при pull!")
+                res = resolve_conflict(repo, branch, strategy)
+                if res is None:
+                    return 1
+            else:
+                ui.print_warn(f"Pull: {r.stderr[:200]}")
     else:
         ui.print_ok("Pull не требуется")
 
     if ahead > 0 or gs.ahead > 0:
-        with ui.spinner_ctx("Push..."):
-            r = push(repo, branch)
-        if r.success:
-            ui.print_ok("Запущено на GitHub")
+        if dry_run:
+            ui.print_info(f"Локальных коммитов: {ahead or gs.ahead} — будут запушены")
         else:
-            ui.print_error(f"Ошибка push: {r.stderr}")
-            return 1
+            with ui.spinner_ctx("Push..."):
+                r = push(repo, branch)
+            if r.success:
+                ui.print_ok("Запущено на GitHub")
+            else:
+                ui.print_error(f"Ошибка push: {r.stderr}")
+                return 1
 
     nb = get_status()
     if nb is None:
         ui.print_error("NetBird недоступен — не могу синхронизировать удалённые машины")
         return 1
 
-    machines = config.machines
+    machines = _filter_machines(config, only or [])
     if not machines:
         ui.print_warn("Нет машин в конфиге для удалённой синхронизации")
         return 0
 
     ui.print_section("🔄 Синхронизация с удалёнными машинами")
-    success_count = 0
-    fail_count = 0
-    skip_count = 0
-
-    for name, info in machines.items():
-        host = info["host"]
-        user = info.get("user", "mflkee")
-
-        if nb.is_self(host):
-            continue
-
-        peer = next((p for p in nb.peers if p.fqdn == host), None)
-        if peer and not peer.is_connected:
-            ui.print_warn(f"  {name} ({host}) — офлайн, пропускаю")
-            skip_count += 1
-            continue
-        if not peer:
-            ui.print_warn(f"  {name} ({host}) — не найден в NetBird, пробую подключиться...")
-
-        ui.print_info(f"  → {name} ({host})")
-
-        ip = resolve_host(host)
-        if not _check_port(ip):
-            ui.print_warn("    SSH порт 22 недоступен, пропускаю")
-            skip_count += 1
-            continue
-
-        repo_path = str(config.git_source)
-        rcmd = f"""export PATH="$HOME/.local/bin:$PATH"
-C="$(command -v chezmoi)"
-if [ -d {shlex.quote(repo_path)}/.git ]; then
-  cd {shlex.quote(repo_path)}
-  git fetch origin {shlex.quote(branch)} 2>&1 || true
-  git reset HEAD . 2>/dev/null
-  git checkout -- . 2>/dev/null
-  git clean -fd 2>/dev/null
-  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
-    git rebase --abort 2>/dev/null
-    echo "GIT_CONFLICT"
-    exit 0
-  fi
-else
-  rm -rf {shlex.quote(repo_path)} && git clone https://github.com/mflkee/dotfiles.git {shlex.quote(repo_path)}
-fi
-if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
-cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true
-noctalia-theme-apply 2>/dev/null || true"""
-        with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
-            ssh_result = ssh_run(ip, rcmd, user=user, timeout=300)
-
-        if ssh_result.success:
-            if "GIT_CONFLICT" in ssh_result.stdout:
-                ui.print_warn(f"{name}: конфликт git, chezmoi не применялся")
-                fail_count += 1
-            elif "NO_CHEZMOI" in ssh_result.stdout:
-                ui.print_warn(f"{name}: chezmoi не установлен, пропускаю")
-                skip_count += 1
-            else:
-                ui.print_ok(f"{name}: синхронизировано")
-                success_count += 1
-        else:
-            err = ssh_result.stderr.replace("\n", "; ")
-            ui.print_error(f"{name}: {err[:200]}")
-            fail_count += 1
+    success_count, skip_count, fail_count = _sync_machines_parallel(
+        machines, nb, str(repo), branch, remote_url, dry_run, jobs)
 
     ui.print_section("📊 Итог")
     if success_count:
@@ -315,18 +364,24 @@ noctalia-theme-apply 2>/dev/null || true"""
         ui.print_error(f"Ошибок: {fail_count}")
 
     if run_hub:
-        cmd_hub_pull(config, local_only=False, jobs=4)
+        cmd_hub_pull(config, local_only=False, dry_run=dry_run, jobs=jobs)
+
+    if dry_run:
+        ui.print_info("Режим dry-run: изменения не применены")
+        return 0
 
     return 0 if fail_count == 0 else 1
 
 
-def cmd_push(config: Config, strategy: str = ""):
+def cmd_push(config: Config, strategy: str = "", only: list[str] | None = None,
+             dry_run: bool = False, jobs: int = 4):
     nb = get_status()
     if nb is None:
         ui.print_error("NetBird недоступен")
         return 1
 
-    if not config.machines:
+    machines = _filter_machines(config, only or [])
+    if not machines:
         ui.print_error("Нет машин в конфиге")
         ui.print_info("Добавь: dsync add <имя> <host>")
         return 1
@@ -334,10 +389,13 @@ def cmd_push(config: Config, strategy: str = ""):
     hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
+    remote_url = config.git_remote_url or "https://github.com/mflkee/dotfiles.git"
 
     ui.print_header()
+    if dry_run:
+        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
 
-    if _theme_export():
+    if not dry_run and _theme_export():
         ui.print_ok("Noctalia тема экспортирована")
 
     gs = git_status(repo)
@@ -346,14 +404,17 @@ def cmd_push(config: Config, strategy: str = ""):
         return 1
 
     if not gs.is_clean:
-        with ui.spinner_ctx("Коммит..."):
-            msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            r = commit(repo, msg)
-        if r.success:
-            ui.print_ok("Закоммичено")
+        if dry_run:
+            ui.print_info("Есть локальные изменения — будут закоммичены")
         else:
-            ui.print_error(f"Ошибка: {r.stderr}")
-            return 1
+            with ui.spinner_ctx("Коммит..."):
+                msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                r = commit(repo, msg)
+            if r.success:
+                ui.print_ok("Закоммичено")
+            else:
+                ui.print_error(f"Ошибка: {r.stderr}")
+                return 1
     else:
         ui.print_ok("Изменений нет")
 
@@ -364,82 +425,47 @@ def cmd_push(config: Config, strategy: str = ""):
     ahead, behind = diverts_check(repo, branch)
     if behind > 0:
         ui.print_info(f"Удалённых коммитов: {behind}")
-        with ui.spinner_ctx("Pull..."):
-            r, had_conflict = safe_pull(repo, branch)
-        if r.success:
-            ui.print_ok("Pull выполнен")
-        elif had_conflict:
-            ui._print()
-            ui.print_warn("Конфликт при pull!")
-            res = resolve_conflict(repo, branch, strategy)
-            if res is None:
-                return 1
+        if dry_run:
+            ui.print_info("Будет выполнен pull")
+        else:
+            with ui.spinner_ctx("Pull..."):
+                r, had_conflict = safe_pull(repo, branch)
+            if r.success:
+                ui.print_ok("Pull выполнен")
+            elif had_conflict:
+                ui._print()
+                ui.print_warn("Конфликт при pull!")
+                res = resolve_conflict(repo, branch, strategy)
+                if res is None:
+                    return 1
     else:
         ui.print_ok("Pull не требуется")
 
     if ahead > 0 or gs.ahead > 0:
-        with ui.spinner_ctx("Push..."):
-            r = push(repo, branch)
-        if r.success:
-            ui.print_ok("Запущено на GitHub")
+        if dry_run:
+            ui.print_info(f"Локальных коммитов: {ahead or gs.ahead} — будут запушены")
         else:
-            ui.print_error(f"Ошибка push: {r.stderr}")
-            return 1
+            with ui.spinner_ctx("Push..."):
+                r = push(repo, branch)
+            if r.success:
+                ui.print_ok("Запущено на GitHub")
+            else:
+                ui.print_error(f"Ошибка push: {r.stderr}")
+                return 1
 
     ui.print_section("🔄 Рассылка на машины")
-    for name, info in config.machines.items():
-        host = info["host"]
-        user = info.get("user", "mflkee")
+    _sync_machines_parallel(machines, nb, str(repo), branch, remote_url, dry_run, jobs)
 
-        if nb.is_self(host):
-            continue
-
-        peer = next((p for p in nb.peers if p.fqdn == host), None)
-        if peer and not peer.is_connected:
-            ui.print_warn(f"  {name} — офлайн")
-            continue
-        ui.print_info(f"  → {name}")
-        ip = resolve_host(host)
-        if not _check_port(ip):
-            ui.print_warn("    SSH порт 22 недоступен, пропускаю")
-            continue
-        repo_path = str(repo)
-        rcmd = f"""export PATH="$HOME/.local/bin:$PATH"
-C="$(command -v chezmoi)"
-if [ -d {shlex.quote(repo_path)}/.git ]; then
-  cd {shlex.quote(repo_path)}
-  git fetch origin {shlex.quote(branch)} 2>&1 || true
-  git reset HEAD . 2>/dev/null
-  git checkout -- . 2>/dev/null
-  git clean -fd 2>/dev/null
-  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
-    git rebase --abort 2>/dev/null
-    echo "GIT_CONFLICT"
-    exit 0
-  fi
-else
-  rm -rf {shlex.quote(repo_path)} && git clone https://github.com/mflkee/dotfiles.git {shlex.quote(repo_path)}
-fi
-if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
-cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true
-noctalia-theme-apply 2>/dev/null || true"""
-        with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
-            ssh_result = ssh_run(ip, rcmd, user=user, timeout=300)
-        if ssh_result.success:
-            if "GIT_CONFLICT" in ssh_result.stdout:
-                ui.print_warn(f"{name}: конфликт git, chezmoi не применялся")
-            elif "NO_CHEZMOI" in ssh_result.stdout:
-                ui.print_warn(f"{name}: chezmoi не установлен, пропускаю")
-            else:
-                ui.print_ok(f"{name}: OK")
-        else:
-            ui.print_error(f"{name}: {ssh_result.stderr[:150]}")
+    if dry_run:
+        ui.print_info("Режим dry-run: изменения не применены")
 
     return 0
 
 
-def cmd_pull(config: Config, strategy: str = ""):
+def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
     ui.print_header()
+    if dry_run:
+        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
     repo = config.git_source
     branch = config.git_branch
 
@@ -449,18 +475,25 @@ def cmd_pull(config: Config, strategy: str = ""):
     ahead, behind = diverts_check(repo, branch)
     if behind > 0:
         ui.print_info(f"Удалённых коммитов: {behind}")
-        with ui.spinner_ctx("Pull..."):
-            r, had_conflict = safe_pull(repo, branch)
-        if r.success:
-            ui.print_ok("Git pull выполнен")
-        elif had_conflict:
-            ui._print()
-            ui.print_warn("Конфликт при pull!")
-            res = resolve_conflict(repo, branch, strategy)
-            if res is None:
-                return 1
+        if dry_run:
+            ui.print_info("Будет выполнен pull")
+        else:
+            with ui.spinner_ctx("Pull..."):
+                r, had_conflict = safe_pull(repo, branch)
+            if r.success:
+                ui.print_ok("Git pull выполнен")
+            elif had_conflict:
+                ui._print()
+                ui.print_warn("Конфликт при pull!")
+                res = resolve_conflict(repo, branch, strategy)
+                if res is None:
+                    return 1
     else:
         ui.print_ok("Уже актуально")
+
+    if dry_run:
+        ui.print_info("Будет выполнен chezmoi apply (dry-run)")
+        return 0
 
     with ui.spinner_ctx("chezmoi apply..."):
         r = chezmoi_apply()
@@ -747,20 +780,31 @@ def main():
     sub.add_parser("status", help="Показать статус всех машин")
 
     sync_p = sub.add_parser("sync", help="Полный цикл синхронизации")
+    sync_p.add_argument("machines", nargs="*", help="Синхронизировать только эти машины")
+    sync_p.add_argument("--only", action="append", default=[], metavar="ИМЯ",
+                        help="Синхронизировать только указанную машину (можно несколько раз)")
     sync_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов (иначе — интерактивный режим)")
+    sync_p.add_argument("--dry-run", action="store_true", help="Режим сухого прогона")
+    sync_p.add_argument("--jobs", "-j", type=int, default=4, help="Количество параллельных задач")
     sync_p.add_argument("--no-self-update", action="store_true",
                         help="Не обновлять dsync перед синхронизацией")
     sync_p.add_argument("--no-hub", action="store_true",
                         help="Не выполнять hub pull репозиториев в конце")
 
     push_p = sub.add_parser("push", help="Отправить изменения на удалённые машины")
+    push_p.add_argument("machines", nargs="*", help="Отправить только на эти машины")
+    push_p.add_argument("--only", action="append", default=[], metavar="ИМЯ",
+                        help="Отправить только на указанную машину (можно несколько раз)")
     push_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов")
+    push_p.add_argument("--dry-run", action="store_true", help="Режим сухого прогона")
+    push_p.add_argument("--jobs", "-j", type=int, default=4, help="Количество параллельных задач")
 
     pull_p = sub.add_parser("pull", help="Получить изменения и применить chezmoi")
     pull_p.add_argument("--strategy", choices=["ours", "theirs", "abort"],
                         help="Стратегия разрешения конфликтов")
+    pull_p.add_argument("--dry-run", action="store_true", help="Режим сухого прогона")
     sub.add_parser("setup", help="Настроить SSH доступ к машинам")
 
     add_p = sub.add_parser("add", help="Добавить машину в конфиг")
@@ -822,11 +866,15 @@ def main():
     elif args.command == "sync":
         return cmd_sync(config, getattr(args, "strategy", ""),
                         self_update=not args.no_self_update,
-                        run_hub=not args.no_hub)
+                        run_hub=not args.no_hub,
+                        only=list(args.machines) + list(args.only),
+                        dry_run=args.dry_run, jobs=args.jobs)
     elif args.command == "push":
-        return cmd_push(config, getattr(args, "strategy", ""))
+        return cmd_push(config, getattr(args, "strategy", ""),
+                        only=list(args.machines) + list(args.only),
+                        dry_run=args.dry_run, jobs=args.jobs)
     elif args.command == "pull":
-        return cmd_pull(config, getattr(args, "strategy", ""))
+        return cmd_pull(config, getattr(args, "strategy", ""), dry_run=args.dry_run)
     elif args.command == "setup":
         return cmd_setup(config)
     elif args.command == "add":
