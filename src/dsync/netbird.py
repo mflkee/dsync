@@ -5,7 +5,6 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
 
-
 SUFFIX_RE = re.compile(r"-\d+-\d+$")
 
 

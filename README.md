@@ -23,7 +23,8 @@ changes over SSH inside the private mesh network.
 - `dsync pull --dry-run` — preview what `pull` would do.
 - `dsync setup` — copy SSH keys to all configured machines.
 - `dsync add <name> <host>` / `dsync remove <name>` — manage machine list.
-- `dsync timer --enable` — run `dsync sync` every 30 minutes via systemd timer.
+- `dsync timer --enable` — run `dsync pull` every 30 minutes via systemd timer.
+- `dsync timer --enable --mode sync` — run `dsync sync` every 30 minutes.
 - `dsync zen export|import|info` — export/import Zen Browser profile data.
 - `dsync help` — show a friendly help page with examples.
 - `dsync project status` — show status of configured projects.

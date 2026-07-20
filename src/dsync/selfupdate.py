@@ -96,6 +96,7 @@ def self_update() -> GitResult:
     if st.behind == 0:
         return GitResult(success=True, stdout="up-to-date")
 
+    assert st.source is not None
     pull = _git(st.source, ["pull", "--ff-only"], timeout=60)
     if not pull.success:
         return GitResult(success=False, stderr=f"pull: {pull.stderr[:200]}")

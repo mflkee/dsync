@@ -1,30 +1,35 @@
 import argparse
-import subprocess
+import json
 import os
 import shlex
 import socket
-import sys
-import json
-from pathlib import Path
+import subprocess
 from datetime import datetime
+from pathlib import Path
+
+import lz4.block
 
 from . import ui
+from .chezmoi import chezmoi_apply, commit, diverts_check, fetch, push
+from .chezmoi import get_status as git_status
 from .config import Config
-from .netbird import get_status
-from .ssh_client import run as ssh_run, check_connectivity
-from .chezmoi import get_status as git_status, commit, fetch, pull, push, chezmoi_apply, diverts_check
-from .resolver import resolve_host
-from .project_cli import cmd_project_status, cmd_project_sync, cmd_project_clone
-from .hub_cli import (
-    auto_self_update, cmd_self_status, cmd_self_update,
-    cmd_hub_status, cmd_hub_pull,
-)
 from .conflict import (
-    safe_pull, has_conflict, is_rebasing, rebase_abort,
-    get_conflicted_files, show_diff_summary, resolve_interactive
+    resolve_interactive,
+    safe_pull,
 )
-from .zen import export_zen, import_zen, find_profile
-import lz4.block
+from .hub_cli import (
+    auto_self_update,
+    cmd_hub_pull,
+    cmd_hub_status,
+    cmd_self_status,
+    cmd_self_update,
+)
+from .netbird import Peer, get_status
+from .project_cli import cmd_project_clone, cmd_project_status, cmd_project_sync
+from .resolver import resolve_host
+from .ssh_client import check_connectivity
+from .ssh_client import run as ssh_run
+from .zen import export_zen, find_profile, import_zen
 
 
 def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
@@ -155,7 +160,7 @@ def cmd_status(config: Config):
                         ui.print_warn(f"    🔴 {peer.status}")
                 else:
                     offline.append(name)
-                    ui.print_warn(f"    ⚫ Не найден в NetBird")
+                    ui.print_warn("    ⚫ Не найден в NetBird")
 
     return 0
 
@@ -259,7 +264,7 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
 
         ip = resolve_host(host)
         if not _check_port(ip):
-            ui.print_warn(f"    SSH порт 22 недоступен, пропускаю")
+            ui.print_warn("    SSH порт 22 недоступен, пропускаю")
             skip_count += 1
             continue
 
@@ -284,20 +289,20 @@ if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
 cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true
 noctalia-theme-apply 2>/dev/null || true"""
         with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
-            r = ssh_run(ip, rcmd, user=user, timeout=300)
+            ssh_result = ssh_run(ip, rcmd, user=user, timeout=300)
 
-        if r.success:
-            if "GIT_CONFLICT" in r.stdout:
+        if ssh_result.success:
+            if "GIT_CONFLICT" in ssh_result.stdout:
                 ui.print_warn(f"{name}: конфликт git, chezmoi не применялся")
                 fail_count += 1
-            elif "NO_CHEZMOI" in r.stdout:
+            elif "NO_CHEZMOI" in ssh_result.stdout:
                 ui.print_warn(f"{name}: chezmoi не установлен, пропускаю")
                 skip_count += 1
             else:
                 ui.print_ok(f"{name}: синхронизировано")
                 success_count += 1
         else:
-            err = r.stderr.replace("\n", "; ")
+            err = ssh_result.stderr.replace("\n", "; ")
             ui.print_error(f"{name}: {err[:200]}")
             fail_count += 1
 
@@ -396,7 +401,7 @@ def cmd_push(config: Config, strategy: str = ""):
         ui.print_info(f"  → {name}")
         ip = resolve_host(host)
         if not _check_port(ip):
-            ui.print_warn(f"    SSH порт 22 недоступен, пропускаю")
+            ui.print_warn("    SSH порт 22 недоступен, пропускаю")
             continue
         repo_path = str(repo)
         rcmd = f"""export PATH="$HOME/.local/bin:$PATH"
@@ -419,16 +424,16 @@ if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
 cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true
 noctalia-theme-apply 2>/dev/null || true"""
         with ui.spinner_ctx(f"SSH: {host} ({ip})..."):
-            r = ssh_run(ip, rcmd, user=user, timeout=300)
-        if r.success:
-            if "GIT_CONFLICT" in r.stdout:
+            ssh_result = ssh_run(ip, rcmd, user=user, timeout=300)
+        if ssh_result.success:
+            if "GIT_CONFLICT" in ssh_result.stdout:
                 ui.print_warn(f"{name}: конфликт git, chezmoi не применялся")
-            elif "NO_CHEZMOI" in r.stdout:
+            elif "NO_CHEZMOI" in ssh_result.stdout:
                 ui.print_warn(f"{name}: chezmoi не установлен, пропускаю")
             else:
                 ui.print_ok(f"{name}: OK")
         else:
-            ui.print_error(f"{name}: {r.stderr[:150]}")
+            ui.print_error(f"{name}: {ssh_result.stderr[:150]}")
 
     return 0
 
@@ -570,7 +575,7 @@ def cmd_remove(config: Config, name: str):
     return 0
 
 
-def cmd_timer(config: Config, enable: bool, disable: bool):
+def cmd_timer(config: Config, enable: bool, disable: bool, mode: str = "pull"):
     unit_dir = Path.home() / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True, exist_ok=True)
 
@@ -588,12 +593,13 @@ def cmd_timer(config: Config, enable: bool, disable: bool):
         return 0
 
     dsync_bin = "dsync"
+    exec_cmd = f"{dsync_bin} {mode}"
     service_content = f"""[Unit]
-Description=dsync — chezmoi dotfiles sync
+Description=dsync — dotfiles {mode}
 
 [Service]
 Type=oneshot
-ExecStart={dsync_bin} sync
+ExecStart={exec_cmd}
 """
     timer_content = """[Unit]
 Description=Run dsync every 30 minutes
@@ -612,7 +618,7 @@ WantedBy=timers.target
     subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
     subprocess.run(["systemctl", "--user", "enable", "--now", "dsync.timer"],
                    capture_output=True)
-    ui.print_ok("Таймер включён (каждые 30 минут)")
+    ui.print_ok(f"Таймер включён ({mode} каждые 30 минут)")
     ui.print_info("Проверить: systemctl --user status dsync.timer")
     return 0
 
@@ -625,8 +631,8 @@ def cmd_discover(config: Config):
         return 1
 
     ui.print_section("🔍 Поиск машин в NetBird")
-    peers_by_ip = {}
-    peers_by_short = {}
+    peers_by_ip: dict[str, Peer] = {}
+    peers_by_short: dict[str, Peer] = {}
     import re
     suffix_re = re.compile(r"-\d+-\d+$")
 
@@ -768,6 +774,8 @@ def main():
     timer_p = sub.add_parser("timer", help="Управление systemd таймером")
     timer_p.add_argument("--enable", action="store_true", help="Включить таймер")
     timer_p.add_argument("--disable", action="store_true", help="Выключить таймер")
+    timer_p.add_argument("--mode", choices=["pull", "sync"], default="pull",
+                         help="Команда для запуска таймера (по умолчанию pull)")
 
     sub.add_parser("discover", help="Обновить FQDN/IP машин из NetBird")
 
@@ -830,7 +838,7 @@ def main():
     elif args.command == "remove":
         return cmd_remove(config, args.name)
     elif args.command == "timer":
-        return cmd_timer(config, args.enable, args.disable)
+        return cmd_timer(config, args.enable, args.disable, mode=args.mode)
     elif args.command == "discover":
         return cmd_discover(config)
     elif args.command == "zen":
