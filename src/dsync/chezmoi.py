@@ -149,6 +149,30 @@ def re_add_secrets() -> GitResult:
         return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
 
 
+def re_add_noctalia() -> GitResult:
+    """Re-add noctalia settings so chezmoi source stays in sync with live file."""
+    settings = Path.home() / ".config" / "noctalia" / "settings.json"
+    if not settings.exists():
+        return GitResult(success=True)
+    try:
+        result = subprocess.run(
+            ["chezmoi", "re-add", str(settings)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return GitResult(
+            success=result.returncode == 0,
+            stdout=result.stdout.strip(),
+            stderr=result.stderr.strip(),
+            returncode=result.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        return GitResult(success=False, stderr="chezmoi re-add timed out", returncode=-1)
+    except FileNotFoundError:
+        return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
+
+
 def chezmoi_apply(timeout: int = 120) -> GitResult:
     try:
         result = subprocess.run(

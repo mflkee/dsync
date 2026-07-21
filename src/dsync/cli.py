@@ -11,7 +11,7 @@ from pathlib import Path
 import lz4.block
 
 from . import ui
-from .chezmoi import chezmoi_apply, commit, diverts_check, fetch, push, re_add_secrets
+from .chezmoi import chezmoi_apply, commit, diverts_check, fetch, push, re_add_noctalia, re_add_secrets
 from .chezmoi import get_status as git_status
 from .config import Config
 from .conflict import (
@@ -296,6 +296,13 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
         elif r.stderr:
             ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
 
+        with ui.spinner_ctx("noctalia re-add..."):
+            r = re_add_noctalia()
+        if r.success:
+            ui.print_ok("Noctalia re-add — OK")
+        elif r.stderr:
+            ui.print_warn(f"chezmoi re-add noctalia: {r.stderr[:200]}")
+
     if not gs.is_clean:
         if dry_run:
             ui.print_info("Есть локальные изменения — будут закоммичены")
@@ -413,6 +420,13 @@ def cmd_push(config: Config, strategy: str = "", only: list[str] | None = None,
             ui.print_ok("Secrets re-add — OK")
         elif r.stderr:
             ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
+
+        with ui.spinner_ctx("noctalia re-add..."):
+            r = re_add_noctalia()
+        if r.success:
+            ui.print_ok("Noctalia re-add — OK")
+        elif r.stderr:
+            ui.print_warn(f"chezmoi re-add noctalia: {r.stderr[:200]}")
 
     gs = git_status(repo)
     if gs.error:
