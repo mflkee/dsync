@@ -7,8 +7,6 @@ try:
     from rich import box as _box
     from rich.console import Console as _RichConsole
     from rich.markup import escape as rich_escape
-    from rich.panel import Panel as _Panel
-    from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich.table import Table as _RichTable
 
     RICH = True
@@ -61,68 +59,37 @@ def bold(text: str) -> str:
 def status_dot(status: str) -> str:
     s = status.lower()
     if s == "connected":
-        return green("●")
+        return green("ok")
     elif s == "idle":
-        return yellow("●")
+        return yellow("idle")
     elif s == "disconnected":
-        return red("●")
-    return dim("○")
+        return red("down")
+    return dim("--")
 
 
 def print_header():
-    if RICH:
-        _console.print(_Panel.fit("[bold]dsync[/bold] — dotfiles sync", style="cyan", border_style="cyan"))
-    else:
-        _print(bold("╭──────────────────────────────────────╮"))
-        _print(bold("│  dsync — dotfiles sync               │"))
-        _print(bold("╰──────────────────────────────────────╯"))
+    _print(bold("dsync"))
 
 
-def badge(text: str, color: str) -> str:
-    if RICH:
-        return f"[{color}]{text}[/{color}]"
-    return text
+def print_section(title: str):
+    _print()
+    _print(bold(title))
 
 
-def status_badge(status: str) -> str:
-    s = status.lower()
-    if s == "connected" or s == "online":
-        return badge("● connected", "green")
-    elif s == "idle":
-        return badge("● idle", "yellow")
-    elif s == "disconnected" or s == "offline":
-        return badge("● offline", "red")
-    return badge("○ " + status, "dim")
+def print_ok(msg: str):
+    _print(f"  {green('ok')}  {msg}")
 
 
-def result_badge(status: str, reason: str = "") -> str:
-    if status == "success":
-        label = badge("✓ OK", "green")
-    elif status.startswith("skipped"):
-        label = badge("⚠ skipped", "yellow")
-    else:
-        label = badge("✗ failed", "red")
-    if reason:
-        return f"{label} [dim]{reason}[/dim]" if RICH else f"{label} {reason}"
-    return label
+def print_error(msg: str):
+    _print(f"  {red('fail')}  {msg}")
 
 
-def print_panel(title: str, content=None, style: str = ""):
-    if RICH:
-        _console.print(_Panel(content if content is not None else "", title=title, border_style=style or "dim", expand=False))
-    else:
-        _print()
-        _print(bold(title))
-        _print(dim("─" * 50))
-        if content is not None:
-            _print(content)
+def print_warn(msg: str):
+    _print(f"  {yellow('warn')}  {msg}")
 
 
-def _print(*args, **kwargs):
-    if RICH:
-        _console.print(*args, **kwargs)
-    else:
-        print(*args, **kwargs)
+def print_info(msg: str):
+    _print(f"  {dim('..')}  {msg}")
 
 
 def print_status_line(icon: str, text: str, status: str = ""):
@@ -132,50 +99,74 @@ def print_status_line(icon: str, text: str, status: str = ""):
         _print(f"  {icon}  {text}")
 
 
-def print_section(title: str):
+def print_panel(title: str, content=None, style: str = ""):
     _print()
     _print(bold(title))
-    _print(dim("─" * 50))
+    if content is not None:
+        _print(content)
 
 
-def print_error(msg: str):
-    _print(f"  {red('✗')}  {msg}")
+def result_badge(status: str, reason: str = "") -> str:
+    if status == "success":
+        label = green("ok")
+    elif status.startswith("skipped"):
+        label = yellow("skip")
+    else:
+        label = red("fail")
+    if reason:
+        return f"{label}  {dim(reason)}"
+    return label
 
 
-def print_ok(msg: str):
-    _print(f"  {green('✓')}  {msg}")
+def status_badge(status: str) -> str:
+    s = status.lower()
+    if s in ("connected", "online"):
+        return green("ok") + " " + status
+    elif s == "idle":
+        return yellow("idle")
+    elif s in ("disconnected", "offline"):
+        return red("down")
+    return dim(status)
 
 
-def print_warn(msg: str):
-    _print(f"  {yellow('⚠')}  {msg}")
+def badge(text: str, color: str) -> str:
+    if RICH:
+        return f"[{color}]{text}[/{color}]"
+    return text
 
 
-def print_info(msg: str):
-    _print(f"  {dim('ℹ')}  {msg}")
+def _print(*args, **kwargs):
+    if RICH:
+        _console.print(*args, **kwargs)
+    else:
+        print(*args, **kwargs)
 
 
 def print_result_table(rows: list[list[str]]):
-    """Print a table of machine sync results."""
     if not rows:
-        print_info("Нет машин для отображения")
+        print_info("net")
         return
     if RICH:
         table = _RichTable(
             show_header=True,
             header_style="bold",
-            box=_box.ROUNDED,
-            border_style="dim",
+            box=_box.SIMPLE,
+            padding=(0, 2),
         )
-        table.add_column("Машина", style="cyan")
-        table.add_column("Статус")
-        table.add_column("Сообщение", style="dim")
+        table.add_column("name", style="cyan")
+        table.add_column("status")
+        table.add_column("note", style="dim")
         for row in rows:
             table.add_row(*[str(c) for c in row])
         _console.print(table)
     else:
-        col_w = max(len(str(c)) for row in [["Машина", "Статус", "Сообщение"]] + rows for c in row)
+        col_w = max(len(str(c)) for row in [["name", "status", "note"]] + rows for c in row)
+        sep = "  "
+        header = sep.join(str(c).ljust(col_w) for c in ["name", "status", "note"])
+        _print(header)
+        _print(dim("-" * len(header)))
         for row in rows:
-            _print("  ".join(str(c).ljust(col_w) for c in row))
+            _print(sep.join(str(c).ljust(col_w) for c in row))
 
 
 def print_table(columns, rows):
@@ -187,11 +178,11 @@ def _make_table(columns, rows) -> Any:
         table = _RichTable(
             show_header=True,
             header_style="bold",
-            box=_box.ROUNDED,
-            border_style="dim",
+            box=_box.SIMPLE,
+            padding=(0, 2),
         )
         for col in columns:
-            table.add_column(col)
+            table.add_column(str(col))
         for row in rows:
             table.add_row(*[str(c) for c in row])
         return table
@@ -201,19 +192,17 @@ def _make_table(columns, rows) -> Any:
     sep = "  "
     header = sep.join(str(c).ljust(col_w) for c in columns)
     lines.append(header)
-    lines.append(dim("─" * len(header)))
+    lines.append(dim("-" * len(header)))
     for row in rows:
         lines.append(sep.join(str(c).ljust(col_w) for c in row))
     return "\n".join(lines)
 
 
 def _make_kv_table(rows: list[list[str]]) -> Any:
-    """Build a key-value table."""
     if RICH:
         table = _RichTable(
             show_header=False,
-            box=_box.ROUNDED,
-            border_style="dim",
+            box=_box.SIMPLE,
             padding=(0, 1),
         )
         table.add_column(style="bold")
@@ -233,12 +222,13 @@ def _make_kv_table(rows: list[list[str]]) -> Any:
 @contextmanager
 def spinner_ctx(message: str = "Working..."):
     if RICH:
+        from rich.progress import Progress, SpinnerColumn, TextColumn
         progress = Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True)
         with progress:
-            task = progress.add_task(message, total=None)
+            task = progress.add_task(dim(message), total=None)
             yield
             progress.remove_task(task)
     else:
-        print(f"  {dim('⟳')}  {message}", end="", flush=True)
+        print(f"  {dim(message)}", end="", flush=True)
         yield
-        print("\r" + " " * (len(message) + 6) + "\r", end="", flush=True)
+        print("\r" + " " * (len(message) + 4) + "\r", end="", flush=True)

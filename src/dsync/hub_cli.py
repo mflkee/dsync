@@ -21,7 +21,7 @@ def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
 
 def cmd_self_status() -> int:
     ui.print_header()
-    ui.print_section("🔄 dsync self")
+    ui.print_section("dsync self")
     st = selfupdate.get_self_status(do_fetch=True)
     if st.error:
         ui.print_error(st.error)
@@ -39,7 +39,7 @@ def cmd_self_status() -> int:
 
 def cmd_self_update() -> int:
     ui.print_header()
-    ui.print_section("🔄 Обновление dsync")
+    ui.print_section("self update")
     with ui.spinner_ctx("Проверка и обновление..."):
         r = selfupdate.self_update()
     if not r.success:
@@ -79,7 +79,7 @@ def auto_self_update() -> bool:
 def cmd_hub_status(config, jobs: int = 4) -> int:
     ui.print_header()
     root = config.hub_root
-    ui.print_section(f"📦 Hub: {root}")
+    ui.print_section(f"hub: {root}")
     with ui.spinner_ctx("Сканирование репозиториев..."):
         repos = hub.collect_status(root, jobs=jobs)
     if not repos:
@@ -88,7 +88,7 @@ def cmd_hub_status(config, jobs: int = 4) -> int:
     rows = []
     for hr in repos:
         rows.append([hr.name, hr.branch or "—", hr.status_text])
-    ui.print_panel("📦 Репозитории", ui._make_table(["Репо", "Ветка", "Статус"], rows))
+    ui.print_panel("repos", ui._make_table(["repo", "branch", "status"], rows))
     dirty = sum(1 for hr in repos if not hr.is_clean)
     behind = sum(1 for hr in repos if hr.behind > 0)
     if dirty or behind:
@@ -164,10 +164,10 @@ def _hub_pull_machine(item: tuple[str, dict], nb, root: str, dry_run: bool) -> t
 def cmd_hub_pull(config, local_only: bool = False, dry_run: bool = False, jobs: int = 4) -> int:
     ui.print_header()
     if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
 
     root = config.hub_root
-    ui.print_section(f"📦 Hub pull: {root} (локально)")
+    ui.print_section(f"hub pull: {root} (local)")
     if dry_run:
         repos = hub.discover_repos(root)
         ui.print_info(f"Найдено репозиториев: {len(repos)}")
@@ -192,7 +192,7 @@ def cmd_hub_pull(config, local_only: bool = False, dry_run: bool = False, jobs: 
     if not machines:
         return 0
 
-    ui.print_section("🌐 Hub pull: удалённые машины")
+    ui.print_section("hub pull: remote machines")
     root_str = str(root)
     items = list(machines.items())
     with ui.spinner_ctx("Pull на удалённых машинах..."):

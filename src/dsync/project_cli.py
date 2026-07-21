@@ -148,7 +148,7 @@ def cmd_project_status(config) -> int:
         ])
 
     ui.print_panel(
-        "📁 Проекты",
+        "projects",
         ui._make_table(["Проект", "Путь", "Ветка", "Статус"], rows),
     )
     return 0
@@ -157,7 +157,7 @@ def cmd_project_status(config) -> int:
 def cmd_project_sync(config, names: list[str], dry_run: bool = False, jobs: int = 4) -> int:
     ui.print_header()
     if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
 
     projects_dict = config.projects
     if not projects_dict:
@@ -181,7 +181,7 @@ def cmd_project_sync(config, names: list[str], dry_run: bool = False, jobs: int 
         return 0
 
     for name, info in selected.items():
-        ui.print_section(f"📁 {name}")
+        ui.print_section(f"{name}")
         path = Path(info.get("path", "")).expanduser()
         branch = info.get("branch", "main")
         remote = info.get("remote")
@@ -219,7 +219,7 @@ def cmd_project_sync(config, names: list[str], dry_run: bool = False, jobs: int 
 def cmd_project_clone(config, names: list[str], dry_run: bool = False, jobs: int = 4) -> int:
     ui.print_header()
     if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
 
     projects_dict = config.projects
     if not projects_dict:
@@ -248,7 +248,7 @@ def cmd_project_clone(config, names: list[str], dry_run: bool = False, jobs: int
             ui.print_error(f"{name}: не указан remote URL")
             continue
 
-        ui.print_section(f"📁 {name}")
+        ui.print_section(f"{name}")
         path = Path(info.get("path", "")).expanduser().as_posix()
         branch = info.get("branch", "main")
         target_machines = _target_machines(info, all_machines)

@@ -11,7 +11,7 @@ from pathlib import Path
 import lz4.block
 
 from . import ui
-from .chezmoi import chezmoi_apply, commit, diverts_check, fetch, push
+from .chezmoi import chezmoi_apply, commit, diverts_check, fetch, push, re_add_secrets
 from .chezmoi import get_status as git_status
 from .config import Config
 from .conflict import (
@@ -192,11 +192,11 @@ def cmd_status(config: Config):
         ui.print_error("NetBird недоступен")
         return 1
 
-    ui.print_status_line("🖥", ui.bold(nb.self_hostname_short), nb.daemon_status)
+    ui.print_status_line("host", ui.bold(nb.self_hostname_short), nb.daemon_status)
     ui.print_info(f"IP: {nb.self_ip}  FQDN: {nb.self_fqdn}")
 
     gs = git_status(config.git_source)
-    ui.print_section("📁 Состояние chezmoi")
+    ui.print_section("chezmoi")
     if gs.error:
         ui.print_error(f"Git: {gs.error}")
     elif gs.is_clean:
@@ -217,7 +217,7 @@ def cmd_status(config: Config):
         if gs.ahead > 0:
             ui.print_info(f"Впереди на {gs.ahead} коммитов")
 
-    ui.print_section("🌐 Машины в NetBird")
+    ui.print_section("netbird peers")
     table_cols = ["Имя", "Статус", "FQDN", "IP", "Лат.", "Тип"]
     table_rows = []
     for peer in nb.peers:
@@ -233,7 +233,7 @@ def cmd_status(config: Config):
         ])
     ui.print_table(table_cols, table_rows)
 
-    ui.print_section("⚙ Целевые машины (из конфига)")
+    ui.print_section("target machines")
     machines = config.machines
     if not machines:
         ui.print_warn("Машины не настроены. Используй: dsync add <имя> <host>")
@@ -245,19 +245,19 @@ def cmd_status(config: Config):
             ui.print_info(f"  {name} → {host}")
             if nb.is_self(host):
                 online.append(name)
-                ui.print_ok(f"    🟢 Connected (текущая машина)  IP: {nb.self_ip}")
+                ui.print_ok(f"    ok  Connected (self)  IP: {nb.self_ip}")
             else:
                 peer = next((p for p in nb.peers if p.fqdn == host), None)
                 if peer:
                     if peer.is_connected:
                         online.append(name)
-                        ui.print_ok(f"    🟢 {peer.status}  IP: {peer.netbird_ip}")
+                        ui.print_ok(f"    ok  {peer.status}  IP: {peer.netbird_ip}")
                     else:
                         offline.append(name)
-                        ui.print_warn(f"    🔴 {peer.status}")
+                        ui.print_warn(f"    down  {peer.status}")
                 else:
                     offline.append(name)
-                    ui.print_warn("    ⚫ Не найден в NetBird")
+                    ui.print_warn("    --  not in netbird")
 
     return 0
 
@@ -266,18 +266,18 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
              only: list[str] | None = None, dry_run: bool = False, jobs: int = 4):
     ui.print_header()
     if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
     hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
     remote_url = config.git_remote_url or "https://github.com/mflkee/dotfiles.git"
 
     if self_update and not dry_run:
-        ui.print_section("🔄 Проверка версии dsync")
+        ui.print_section("self update")
         auto_self_update()
 
     if not dry_run:
-        ui.print_section("🎨 Noctalia тема")
+        ui.print_section("noctalia theme")
         if _theme_export():
             ui.print_ok("Тема экспортирована")
         else:
@@ -288,11 +288,19 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
         ui.print_error(f"Ошибка git: {gs.error}")
         return 1
 
+    if not dry_run:
+        with ui.spinner_ctx("chezmoi re-add secrets..."):
+            r = re_add_secrets()
+        if r.success:
+            ui.print_ok("Secrets re-add — OK")
+        elif r.stderr:
+            ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
+
     if not gs.is_clean:
         if dry_run:
             ui.print_info("Есть локальные изменения — будут закоммичены")
         else:
-            ui.print_section("📤 Локальные изменения")
+            ui.print_section("local changes")
             with ui.spinner_ctx("Коммит..."):
                 msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 r = commit(repo, msg)
@@ -304,7 +312,7 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
     else:
         ui.print_ok("Локально чисто")
 
-    ui.print_section("📥 Синхронизация с GitHub")
+    ui.print_section("github sync")
     with ui.spinner_ctx("Fetch..."):
         fetch(repo)
 
@@ -351,11 +359,11 @@ def cmd_sync(config: Config, strategy: str = "", self_update: bool = True, run_h
         ui.print_warn("Нет машин в конфиге для удалённой синхронизации")
         return 0
 
-    ui.print_section("🔄 Синхронизация с удалёнными машинами")
+    ui.print_section("remote sync")
     success_count, skip_count, fail_count = _sync_machines_parallel(
         machines, nb, str(repo), branch, remote_url, dry_run, jobs)
 
-    ui.print_section("📊 Итог")
+    ui.print_section("summary")
     if success_count:
         ui.print_ok(f"Успешно: {success_count}")
     if skip_count:
@@ -393,10 +401,18 @@ def cmd_push(config: Config, strategy: str = "", only: list[str] | None = None,
 
     ui.print_header()
     if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
 
     if not dry_run and _theme_export():
         ui.print_ok("Noctalia тема экспортирована")
+
+    if not dry_run:
+        with ui.spinner_ctx("chezmoi re-add secrets..."):
+            r = re_add_secrets()
+        if r.success:
+            ui.print_ok("Secrets re-add — OK")
+        elif r.stderr:
+            ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
 
     gs = git_status(repo)
     if gs.error:
@@ -418,7 +434,7 @@ def cmd_push(config: Config, strategy: str = "", only: list[str] | None = None,
     else:
         ui.print_ok("Изменений нет")
 
-    ui.print_section("📥 Синхронизация с GitHub")
+    ui.print_section("github sync")
     with ui.spinner_ctx("Fetch..."):
         fetch(repo)
 
@@ -453,7 +469,7 @@ def cmd_push(config: Config, strategy: str = "", only: list[str] | None = None,
                 ui.print_error(f"Ошибка push: {r.stderr}")
                 return 1
 
-    ui.print_section("🔄 Рассылка на машины")
+    ui.print_section("push to machines")
     _sync_machines_parallel(machines, nb, str(repo), branch, remote_url, dry_run, jobs)
 
     if dry_run:
@@ -465,7 +481,7 @@ def cmd_push(config: Config, strategy: str = "", only: list[str] | None = None,
 def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
     ui.print_header()
     if dry_run:
-        ui.print_panel("🔍 Dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
     repo = config.git_source
     branch = config.git_branch
 
@@ -563,7 +579,7 @@ def cmd_setup(config: Config):
             ui.print_error(f"Не удалось: {r.stderr[:200]}")
             all_ok = False
 
-    ui.print_section("🌐 DNS / hosts")
+    ui.print_section("dns / hosts")
 
     home_ip = nb.self_ip
     ui.print_info(f"Текущая машина: {nb.self_fqdn} ({home_ip})")
@@ -582,10 +598,10 @@ def cmd_setup(config: Config):
                 ui.print_info(f"  Добавить в /etc/hosts: sudo sh -c 'echo \"{entry}\" >> /etc/hosts'")
 
     if all_ok:
-        ui.print_section("✅ SSH настроен")
+        ui.print_section("ssh configured")
         ui.print_info("Теперь можно запустить: dsync sync")
     else:
-        ui.print_section("⚠ Некоторые машины не настроены")
+        ui.print_section("warning: some machines not configured")
         ui.print_info("Проверь пароль и доступность машин в NetBird")
 
     return 0
@@ -663,7 +679,7 @@ def cmd_discover(config: Config):
         ui.print_error("NetBird недоступен")
         return 1
 
-    ui.print_section("🔍 Поиск машин в NetBird")
+    ui.print_section("discover netbird")
     peers_by_ip: dict[str, Peer] = {}
     peers_by_short: dict[str, Peer] = {}
     import re
@@ -737,7 +753,7 @@ def cmd_discover(config: Config):
             "archlinux-notebook": "notebook",
             "archlinux-desktop": "desktop",
             "mkair-server-tmn": "server-tmn",
-            "mkair-server": "server",
+            "archlinux-mkair": "archlinux-mkair",
             "antix1": "antix1",
         }
 

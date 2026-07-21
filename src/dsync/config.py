@@ -22,7 +22,7 @@ branch = "main"
 # [discover.aliases]
 # archlinux-notebook = "notebook"
 # archlinux-desktop = "desktop"
-# mkair-server = "server"
+# archlinux-mkair = "archlinux-mkair"
 
 # Optional: prefixes stripped from NetBird hostnames before alias lookup.
 # [discover]

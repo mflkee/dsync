@@ -125,6 +125,30 @@ def diverts_check(repo_path: Path, branch: str = "main") -> tuple[int, int]:
         return (0, 0)
 
 
+def re_add_secrets() -> GitResult:
+    """Re-add encrypted secrets so chezmoi source stays in sync with live files."""
+    secrets = Path.home() / ".config" / "zsh" / "secrets.zsh"
+    if not secrets.exists():
+        return GitResult(success=True)
+    try:
+        result = subprocess.run(
+            ["chezmoi", "re-add", str(secrets)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return GitResult(
+            success=result.returncode == 0,
+            stdout=result.stdout.strip(),
+            stderr=result.stderr.strip(),
+            returncode=result.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        return GitResult(success=False, stderr="chezmoi re-add timed out", returncode=-1)
+    except FileNotFoundError:
+        return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
+
+
 def chezmoi_apply(timeout: int = 120) -> GitResult:
     try:
         result = subprocess.run(

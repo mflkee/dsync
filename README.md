@@ -75,7 +75,7 @@ Edit `~/.config/dsync/config.toml`:
 [machines]
 notebook = { host = "archlinux-notebook-XXXXXX.netbird.cloud", user = "mflkee" }
 desktop  = { host = "archlinux-desktop.netbird.cloud", user = "mflkee" }
-server   = { host = "mkair-server.netbird.cloud", user = "mflkee" }
+server   = { host = "archlinux-mkair.netbird.cloud", user = "mflkee" }
 
 [git]
 source = "~/dotfiles"
@@ -88,7 +88,7 @@ branch = "main"
 # [discover.aliases]
 # archlinux-notebook = "notebook"
 # archlinux-desktop = "desktop"
-# mkair-server = "server"
+# mkair-server-tmn = "server-tmn"
 
 # Optional: prefixes stripped from NetBird hostnames before alias lookup.
 # [discover]
