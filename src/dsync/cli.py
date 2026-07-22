@@ -1211,7 +1211,14 @@ def main():
     # syncthing subcommand
     st_p = sub.add_parser("syncthing", help="Мониторинг и управление Syncthing")
     st_sub = st_p.add_subparsers(dest="st_action", required=True)
-    st_sub.add_parser("status", help="Проверить здоровье Syncthing на машинах")
+    st_status_p = st_sub.add_parser(
+        "status", help="Проверить здоровье Syncthing на машинах"
+    )
+    st_status_p.add_argument(
+        "machines",
+        nargs="*",
+        help="Машины (по умолчанию все online)",
+    )
     st_resolve_p = st_sub.add_parser(
         "resolve", help="Автоматически разрешить конфликты Syncthing"
     )
