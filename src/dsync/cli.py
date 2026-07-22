@@ -1,6 +1,7 @@
 import argparse
 import concurrent.futures
 import json
+import logging
 import os
 import shlex
 import subprocess
@@ -41,6 +42,8 @@ from .resolver import resolve_host
 from .ssh_client import check_connectivity, check_port
 from .ssh_client import run as ssh_run
 from .zen import export_zen, find_profile, import_zen
+
+logger = logging.getLogger(__name__)
 
 
 def _theme_export() -> bool:
@@ -142,7 +145,7 @@ def _sync_machine(
         return name, "dry", "готова к синхронизации"
 
     rcmd = _remote_sync_script(repo_path, branch, remote_url)
-    r = ssh_run(ip, rcmd, user=user, timeout=300)
+    r = ssh_run(ip, rcmd, user=user, timeout=300, retries=3)
     if not r.success:
         return name, "failed", r.stderr.replace("\n", "; ")[:200]
     if "NO_CHEZMOI" in r.stdout:
@@ -465,7 +468,7 @@ def cmd_sync(
                 proj_fail += 1
                 continue
             # Push project to remote machines
-            ptarget = pinfo.get("achines")
+            ptarget = pinfo.get("machines")
             p_machines = {
                 n: i for n, i in machines.items() if not ptarget or n in ptarget
             }
@@ -616,12 +619,14 @@ def cmd_push(
                 return 1
 
     ui.print_section("push to machines")
-    _sync_machines_parallel(machines, nb, str(repo), branch, remote_url, dry_run, jobs)
+    ok_count, skip_count, fail_count = _sync_machines_parallel(
+        machines, nb, str(repo), branch, remote_url, dry_run, jobs
+    )
 
     if dry_run:
         ui.print_info("Режим dry-run: изменения не применены")
 
-    return 0
+    return 0 if fail_count == 0 else 1
 
 
 def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
@@ -966,13 +971,15 @@ def main():
     config = Config.ensure_default()
     setup_logging(str(config.log_file), config.log_level)
 
+    for err in config.validate():
+        ui.print_warn(f"config: {err}")
+
     parser = argparse.ArgumentParser(
         prog="dsync", description="Decentralized chezmoi dotfiles sync via NetBird"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Показать статус всех машин")
-
     sync_p = sub.add_parser("sync", help="Полный цикл синхронизации")
     sync_p.add_argument(
         "machines", nargs="*", help="Синхронизировать только эти машины"
@@ -1114,26 +1121,36 @@ def main():
 
     if args.command == "status":
         return cmd_status(config)
-    elif args.command == "sync":
-        return cmd_sync(
-            config,
-            getattr(args, "strategy", ""),
-            self_update=not args.no_self_update,
-            run_hub=not args.no_hub,
-            only=list(args.machines) + list(args.only),
-            dry_run=args.dry_run,
-            jobs=args.jobs,
-        )
-    elif args.command == "push":
-        return cmd_push(
-            config,
-            getattr(args, "strategy", ""),
-            only=list(args.machines) + list(args.only),
-            dry_run=args.dry_run,
-            jobs=args.jobs,
-        )
-    elif args.command == "pull":
-        return cmd_pull(config, getattr(args, "strategy", ""), dry_run=args.dry_run)
+    elif args.command in ("sync", "push", "pull"):
+        from .lock import AlreadyRunningError, acquire_lock
+
+        try:
+            with acquire_lock():
+                if args.command == "sync":
+                    return cmd_sync(
+                        config,
+                        getattr(args, "strategy", ""),
+                        self_update=not args.no_self_update,
+                        run_hub=not args.no_hub,
+                        only=list(args.machines) + list(args.only),
+                        dry_run=args.dry_run,
+                        jobs=args.jobs,
+                    )
+                elif args.command == "push":
+                    return cmd_push(
+                        config,
+                        getattr(args, "strategy", ""),
+                        only=list(args.machines) + list(args.only),
+                        dry_run=args.dry_run,
+                        jobs=args.jobs,
+                    )
+                else:  # pull
+                    return cmd_pull(
+                        config, getattr(args, "strategy", ""), dry_run=args.dry_run
+                    )
+        except AlreadyRunningError as e:
+            ui.print_error(str(e))
+            return 1
     elif args.command == "setup":
         return cmd_setup(config)
     elif args.command == "add":

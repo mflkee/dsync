@@ -63,15 +63,20 @@ def check_diverged(repo_path: Path, branch: str = "main") -> tuple[int, int]:
 
 
 def safe_pull(repo_path: Path, branch: str = "main") -> tuple[GitResult, bool]:
-    """Pull with conflict detection. Returns (result, had_conflict)."""
+    """Pull with conflict detection. Returns (result, had_conflict).
+
+    had_conflict is True ONLY when a real merge conflict occurred
+    (UU files present or CONFLICT markers in output). Network/auth
+    failures return had_conflict=False so callers can retry/report.
+    """
     r = _git(repo_path, ["pull", "--rebase", "origin", branch], timeout=60)
 
     if r.success:
         return (r, False)
 
-    if is_rebasing(repo_path):
-        rebase_abort(repo_path)
-        return (r, True)
+    output = (r.stdout + "\n" + r.stderr).lower()
+    conflict_markers = ("conflict", "could not apply", "failed to merge")
+    looks_like_conflict = any(m in output for m in conflict_markers)
 
     if has_conflict(repo_path):
         if is_rebasing(repo_path):
@@ -79,6 +84,10 @@ def safe_pull(repo_path: Path, branch: str = "main") -> tuple[GitResult, bool]:
         else:
             merge_abort(repo_path)
         return (r, True)
+
+    if is_rebasing(repo_path):
+        rebase_abort(repo_path)
+        return (r, looks_like_conflict)
 
     return (r, False)
 

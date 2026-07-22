@@ -96,7 +96,22 @@ class Config:
 
     @property
     def log_level(self) -> str:
-        return self.data.get("logging", {}).get("level", "INFO")
+        level = self.data.get("logging", {}).get("level", "INFO")
+        valid = ("DEBUG", "INFO", "WARNING", "ERROR")
+        return level if level.upper() in valid else "INFO"
+
+    def validate(self) -> list[str]:
+        """Validate config, return list of error messages (empty if valid)."""
+        errors = []
+        machines = self.machines
+        for name, info in machines.items():
+            host = info.get("host", "")
+            if not host:
+                errors.append(f"Машина '{name}': пустой host")
+        git = self.data.get("git", {})
+        if not git.get("source"):
+            errors.append("[git] source не задан")
+        return errors
 
     @property
     def projects(self) -> dict[str, dict]:

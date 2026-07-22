@@ -1,6 +1,9 @@
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,6 +28,7 @@ class GitResult:
 
 
 def _git(repo_path: Path, args: list[str], timeout: int = 30) -> GitResult:
+    logger.debug("git %s (cwd=%s)", " ".join(args), repo_path)
     try:
         result = subprocess.run(
             ["git"] + args,
@@ -34,6 +38,8 @@ def _git(repo_path: Path, args: list[str], timeout: int = 30) -> GitResult:
             cwd=repo_path,
             env={"LC_ALL": "C", "LANG": "C"},
         )
+        if result.returncode != 0:
+            logger.debug("git %s failed: %s", args[0], result.stderr.strip()[:200])
         return GitResult(
             success=result.returncode == 0,
             stdout=result.stdout.strip(),
@@ -41,6 +47,7 @@ def _git(repo_path: Path, args: list[str], timeout: int = 30) -> GitResult:
             returncode=result.returncode,
         )
     except subprocess.TimeoutExpired:
+        logger.warning("git %s timed out after %ds", args[0], timeout)
         return GitResult(success=False, stderr="git command timed out", returncode=-1)
     except FileNotFoundError:
         return GitResult(success=False, stderr="git not found", returncode=-2)

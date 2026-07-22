@@ -49,11 +49,30 @@ def test_safe_pull_detects_conflict(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(conflict, "has_conflict", lambda p: False)
     monkeypatch.setattr(conflict, "rebase_abort", lambda p: GitResult(success=True))
     monkeypatch.setattr(
-        conflict, "_git", lambda p, a, timeout=30: GitResult(success=False)
+        conflict,
+        "_git",
+        lambda p, a, timeout=30: GitResult(
+            success=False, stderr="CONFLICT (content): Merge conflict in a.txt"
+        ),
     )
 
     r, had_conflict = conflict.safe_pull(tmp_path, "main")
     assert had_conflict
+
+
+def test_safe_pull_network_error_not_conflict(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(conflict, "is_rebasing", lambda p: False)
+    monkeypatch.setattr(conflict, "has_conflict", lambda p: False)
+    monkeypatch.setattr(
+        conflict,
+        "_git",
+        lambda p, a, timeout=30: GitResult(
+            success=False, stderr="fatal: unable to connect to github.com"
+        ),
+    )
+
+    r, had_conflict = conflict.safe_pull(tmp_path, "main")
+    assert not had_conflict
 
 
 def test_has_conflict_detects_uu(monkeypatch, tmp_path: Path):

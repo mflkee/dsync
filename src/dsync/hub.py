@@ -112,8 +112,7 @@ root=$(awk -F'"' '/^\\[hub\\]/{{f=1;next}} /^\\[/{{f=0}} f && /root/{{print $2}}
 root=${{root:-{shlex.quote(root)}}}
 root="${{root/#\\~/$HOME}}"
 [ -d "$root" ] || {{ echo "HUB_ERROR|no root dir $root"; exit 0; }}
-for d in "$root"/*/.git; do
-  [ -d "$d" ] || continue
+find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
   repo="${{d%/.git}}"
   name="${{repo##*/}}"
   cd "$repo" 2>/dev/null || continue
