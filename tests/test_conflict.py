@@ -25,8 +25,8 @@ def test_resolve_interactive_keep_local_uses_ours(monkeypatch, tmp_path: Path):
     result = conflict.resolve_interactive(tmp_path, "main")
 
     assert result is True
-    pull_calls = [c for c in calls if c[0][0] == "pull"]
-    assert pull_calls == [(["pull", "-X", "ours", "origin", "main"], 60)]
+    pull_calls = [c for c in calls if c[0][0] == "merge"]
+    assert pull_calls == [(["merge", "-X", "ours", "origin/main"], 60)]
 
 
 def test_resolve_interactive_keep_remote_uses_reset(monkeypatch, tmp_path: Path):

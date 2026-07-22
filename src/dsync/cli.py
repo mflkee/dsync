@@ -75,23 +75,42 @@ def _filter_machines(config: Config, only: list[str]) -> dict:
 
 
 def _remote_sync_script(repo_path: str, branch: str, remote_url: str) -> str:
+    q_repo = shlex.quote(repo_path)
+    q_branch = shlex.quote(branch)
+    q_url = shlex.quote(remote_url) if remote_url else ""
+    age_key_src = shlex.quote(
+        os.path.join(repo_path, "private_dot_config", "chezmoi", "key.txt")
+    )
     return f"""export PATH="$HOME/.local/bin:$PATH"
 C="$(command -v chezmoi)"
-if [ -d {shlex.quote(repo_path)}/.git ]; then
-  cd {shlex.quote(repo_path)}
-  git fetch origin {shlex.quote(branch)} 2>&1 || true
+if [ -d {q_repo}/.git ]; then
+  cd {q_repo}
+  git fetch origin {q_branch} 2>&1 || true
   git reset HEAD . 2>/dev/null
   git checkout -- . 2>/dev/null
   git clean -fd 2>/dev/null
-  if ! git pull --rebase origin {shlex.quote(branch)} 2>&1; then
+  if ! git pull --rebase origin {q_branch} 2>&1; then
     git rebase --abort 2>/dev/null
-    git reset --hard origin/{shlex.quote(branch)} 2>/dev/null
+    git reset --hard origin/{q_branch} 2>/dev/null
   fi
 else
-  rm -rf {shlex.quote(repo_path)} && git clone {shlex.quote(remote_url)} {shlex.quote(repo_path)}
+  rm -rf {q_repo} && git clone {q_url} {q_repo}
 fi
 if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
-cd {shlex.quote(repo_path)} && "$C" apply --no-sudo --force 2>/dev/null || "$C" apply --force 2>/dev/null || true
+# Ensure chezmoi sourceDir points to the right place
+CS="$("$C" source-path 2>/dev/null)"
+if [ "$CS" != "{repo_path}" ]; then
+  mkdir -p "$HOME/.config/chezmoi"
+  printf 'sourceDir = %s\\n' "{repo_path}" >> "$HOME/.config/chezmoi/chezmoi.toml"
+fi
+# Copy age key from source state if missing
+if [ ! -f "$HOME/.config/chezmoi/key.txt" ]; then
+  if [ -f {age_key_src} ]; then
+    cp {age_key_src} "$HOME/.config/chezmoi/key.txt"
+    chmod 600 "$HOME/.config/chezmoi/key.txt"
+  fi
+fi
+cd {q_repo} && "$C" apply --force 2>/dev/null || "$C" apply 2>/dev/null || true
 noctalia-theme-apply 2>/dev/null || true"""
 
 

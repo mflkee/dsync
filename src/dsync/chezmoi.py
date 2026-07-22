@@ -164,9 +164,15 @@ def re_add_noctalia() -> GitResult:
     try:
         managed_result = subprocess.run(
             ["chezmoi", "managed", "--include", "files"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
-        managed_files = set(managed_result.stdout.strip().splitlines()) if managed_result.returncode == 0 else set()
+        managed_files = (
+            set(managed_result.stdout.strip().splitlines())
+            if managed_result.returncode == 0
+            else set()
+        )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         managed_files = set()
     targets = []
@@ -194,7 +200,9 @@ def re_add_noctalia() -> GitResult:
             returncode=result.returncode,
         )
     except subprocess.TimeoutExpired:
-        return GitResult(success=False, stderr="chezmoi re-add timed out", returncode=-1)
+        return GitResult(
+            success=False, stderr="chezmoi re-add timed out", returncode=-1
+        )
     except FileNotFoundError:
         return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
 
