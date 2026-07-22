@@ -1,5 +1,4 @@
 import argparse
-import concurrent.futures
 import json
 import logging
 import os
@@ -125,34 +124,6 @@ cd {q_repo} && "$C" apply --force 2>/dev/null || "$C" apply 2>/dev/null || true
 noctalia-theme-apply 2>/dev/null || true"""
 
 
-def _sync_machine(
-    item, nb, repo_path: str, branch: str, remote_url: str, dry_run: bool
-):
-    """Sync one remote machine. Returns (name, status, detail)."""
-    name, info = item
-    host = info["host"]
-    user = info.get("user", "mflkee")
-
-    if nb.is_self(host):
-        return name, "self", ""
-    peer = next((p for p in nb.peers if p.fqdn == host), None)
-    if peer and not peer.is_connected:
-        return name, "skipped", "офлайн"
-    ip = resolve_host(host)
-    if not check_port(ip):
-        return name, "skipped", "SSH порт 22 недоступен"
-    if dry_run:
-        return name, "dry", "готова к синхронизации"
-
-    rcmd = _remote_sync_script(repo_path, branch, remote_url)
-    r = ssh_run(ip, rcmd, user=user, timeout=300, retries=3)
-    if not r.success:
-        return name, "failed", r.stderr.replace("\n", "; ")[:200]
-    if "NO_CHEZMOI" in r.stdout:
-        return name, "no_chezmoi", "chezmoi не установлен"
-    return name, "success", ""
-
-
 def _sync_machines_parallel(
     machines: dict,
     nb,
@@ -164,43 +135,42 @@ def _sync_machines_parallel(
 ):
     """Sync machines in parallel, print per-machine results. Returns (ok, skip, fail)."""
     items = list(machines.items())
-    with ui.spinner_ctx(f"SSH на {len(items)} машин(ы)..."):
-        if jobs <= 1 or len(items) <= 1:
-            results = [
-                _sync_machine(it, nb, repo_path, branch, remote_url, dry_run)
-                for it in items
-            ]
-        else:
-            workers = max(1, min(jobs, len(items)))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-                results = list(
-                    ex.map(
-                        lambda it: _sync_machine(
-                            it, nb, repo_path, branch, remote_url, dry_run
-                        ),
-                        items,
-                    )
-                )
-
+    total = len(items)
     ok = skip = fail = 0
-    for name, status, detail in results:
-        if status == "self":
-            continue
-        if status == "success":
-            ui.print_ok(f"{name}: синхронизировано")
-            ok += 1
-        elif status == "dry":
-            ui.print_info(f"{name}: {detail} (dry-run)")
-            ok += 1
-        elif status in ("skipped", "no_chezmoi"):
-            ui.print_info(f"{name}: {detail}, пропускаю")
+    errors: list[tuple[str, str]] = []
+
+    if dry_run:
+        ui.print_dry_run_header()
+
+    for idx, it in enumerate(items, 1):
+        name, info = it
+        host = info.get("host", "")
+        user = info.get("user", "mflkee")
+        if nb.is_self(host):
+            ui.print_machine_result(name, "skipped", "это эта машина", dry_run)
             skip += 1
-        elif status == "conflict":
-            ui.print_warn(f"{name}: {detail}")
-            fail += 1
+            continue
+        ip = resolve_host(host)
+        if not ip or not check_port(ip):
+            ui.print_machine_result(name, "skipped", "офлайн", dry_run)
+            skip += 1
+            continue
+        ui.print_progress_bar(idx, total, name)
+        rcmd = _remote_sync_script(repo_path, branch, remote_url)
+        r = ssh_run(ip, rcmd, user=user, timeout=300, retries=3)
+        if r.success and "NO_CHEZMOI" not in r.stdout:
+            ui.print_machine_result(name, "success", dry_run=dry_run)
+            ok += 1
+        elif "NO_CHEZMOI" in (r.stdout if r.success else ""):
+            ui.print_machine_result(name, "skipped", "chezmoi не установлен", dry_run)
+            skip += 1
         else:
-            ui.print_error(f"{name}: {detail}")
+            note = r.stderr.replace("\n", "; ")[:200]
+            ui.print_machine_result(name, "failed", note, dry_run)
+            errors.append((name, note))
             fail += 1
+
+    ui.print_error_summary(errors)
     return ok, skip, fail
 
 
@@ -328,6 +298,7 @@ def cmd_sync(
     jobs: int = 4,
 ):
     ui.print_header()
+    logger.info("sync started (dry=%s, strategy=%s)", dry_run, strategy or "ours")
     if dry_run:
         ui.print_panel(
             "dry-run", "Изменения не применяются, только отчёт", style="yellow"
@@ -445,6 +416,38 @@ def cmd_sync(
         machines, nb, str(repo), branch, remote_url, dry_run, jobs
     )
 
+    # Syncthing health check (after remote sync, only for successfully synced machines)
+    if not dry_run:
+        from .syncthing import health_check as st_health
+
+        ui.print_section("syncthing health")
+        st_ok = st_warn = 0
+        for name, info in machines.items():
+            host = info.get("host", "")
+            ip = resolve_host(host)
+            if not ip or not check_port(ip):
+                continue
+            status = st_health(
+                ip,
+                user=info.get("user", "mflkee"),
+                auto_restart=True,
+                auto_resolve=True,
+            )
+            if status.running:
+                if status.conflicts:
+                    ui.print_ok(
+                        f"  {name}: OK ({len(status.conflicts)} конфликтов решено)"
+                    )
+                    st_ok += 1
+                else:
+                    ui.print_ok(f"  {name}: OK")
+                    st_ok += 1
+            else:
+                ui.print_warn(f"  {name}: syncthing не работает")
+                st_warn += 1
+        if not st_ok and not st_warn:
+            ui.print_info("  нет доступных машин для проверки")
+
     # Project sync
     projects_dict = config.projects
     if projects_dict:
@@ -498,6 +501,12 @@ def cmd_sync(
         ui.print_info(f"Пропущено (офлайн): {skip_count}")
     if fail_count:
         ui.print_error(f"Ошибок: {fail_count}")
+    logger.info(
+        "sync done: ok=%d skip=%d fail=%d",
+        success_count,
+        skip_count,
+        fail_count,
+    )
 
     if run_hub:
         cmd_hub_pull(config, local_only=False, dry_run=dry_run, jobs=jobs)
@@ -967,6 +976,88 @@ def cmd_discover(config: Config):
     return 0
 
 
+def _resolve_targets(config: Config, machines: list[str]) -> dict[str, dict]:
+    """Resolve machine names to {name: {host, user, ...}} dict."""
+    all_machines = config.machines
+    if not machines:
+        return {n: i for n, i in all_machines.items()}
+    return {n: i for n, i in all_machines.items() if n in machines}
+
+
+def cmd_syncthing(config: Config, action: str, machines: list[str]) -> int:
+    from .syncthing import (
+        check_conflicts,
+        check_running,
+    )
+    from .syncthing import (
+        resolve_conflicts as st_resolve,
+    )
+    from .syncthing import (
+        restart as st_restart,
+    )
+
+    targets = _resolve_targets(config, machines)
+    if not targets:
+        ui.print_error("Нет доступных машин")
+        return 1
+
+    ui.print_header()
+
+    if action == "status":
+        ui.print_section("Syncthing status")
+        for name, info in targets.items():
+            ip = resolve_host(info["host"])
+            if not ip or not check_port(ip):
+                ui.print_warn(f"  {name}: офлайн")
+                continue
+            status = check_running(ip, user=info.get("user", "mflkee"))
+            if status.running:
+                ui.print_ok(f"  {name}: работает (uptime {status.uptime}s)")
+                conflicts = check_conflicts(ip, user=info.get("user", "mflkee"))
+                if conflicts:
+                    for c in conflicts:
+                        ui.print_warn(f"    {c['id']}: {c['conflicts']} конфликтов")
+                else:
+                    ui.print_ok("    конфликтов нет")
+            else:
+                ui.print_error(f"  {name}: не работает ({status.error[:60]})")
+        return 0
+
+    if action == "resolve":
+        ui.print_section("Syncthing conflict resolution")
+        total = 0
+        for name, info in targets.items():
+            ip = resolve_host(info["host"])
+            if not ip or not check_port(ip):
+                ui.print_warn(f"  {name}: офлайн")
+                continue
+            resolved = st_resolve(ip, user=info.get("user", "mflkee"))
+            if resolved:
+                ui.print_ok(f"  {name}: {resolved} конфликтов решено")
+                total += resolved
+            else:
+                ui.print_ok(f"  {name}: конфликтов нет")
+        if total:
+            ui.print_ok(f"\nИтого: {total} конфликтов решено")
+        return 0
+
+    if action == "restart":
+        ui.print_section("Syncthing restart")
+        for name, info in targets.items():
+            ip = resolve_host(info["host"])
+            if not ip or not check_port(ip):
+                ui.print_warn(f"  {name}: офлайн")
+                continue
+            ok = st_restart(ip, user=info.get("user", "mflkee"))
+            if ok:
+                ui.print_ok(f"  {name}: перезапущен")
+            else:
+                ui.print_error(f"  {name}: ошибка перезапуска")
+        return 0
+
+    return 1
+
+
 def main():
     config = Config.ensure_default()
     setup_logging(str(config.log_file), config.log_level)
@@ -1117,6 +1208,25 @@ def main():
         "--jobs", "-j", type=int, default=4, help="Количество параллельных задач"
     )
 
+    # syncthing subcommand
+    st_p = sub.add_parser("syncthing", help="Мониторинг и управление Syncthing")
+    st_sub = st_p.add_subparsers(dest="st_action", required=True)
+    st_sub.add_parser("status", help="Проверить здоровье Syncthing на машинах")
+    st_resolve_p = st_sub.add_parser(
+        "resolve", help="Автоматически разрешить конфликты Syncthing"
+    )
+    st_resolve_p.add_argument(
+        "machines",
+        nargs="*",
+        help="Машины (по умолчанию все online)",
+    )
+    st_restart_p = st_sub.add_parser("restart", help="Перезапустить Syncthing")
+    st_restart_p.add_argument(
+        "machines",
+        nargs="*",
+        help="Машины (по умолчанию все online)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "status":
@@ -1233,6 +1343,8 @@ def main():
             return cmd_hub_pull(
                 config, local_only=args.local, dry_run=args.dry_run, jobs=args.jobs
             )
+    elif args.command == "syncthing":
+        return cmd_syncthing(config, args.st_action, args.machines)
     return 1
 
 

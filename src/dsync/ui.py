@@ -241,3 +241,43 @@ def spinner_ctx(message: str = "Working..."):
         print(f"  {dim(message)}", end="", flush=True)
         yield
         print("\r" + " " * (len(message) + 4) + "\r", end="", flush=True)
+
+
+def print_dry_run_header():
+    _print()
+    _print(bold("dry-run") + "  " + dim("изменения не применяются"))
+    _print()
+
+
+def print_machine_result(name: str, status: str, note: str = "", dry_run: bool = False):
+    """Print a per-machine sync result line."""
+    if dry_run:
+        if status == "success":
+            _print(f"  {green('~')}  {name}: {dim('будет синхронизировано')}")
+        elif status == "skipped":
+            _print(f"  {dim('-')}  {name}: {dim('пропущен')}  {dim(note)}")
+        else:
+            _print(f"  {yellow('~')}  {name}: {dim('ошибка')}  {dim(note)}")
+    else:
+        if status == "success":
+            print_ok(f"{name}: синхронизировано")
+        elif status == "skipped":
+            print_info(f"{name}: офлайн, пропускаю")
+        else:
+            print_error(f"{name}: {note}")
+
+
+def print_error_summary(errors: list[tuple[str, str]]):
+    """Print grouped error summary at the end."""
+    if not errors:
+        return
+    _print()
+    _print(bold("ошибки"))
+    for name, msg in errors:
+        _print(f"  {red('!')}  {bold(name)}: {msg}")
+
+
+def print_progress_bar(current: int, total: int, name: str):
+    """Print inline progress like [2/5] machine-name."""
+    bar = f"[{current}/{total}]"
+    _print(f"  {dim(bar)}  {bold(name)}")
