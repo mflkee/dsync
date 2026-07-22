@@ -262,7 +262,8 @@ def print_machine_result(name: str, status: str, note: str = "", dry_run: bool =
         if status == "success":
             print_ok(f"{name}: синхронизировано")
         elif status == "skipped":
-            print_info(f"{name}: офлайн, пропускаю")
+            note_text = f": {note}" if note else ""
+            print_info(f"{name}{note_text}")
         else:
             print_error(f"{name}: {note}")
 
