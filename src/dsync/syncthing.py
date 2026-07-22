@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Remote commands executed via SSH
 _CHECK_RUNNING = (
-    "systemctl --user is-active syncthing.service 2>/dev/null"
+    "pgrep -x syncthing &>/dev/null"
     " && syncthing cli show system 2>/dev/null | python3 -c"
     ' "import sys,json; d=json.load(sys.stdin);'
     " print(json.dumps({'ok':True,'uptime':d.get('uptime',0),"
@@ -59,7 +59,7 @@ _RESOLVE_CONFLICTS = (
     " || echo '{\"resolved\":0}'"
 )
 
-_RESTART = "systemctl --user restart syncthing.service && sleep 2 && systemctl --user is-active syncthing.service"
+_RESTART = "pkill -x syncthing; sleep 1; nohup syncthing serve --no-browser --no-restart &>/dev/null & sleep 3; pgrep -x syncthing &>/dev/null && echo 'active' || echo 'inactive'"
 
 
 @dataclass
@@ -187,11 +187,11 @@ AUTO_RESTART="${1:-true}"
 AUTO_RESOLVE="${2:-true}"
 
 # Check running
-if ! systemctl --user is-active syncthing.service &>/dev/null; then
+if ! pgrep -x syncthing &>/dev/null; then
     if [ "$AUTO_RESTART" = "true" ]; then
-        systemctl --user restart syncthing.service
-        sleep 2
-        if ! systemctl --user is-active syncthing.service &>/dev/null; then
+        nohup syncthing serve --no-browser --no-restart &>/dev/null &
+        sleep 3
+        if ! pgrep -x syncthing &>/dev/null; then
             echo "HEALTH_ERROR|syncthing restart failed"
             exit 1
         fi
