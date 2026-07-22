@@ -98,10 +98,18 @@ else
 fi
 if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
 # Ensure chezmoi sourceDir points to the right place
-CS="$("$C" source-path 2>/dev/null)"
-if [ "$CS" != "{repo_path}" ]; then
+if [ "$("$C" source-path 2>/dev/null)" != "{repo_path}" ]; then
   mkdir -p "$HOME/.config/chezmoi"
-  printf 'sourceDir = %s\\n' "{repo_path}" >> "$HOME/.config/chezmoi/chezmoi.toml"
+  CFG="$HOME/.config/chezmoi/chezmoi.toml"
+  python3 -c "
+cfg = open('$CFG').read() if __import__('os').path.exists('$CFG') else ''
+lines = cfg.split(chr(10))
+# Remove any existing sourceDir from anywhere
+lines = [l for l in lines if not l.startswith('sourceDir ')]
+# Prepend sourceDir at the top
+lines.insert(0, 'sourceDir = \"{repo_path}\"')
+open('$CFG', 'w').write(chr(10).join([l for l in lines if l]))
+" 2>/dev/null || true
 fi
 # Copy age key from source state if missing
 if [ ! -f "$HOME/.config/chezmoi/key.txt" ]; then
