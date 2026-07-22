@@ -160,7 +160,9 @@ def print_result_table(rows: list[list[str]]):
             table.add_row(*[str(c) for c in row])
         _console.print(table)
     else:
-        col_w = max(len(str(c)) for row in [["name", "status", "note"]] + rows for c in row)
+        col_w = max(
+            len(str(c)) for row in [["name", "status", "note"]] + rows for c in row
+        )
         sep = "  "
         header = sep.join(str(c).ljust(col_w) for c in ["name", "status", "note"])
         _print(header)
@@ -188,7 +190,11 @@ def _make_table(columns, rows) -> Any:
         return table
 
     lines = []
-    col_w = max(len(str(c)) for row in [[str(c) for c in columns]] + rows for c in row) if rows else max(len(str(c)) for c in columns)
+    col_w = (
+        max(len(str(c)) for row in [[str(c) for c in columns]] + rows for c in row)
+        if rows
+        else max(len(str(c)) for c in columns)
+    )
     sep = "  "
     header = sep.join(str(c).ljust(col_w) for c in columns)
     lines.append(header)
@@ -223,7 +229,10 @@ def _make_kv_table(rows: list[list[str]]) -> Any:
 def spinner_ctx(message: str = "Working..."):
     if RICH:
         from rich.progress import Progress, SpinnerColumn, TextColumn
-        progress = Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True)
+
+        progress = Progress(
+            SpinnerColumn(), TextColumn("{task.description}"), transient=True
+        )
         with progress:
             task = progress.add_task(dim(message), total=None)
             yield

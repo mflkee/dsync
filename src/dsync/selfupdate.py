@@ -30,14 +30,16 @@ def find_install_source() -> Path | None:
     """Locate the editable source dir of the installed dsync (via uv direct_url.json)."""
     if not UV_TOOL_DIR.is_dir():
         return None
-    for direct_url in UV_TOOL_DIR.glob("lib/python*/site-packages/dsync-*.dist-info/direct_url.json"):
+    for direct_url in UV_TOOL_DIR.glob(
+        "lib/python*/site-packages/dsync-*.dist-info/direct_url.json"
+    ):
         try:
             data = json.loads(direct_url.read_text())
         except (json.JSONDecodeError, OSError):
             continue
         url = data.get("url", "")
         if url.startswith("file://"):
-            return Path(url[len("file://"):])
+            return Path(url[len("file://") :])
     return None
 
 
@@ -92,7 +94,9 @@ def self_update() -> GitResult:
     if st.error:
         return GitResult(success=False, stderr=st.error)
     if not st.is_clean:
-        return GitResult(success=False, stderr=f"репозиторий {st.source} грязный, пропускаю")
+        return GitResult(
+            success=False, stderr=f"репозиторий {st.source} грязный, пропускаю"
+        )
     if st.behind == 0:
         return GitResult(success=True, stdout="up-to-date")
 
@@ -103,10 +107,14 @@ def self_update() -> GitResult:
 
     reinstall = subprocess.run(
         ["uv", "tool", "install", "--force", "--editable", str(st.source)],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     if reinstall.returncode != 0:
-        return GitResult(success=False, stderr=f"uv reinstall: {reinstall.stderr.strip()[:200]}")
+        return GitResult(
+            success=False, stderr=f"uv reinstall: {reinstall.stderr.strip()[:200]}"
+        )
 
     new_sha = _git(st.source, ["rev-parse", "--short", "HEAD"])
     return GitResult(success=True, stdout=f"{st.current_sha} -> {new_sha.stdout}")

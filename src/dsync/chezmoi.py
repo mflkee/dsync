@@ -70,7 +70,9 @@ def get_status(repo_path: Path) -> GitStatus:
     gs.has_remote = remote.success
 
     if remote.success:
-        rev = _git(repo_path, ["rev-list", "--count", "--left-right", "HEAD...@{upstream}"])
+        rev = _git(
+            repo_path, ["rev-list", "--count", "--left-right", "HEAD...@{upstream}"]
+        )
         if rev.success:
             parts = rev.stdout.split()
             if len(parts) == 2:
@@ -108,12 +110,14 @@ def get_remote_url(repo_path: Path, remote: str = "origin") -> str | None:
 
 
 def push(repo_path: Path, branch: str = "main") -> GitResult:
-    return _git(repo_path, ["push", "origin", branch], timeout=60)
+    return _git(repo_path, ["push", "origin", branch], timeout=180)
 
 
 def diverts_check(repo_path: Path, branch: str = "main") -> tuple[int, int]:
     """Returns (ahead, behind) vs origin/<branch>."""
-    r = _git(repo_path, ["rev-list", "--count", "--left-right", f"HEAD...origin/{branch}"])
+    r = _git(
+        repo_path, ["rev-list", "--count", "--left-right", f"HEAD...origin/{branch}"]
+    )
     if not r.success:
         return (0, 0)
     parts = r.stdout.split()
@@ -144,19 +148,41 @@ def re_add_secrets() -> GitResult:
             returncode=result.returncode,
         )
     except subprocess.TimeoutExpired:
-        return GitResult(success=False, stderr="chezmoi re-add timed out", returncode=-1)
+        return GitResult(
+            success=False, stderr="chezmoi re-add timed out", returncode=-1
+        )
     except FileNotFoundError:
         return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
 
 
 def re_add_noctalia() -> GitResult:
-    """Re-add noctalia settings so chezmoi source stays in sync with live file."""
-    settings = Path.home() / ".config" / "noctalia" / "settings.json"
-    if not settings.exists():
+    """Re-add noctalia settings so chezmoi source stays in sync with live files."""
+    noctalia_dir = Path.home() / ".config" / "noctalia"
+    if not noctalia_dir.is_dir():
+        return GitResult(success=True)
+    # Get list of chezmoi-managed files to avoid errors on unmanaged files
+    try:
+        managed_result = subprocess.run(
+            ["chezmoi", "managed", "--include", "files"],
+            capture_output=True, text=True, timeout=15,
+        )
+        managed_files = set(managed_result.stdout.strip().splitlines()) if managed_result.returncode == 0 else set()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        managed_files = set()
+    targets = []
+    for f in noctalia_dir.iterdir():
+        if not f.is_file():
+            continue
+        # chezmoi managed outputs paths like dot_config/noctalia/settings.json
+        rel = str(Path("~") / f.relative_to(Path.home())).replace("\\", "/")
+        chezmoi_path = "dot_config/noctalia/" + f.name
+        if chezmoi_path in managed_files or rel in managed_files:
+            targets.append(str(f))
+    if not targets:
         return GitResult(success=True)
     try:
         result = subprocess.run(
-            ["chezmoi", "re-add", str(settings)],
+            ["chezmoi", "re-add"] + targets,
             capture_output=True,
             text=True,
             timeout=30,

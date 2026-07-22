@@ -21,7 +21,7 @@ def find_profile() -> Path | None:
     text = profiles_ini.read_text()
 
     # Find default profile from [Install*] section
-    m = re.search(r'^\[Install.+?\][\s\S]*?^Default\s*=\s*(.+)$', text, re.MULTILINE)
+    m = re.search(r"^\[Install.+?\][\s\S]*?^Default\s*=\s*(.+)$", text, re.MULTILINE)
     if m:
         rel = m.group(1).strip()
         p = ZEN_CONFIG_DIR / rel
@@ -29,7 +29,7 @@ def find_profile() -> Path | None:
             return p
 
     # Fallback: find Default=1 profile
-    m = re.search(r'^Default\s*=\s*1$[\s\S]*?^Path\s*=\s*(.+)$', text, re.MULTILINE)
+    m = re.search(r"^Default\s*=\s*1$[\s\S]*?^Path\s*=\s*(.+)$", text, re.MULTILINE)
     if m:
         rel = m.group(1).strip()
         p = ZEN_CONFIG_DIR / rel
@@ -74,7 +74,11 @@ def _tabs_contain(tabs: list, url: str) -> bool:
 
 def _strip_tab(tab: dict) -> dict:
     """Remove bulky fields (images, storage, formdata) from a tab."""
-    clean = {k: v for k, v in tab.items() if k not in ("image", "storage", "formdata", "_zenPinnedInitialState")}
+    clean = {
+        k: v
+        for k, v in tab.items()
+        if k not in ("image", "storage", "formdata", "_zenPinnedInitialState")
+    }
     # Keep only the last entry URL/title for dedup
     entries = clean.get("entries", [])
     if entries:
@@ -162,8 +166,9 @@ def _merge_groups(local_groups: list, export_groups: list) -> list:
     return merged
 
 
-def _merge_folders(local_folders: list, export_folders: list,
-                   group_id_map: dict | None = None) -> list:
+def _merge_folders(
+    local_folders: list, export_folders: list, group_id_map: dict | None = None
+) -> list:
     """Merge folders by name+workspaceId."""
     merged = list(local_folders)
 
@@ -204,8 +209,9 @@ def _merge_folders(local_folders: list, export_folders: list,
     return merged
 
 
-def _merge_spaces(local_spaces: list, export_spaces: list,
-                  containers: dict | None = None) -> list:
+def _merge_spaces(
+    local_spaces: list, export_spaces: list, containers: dict | None = None
+) -> list:
     """Merge workspaces by name. Add new ones, update matching ones."""
     merged = list(local_spaces)
     local_by_name = {s.get("name"): s for s in merged if s.get("name")}
@@ -226,8 +232,18 @@ def _merge_spaces(local_spaces: list, export_spaces: list,
             new_workspace: dict = {
                 "uuid": "{" + new_uuid + "}",
                 "name": name,
-                "icon": es.get("icon", "chrome://browser/skin/zen-icons/selectable/circle.svg"),
-                "theme": es.get("theme", {"type": "gradient", "gradientColors": [], "opacity": 0.5, "texture": 0}),
+                "icon": es.get(
+                    "icon", "chrome://browser/skin/zen-icons/selectable/circle.svg"
+                ),
+                "theme": es.get(
+                    "theme",
+                    {
+                        "type": "gradient",
+                        "gradientColors": [],
+                        "opacity": 0.5,
+                        "texture": 0,
+                    },
+                ),
                 "hasCollapsedPinnedTabs": False,
             }
             # Try to find matching container
@@ -366,7 +382,13 @@ def import_zen(source: Path) -> bool:
         ui.print_info(f"  Всего вкладок: {total_tabs}")
     else:
         ui.print_warn("zen-sessions.jsonlz4 не найден — создаю новый")
-        new_sess: dict = {"lastCollected": 0, "tabs": [], "folders": [], "groups": [], "spaces": []}
+        new_sess: dict = {
+            "lastCollected": 0,
+            "tabs": [],
+            "folders": [],
+            "groups": [],
+            "spaces": [],
+        }
         if export.get("spaces"):
             new_sess["spaces"] = export["spaces"]
         if export.get("groups"):

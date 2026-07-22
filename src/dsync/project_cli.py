@@ -7,6 +7,7 @@ from pathlib import Path
 from . import projects, ui
 from .netbird import get_status
 from .resolver import resolve_host
+from .ssh_client import check_port
 from .ssh_client import run as ssh_run
 
 logger = logging.getLogger(__name__)
@@ -29,27 +30,19 @@ def _target_machines(project_info: dict, all_machines: dict) -> dict:
     return {name: info for name, info in all_machines.items() if name in wanted}
 
 
-def _check_remote_project(machine_name: str, machine_info: dict, repo_path: str) -> tuple[str, str]:
+def _check_remote_project(
+    machine_name: str, machine_info: dict, repo_path: str
+) -> tuple[str, str]:
     """Check if project exists on remote machine."""
     host = machine_info["host"]
     user = machine_info.get("user", "mflkee")
     ip = resolve_host(host)
-    if not _check_port(ip):
+    if not check_port(ip):
         return "skipped", "SSH порт 22 недоступен"
     r = ssh_run(ip, f"test -d {Path(repo_path).as_posix()}/.git", user=user, timeout=10)
     if r.success:
         return "present", ""
     return "missing", ""
-
-
-def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
-    import socket
-
-    try:
-        with socket.create_connection((ip, port), timeout=timeout):
-            return True
-    except (socket.timeout, ConnectionRefusedError, OSError):
-        return False
 
 
 def _sync_project_remote(
@@ -66,7 +59,7 @@ def _sync_project_remote(
     branch = project_info.get("branch", "main")
     remote_url = project_info.get("remote")
 
-    if host == nb.self_fqdn:
+    if nb.is_self(host):
         return "skipped", "текущая машина"
 
     peer = next((p for p in nb.peers if p.fqdn == host), None)
@@ -74,7 +67,7 @@ def _sync_project_remote(
         return "skipped", "офлайн"
 
     ip = resolve_host(host)
-    if not _check_port(ip):
+    if not check_port(ip):
         return "skipped", "SSH порт 22 недоступен"
 
     if dry_run:
@@ -85,7 +78,12 @@ def _sync_project_remote(
         r = ssh_run(ip, script, user=user, timeout=300)
 
     if not r.success:
-        logger.warning("Project %s sync to %s failed: %s", project_name, machine_name, r.stderr[:200])
+        logger.warning(
+            "Project %s sync to %s failed: %s",
+            project_name,
+            machine_name,
+            r.stderr[:200],
+        )
         return "failed", r.stderr.replace("\n", "; ")[:200]
     if "GIT_CONFLICT" in r.stdout:
         return "failed", "конфликт git"
@@ -140,12 +138,14 @@ def cmd_project_status(config) -> int:
     rows = []
     for name, info in projects_dict.items():
         ps = projects.get_project_status(name, info)
-        rows.append([
-            name,
-            str(ps.path),
-            ps.branch or "—",
-            ps.sync_status,
-        ])
+        rows.append(
+            [
+                name,
+                str(ps.path),
+                ps.branch or "—",
+                ps.sync_status,
+            ]
+        )
 
     ui.print_panel(
         "projects",
@@ -154,10 +154,14 @@ def cmd_project_status(config) -> int:
     return 0
 
 
-def cmd_project_sync(config, names: list[str], dry_run: bool = False, jobs: int = 4) -> int:
+def cmd_project_sync(
+    config, names: list[str], dry_run: bool = False, jobs: int = 4
+) -> int:
     ui.print_header()
     if dry_run:
-        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel(
+            "dry-run", "Изменения не применяются, только отчёт", style="yellow"
+        )
 
     projects_dict = config.projects
     if not projects_dict:
@@ -216,10 +220,14 @@ def cmd_project_sync(config, names: list[str], dry_run: bool = False, jobs: int 
     return 0
 
 
-def cmd_project_clone(config, names: list[str], dry_run: bool = False, jobs: int = 4) -> int:
+def cmd_project_clone(
+    config, names: list[str], dry_run: bool = False, jobs: int = 4
+) -> int:
     ui.print_header()
     if dry_run:
-        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel(
+            "dry-run", "Изменения не применяются, только отчёт", style="yellow"
+        )
 
     projects_dict = config.projects
     if not projects_dict:
@@ -260,13 +268,13 @@ def cmd_project_clone(config, names: list[str], dry_run: bool = False, jobs: int
             machine_name, machine_info = item
             host = machine_info["host"]
             user = machine_info.get("user", "mflkee")
-            if host == nb.self_fqdn:
+            if nb.is_self(host):
                 return machine_name, "skipped", "текущая машина"
             peer = next((p for p in nb.peers if p.fqdn == host), None)
             if peer and not peer.is_connected:
                 return machine_name, "skipped", "офлайн"
             ip = resolve_host(host)
-            if not _check_port(ip):
+            if not check_port(ip):
                 return machine_name, "skipped", "SSH порт 22 недоступен"
             if dry_run:
                 return machine_name, "success", "будет клонирован (dry-run)"
@@ -284,7 +292,9 @@ def cmd_project_clone(config, names: list[str], dry_run: bool = False, jobs: int
                 raw_results = [_clone_one(item) for item in items]
             else:
                 workers = max(1, min(jobs, len(items)))
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers
+                ) as executor:
                     raw_results = list(executor.map(_clone_one, items))
 
         for machine_name, status, reason in raw_results:

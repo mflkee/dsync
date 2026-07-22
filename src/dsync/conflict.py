@@ -48,7 +48,9 @@ def stash_pop(repo_path: Path) -> GitResult:
 
 def check_diverged(repo_path: Path, branch: str = "main") -> tuple[int, int]:
     """Returns (ahead, behind) counts vs origin/<branch>"""
-    r = _git(repo_path, ["rev-list", "--count", "--left-right", f"HEAD...origin/{branch}"])
+    r = _git(
+        repo_path, ["rev-list", "--count", "--left-right", f"HEAD...origin/{branch}"]
+    )
     if not r.success:
         return (0, 0)
     parts = r.stdout.split()
@@ -86,7 +88,9 @@ def show_diff_summary(repo_path: Path, files: list[str], branch: str = "main"):
     ui.print_section("📄 Различия между локальной и удалённой версией")
 
     ui.print_info("Локальные коммиты (чего нет на GitHub):")
-    log_r = _git(repo_path, ["log", f"origin/{branch}..HEAD", "--oneline", "--no-decorate"])
+    log_r = _git(
+        repo_path, ["log", f"origin/{branch}..HEAD", "--oneline", "--no-decorate"]
+    )
     if log_r.success and log_r.stdout:
         for line in log_r.stdout.splitlines():
             ui.print_info(f"  {line}")
@@ -94,7 +98,9 @@ def show_diff_summary(repo_path: Path, files: list[str], branch: str = "main"):
         ui.print_info("  (нет локальных изменений)")
 
     ui.print_info("\nУдалённые коммиты (чего нет локально):")
-    log_r = _git(repo_path, ["log", f"HEAD..origin/{branch}", "--oneline", "--no-decorate"])
+    log_r = _git(
+        repo_path, ["log", f"HEAD..origin/{branch}", "--oneline", "--no-decorate"]
+    )
     if log_r.success and log_r.stdout:
         for line in log_r.stdout.splitlines():
             ui.print_info(f"  {line}")
@@ -145,9 +151,15 @@ def resolve_interactive(repo_path: Path, branch: str = "main") -> Optional[bool]
     ui._print()
 
     ui.print_info("Выбери действие:")
-    ui.print_info(f"  {ui.green('1')} — оставить {ui.bold('локальную')} версию (git pull -X ours)")
-    ui.print_info(f"  {ui.green('2')} — оставить {ui.bold('удалённую')} версию (git reset --hard origin/{branch})")
-    ui.print_info(f"  {ui.green('3')} — {ui.bold('отменить')} синхронизацию (ничего не менять)")
+    ui.print_info(
+        f"  {ui.green('1')} — оставить {ui.bold('локальную')} версию (git pull -X ours)"
+    )
+    ui.print_info(
+        f"  {ui.green('2')} — оставить {ui.bold('удалённую')} версию (stash + reset)"
+    )
+    ui.print_info(
+        f"  {ui.green('3')} — {ui.bold('отменить')} синхронизацию (ничего не менять)"
+    )
 
     try:
         choice = input(f"\n  {ui.bold('Выбор [1/2/3]')}: ").strip()
@@ -162,11 +174,11 @@ def resolve_interactive(repo_path: Path, branch: str = "main") -> Optional[bool]
         if not r.success:
             ui.print_error(f"fetch: {r.stderr}")
             return None
-        r = _git(repo_path, ["pull", "-X", "ours", "origin", branch], timeout=60)
+        r = _git(repo_path, ["merge", "-X", "ours", f"origin/{branch}"], timeout=60)
         if r.success:
             ui.print_ok("Конфликт разрешён: оставлена локальная версия")
             return True
-        ui.print_error(f"Pull failed: {r.stderr}")
+        ui.print_error(f"Merge failed: {r.stderr}")
         return None
 
     elif choice == "2":
@@ -175,8 +187,12 @@ def resolve_interactive(repo_path: Path, branch: str = "main") -> Optional[bool]
         if not r.success:
             ui.print_error(f"fetch: {r.stderr}")
             return None
+        # Stash any local changes before hard reset
+        stash_push(repo_path)
         r = _git(repo_path, ["reset", "--hard", f"origin/{branch}"])
         if r.success:
+            # Try to pop stash (may fail if conflicts remain, that's ok)
+            stash_pop(repo_path)
             ui.print_ok("Конфликт разрешён: оставлена удалённая версия")
             return False
         ui.print_error(f"Reset failed: {r.stderr}")

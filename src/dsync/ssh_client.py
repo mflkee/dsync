@@ -1,7 +1,16 @@
 import os
+import socket
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
+
+
+def check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        return False
 
 
 @dataclass
@@ -22,10 +31,14 @@ def run(
 ) -> SSHResult:
     ssh_cmd = [
         "ssh",
-        "-o", "ConnectTimeout=10",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "BatchMode=yes",
-        "-p", str(port),
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "BatchMode=yes",
+        "-p",
+        str(port),
     ]
     if identity_file:
         ssh_cmd.extend(["-i", identity_file])

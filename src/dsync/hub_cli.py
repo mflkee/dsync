@@ -6,17 +6,8 @@ from pathlib import Path
 from . import hub, selfupdate, ui
 from .netbird import get_status
 from .resolver import resolve_host
+from .ssh_client import check_port
 from .ssh_client import run as ssh_run
-
-
-def _check_port(ip: str, port: int = 22, timeout: float = 2) -> bool:
-    import socket
-
-    try:
-        with socket.create_connection((ip, port), timeout=timeout):
-            return True
-    except (socket.timeout, ConnectionRefusedError, OSError):
-        return False
 
 
 def cmd_self_status() -> int:
@@ -27,11 +18,15 @@ def cmd_self_status() -> int:
         ui.print_error(st.error)
         return 1
     ui.print_info(f"Источник: {st.source}")
-    ui.print_info(f"Ветка: {st.branch}  коммит: {st.current_sha} (origin: {st.remote_sha})")
+    ui.print_info(
+        f"Ветка: {st.branch}  коммит: {st.current_sha} (origin: {st.remote_sha})"
+    )
     if not st.is_clean:
         ui.print_warn("В репозитории есть незакоммиченные изменения")
     if st.behind > 0:
-        ui.print_warn(f"Отстаёт от origin на {st.behind} коммитов — выполни: dsync self update")
+        ui.print_warn(
+            f"Отстаёт от origin на {st.behind} коммитов — выполни: dsync self update"
+        )
     else:
         ui.print_ok("Версия актуальна")
     return 0
@@ -63,7 +58,9 @@ def auto_self_update() -> bool:
         ui.print_ok(f"dsync актуален ({st.current_sha})")
         return True
     if not st.is_clean:
-        ui.print_warn(f"dsync отстаёт на {st.behind}, но репозиторий грязный — пропускаю")
+        ui.print_warn(
+            f"dsync отстаёт на {st.behind}, но репозиторий грязный — пропускаю"
+        )
         return True
     ui.print_info(f"dsync отстаёт на {st.behind} коммитов, обновляю...")
     with ui.spinner_ctx("Обновление dsync..."):
@@ -110,7 +107,9 @@ def _hub_pull_local(root: Path, jobs: int) -> list[list[str]]:
         elif r.stderr == "no remote":
             rows.append([repo.name, ui.result_badge("skipped"), "нет remote"])
         else:
-            rows.append([repo.name, ui.result_badge("failed"), r.stderr.replace("\n", " ")[:80]])
+            rows.append(
+                [repo.name, ui.result_badge("failed"), r.stderr.replace("\n", " ")[:80]]
+            )
     return rows
 
 
@@ -138,17 +137,19 @@ def _parse_hub_output(stdout: str) -> tuple[list[list[str]], str]:
     return rows, error
 
 
-def _hub_pull_machine(item: tuple[str, dict], nb, root: str, dry_run: bool) -> tuple[str, list[list[str]], str]:
+def _hub_pull_machine(
+    item: tuple[str, dict], nb, root: str, dry_run: bool
+) -> tuple[str, list[list[str]], str]:
     machine_name, machine_info = item
     host = machine_info["host"]
     user = machine_info.get("user", "mflkee")
-    if host == nb.self_fqdn:
+    if nb.is_self(host):
         return machine_name, [], "self"
     peer = next((p for p in nb.peers if p.fqdn == host), None)
     if peer and not peer.is_connected:
         return machine_name, [], "офлайн"
     ip = resolve_host(host)
-    if not _check_port(ip):
+    if not check_port(ip):
         return machine_name, [], "SSH порт 22 недоступен"
     if dry_run:
         return machine_name, [], "dry-run"
@@ -161,10 +162,14 @@ def _hub_pull_machine(item: tuple[str, dict], nb, root: str, dry_run: bool) -> t
     return machine_name, rows, ""
 
 
-def cmd_hub_pull(config, local_only: bool = False, dry_run: bool = False, jobs: int = 4) -> int:
+def cmd_hub_pull(
+    config, local_only: bool = False, dry_run: bool = False, jobs: int = 4
+) -> int:
     ui.print_header()
     if dry_run:
-        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
+        ui.print_panel(
+            "dry-run", "Изменения не применяются, только отчёт", style="yellow"
+        )
 
     root = config.hub_root
     ui.print_section(f"hub pull: {root} (local)")
@@ -201,7 +206,11 @@ def cmd_hub_pull(config, local_only: bool = False, dry_run: bool = False, jobs: 
         else:
             workers = max(1, min(jobs, len(items)))
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-                results = list(ex.map(lambda it: _hub_pull_machine(it, nb, root_str, dry_run), items))
+                results = list(
+                    ex.map(
+                        lambda it: _hub_pull_machine(it, nb, root_str, dry_run), items
+                    )
+                )
 
     for machine_name, rows, note in results:
         if note == "self":

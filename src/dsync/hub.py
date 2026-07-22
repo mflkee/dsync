@@ -43,7 +43,11 @@ def discover_repos(root: Path) -> list[Path]:
         return []
     repos = []
     for child in sorted(root.iterdir()):
-        if child.is_dir() and not child.name.startswith(".") and (child / ".git").is_dir():
+        if (
+            child.is_dir()
+            and not child.name.startswith(".")
+            and (child / ".git").is_dir()
+        ):
             repos.append(child)
     return repos
 

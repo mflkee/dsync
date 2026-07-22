@@ -3,10 +3,11 @@ from pathlib import Path
 from dsync import cli, hub_cli, project_cli
 from dsync.config import Config
 from dsync.log import setup_logging
+from dsync.ssh_client import check_port
 
 
 def test_check_port_closed():
-    assert cli._check_port("127.0.0.1", port=1, timeout=1) is False
+    assert check_port("127.0.0.1", port=1, timeout=1) is False
 
 
 def test_config_remote_url_override(tmp_path: Path):
