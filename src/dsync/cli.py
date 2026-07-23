@@ -264,6 +264,8 @@ def cmd_status(config: Config):
     if not machines:
         ui.print_warn("Машины не настроены. Используй: dsync add <имя> <host>")
     else:
+        from .obsidian import check_api as obs_check
+
         online = []
         offline = []
         for name, info in machines.items():
@@ -284,6 +286,26 @@ def cmd_status(config: Config):
                 else:
                     offline.append(name)
                     ui.print_warn("    --  not in netbird")
+
+        # Obsidian health on online machines
+        ui.print_section("obsidian REST API")
+        obs_ok = obs_warn = 0
+        for name in online:
+            info = machines[name]
+            host = info["host"]
+            ip = resolve_host(host)
+            if not ip or not check_port(ip):
+                continue
+            status = obs_check(ip, user=info.get("user", "mflkee"))
+            if status.api_responsive:
+                ui.print_ok(f"  {name}: OK (HTTP {status.http_code})")
+                obs_ok += 1
+            else:
+                svc = "active" if status.service_active else "inactive"
+                ui.print_warn(f"  {name}: REST API не отвечает (service={svc})")
+                obs_warn += 1
+        if not obs_ok and not obs_warn:
+            ui.print_info("  нет доступных машин для проверки")
 
     return 0
 
@@ -446,6 +468,34 @@ def cmd_sync(
                 ui.print_warn(f"  {name}: syncthing не работает")
                 st_warn += 1
         if not st_ok and not st_warn:
+            ui.print_info("  нет доступных машин для проверки")
+
+    # Obsidian REST API health check
+    if not dry_run:
+        from .obsidian import health_check as obs_health
+
+        ui.print_section("obsidian health")
+        obs_ok = obs_warn = 0
+        for name, info in machines.items():
+            host = info.get("host", "")
+            ip = resolve_host(host)
+            if not ip or not check_port(ip):
+                continue
+            status = obs_health(
+                ip,
+                user=info.get("user", "mflkee"),
+                auto_restart=True,
+            )
+            if status.api_responsive:
+                ui.print_ok(f"  {name}: OK (HTTP {status.http_code})")
+                obs_ok += 1
+            else:
+                ui.print_warn(
+                    f"  {name}: REST API не отвечает"
+                    + (f" ({status.error[:60]})" if status.error else "")
+                )
+                obs_warn += 1
+        if not obs_ok and not obs_warn:
             ui.print_info("  нет доступных машин для проверки")
 
     # Project sync
