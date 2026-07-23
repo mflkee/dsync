@@ -82,7 +82,9 @@ def check_api(
 
     # Also check service status
     r_svc = ssh_run(ip, _CHECK_SERVICE, user=user, timeout=timeout)
-    service_active = r_svc.success and "active" in r_svc.stdout
+    service_active = (
+        r_svc.success and r_svc.stdout.strip() == "active"
+    )
 
     if api_responsive:
         logger.info("obsidian API OK on %s (HTTP %d)", ip, http_code)
