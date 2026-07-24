@@ -120,6 +120,7 @@ if [ ! -f "$HOME/.config/chezmoi/key.txt" ]; then
     chmod 600 "$HOME/.config/chezmoi/key.txt"
   fi
 fi
+dsync self update 2>/dev/null || true
 cd {q_repo} && "$C" apply --force 2>/dev/null || "$C" apply 2>/dev/null || true
 noctalia-theme-apply 2>/dev/null || true
 ~/.local/bin/noctalia-overrides.sh 2>/dev/null || true"""
