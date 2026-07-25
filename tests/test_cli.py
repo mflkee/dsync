@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from dsync import cli, hub_cli, project_cli
+from dsync import hub_cli, project_cli
+from dsync.chezmoi import _target_to_source_path
 from dsync.config import Config
 from dsync.log import setup_logging
 from dsync.ssh_client import check_port
@@ -77,3 +78,11 @@ def test_parse_hub_output_error_line():
     rows, error = hub_cli._parse_hub_output("HUB_ERROR|no root dir /x\n")
     assert rows == []
     assert error == "no root dir /x"
+
+
+def test_target_to_source_path():
+    assert _target_to_source_path(".config/noctalia/settings.json") == "dot_config/noctalia/settings.json"
+    assert _target_to_source_path(".config/niri/config.kdl") == "dot_config/niri/config.kdl"
+    assert _target_to_source_path(".local/bin/foo") == "dot_local/bin/foo"
+    assert _target_to_source_path("projects/foo/bar.py") == "projects/foo/bar.py"
+    assert _target_to_source_path(".config/noctalia/theme-profile.toml") == "dot_config/noctalia/theme-profile.toml"

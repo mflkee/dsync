@@ -4,7 +4,6 @@ Provides health checks and auto-recovery for headless Obsidian
 instances running on remote machines via SSH.
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Default API key - can be overridden via OBSIDIAN_API_KEY env var
 DEFAULT_API_KEY = "0acede40d4e8d3613627b5ad554c1cb6ca53aef79ca289f6dd78f0df468139bb"
 
+
 # Check if Obsidian REST API is responding
 def _check_api_cmd(api_key: str) -> str:
     return (
@@ -23,6 +23,7 @@ def _check_api_cmd(api_key: str) -> str:
         f"-H 'Authorization: Bearer {api_key}' "
         f"http://127.0.0.1:27123/vault/ 2>/dev/null || echo '000'"
     )
+
 
 # Check if obsidian.service is active
 _CHECK_SERVICE = (
@@ -82,9 +83,7 @@ def check_api(
 
     # Also check service status
     r_svc = ssh_run(ip, _CHECK_SERVICE, user=user, timeout=timeout)
-    service_active = (
-        r_svc.success and r_svc.stdout.strip() == "active"
-    )
+    service_active = r_svc.success and r_svc.stdout.strip() == "active"
 
     if api_responsive:
         logger.info("obsidian API OK on %s (HTTP %d)", ip, http_code)

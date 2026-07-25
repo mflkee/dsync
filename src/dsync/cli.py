@@ -1,4 +1,5 @@
 import argparse
+import concurrent.futures
 import json
 import logging
 import os
@@ -121,9 +122,69 @@ if [ ! -f "$HOME/.config/chezmoi/key.txt" ]; then
   fi
 fi
 dsync self update 2>/dev/null || true
-cd {q_repo} && "$C" apply --force 2>/dev/null || "$C" apply 2>/dev/null || true
-noctalia-theme-apply 2>/dev/null || true
-~/.local/bin/noctalia-overrides.sh 2>/dev/null || true"""
+# Apply chezmoi changes
+CHEZMOI_ERR=""
+if ! out=$(cd {q_repo} && "$C" apply --force 2>&1); then
+  CHEZMOI_ERR="chezmoi: $out"
+elif ! out=$(cd {q_repo} && "$C" apply 2>&1); then
+  CHEZMOI_ERR="chezmoi: $out"
+fi
+# Apply noctalia theme
+THEME_ERR=""
+if ! out=$(noctalia-theme-apply 2>&1); then
+  THEME_ERR="theme: $out"
+fi
+# Apply noctalia overrides
+if ! out=$(~/.local/bin/noctalia-overrides.sh 2>&1); then
+  THEME_ERR="${{THEME_ERR:+$THEME_ERR; }}overrides: $out"
+fi
+# Report errors
+if [ -n "$CHEZMOI_ERR" ] || [ -n "$THEME_ERR" ]; then
+  echo "SYNC_PARTIAL"
+  [ -n "$CHEZMOI_ERR" ] && echo "  $CHEZMOI_ERR"
+  [ -n "$THEME_ERR" ] && echo "  $THEME_ERR"
+fi"""
+
+
+def _sync_one_machine(
+    item: tuple[str, dict],
+    nb,
+    repo_path: str,
+    branch: str,
+    remote_url: str,
+    dry_run: bool,
+) -> tuple[str, str, str]:
+    """Sync a single machine. Returns (name, status, note)."""
+    name, info = item
+    host = info.get("host", "")
+    user = info.get("user", "mflkee")
+
+    if nb.is_self(host):
+        return name, "skipped", "это эта машина"
+
+    ip = resolve_host(host)
+    if not ip or not check_port(ip):
+        return name, "skipped", "офлайн"
+
+    if dry_run:
+        return name, "success", "будет синхронизировано"
+
+    rcmd = _remote_sync_script(repo_path, branch, remote_url)
+    r = ssh_run(ip, rcmd, user=user, timeout=300, retries=3)
+
+    if r.success and "NO_CHEZMOI" not in r.stdout:
+        if "SYNC_PARTIAL" in r.stdout:
+            note = "синхронизировано (с предупреждениями)"
+            return name, "success", note
+        return name, "success", ""
+
+    if "NO_CHEZMOI" in r.stdout:
+        return name, "skipped", "chezmoi не установлен"
+
+    note = r.stderr.replace("\n", "; ")[:200] if r.stderr else r.stdout.replace("\n", "; ")[:200]
+    if not note:
+        note = f"код {r.returncode}"
+    return name, "failed", note
 
 
 def _sync_machines_parallel(
@@ -138,37 +199,32 @@ def _sync_machines_parallel(
     """Sync machines in parallel, print per-machine results. Returns (ok, skip, fail)."""
     items = list(machines.items())
     total = len(items)
-    ok = skip = fail = 0
-    errors: list[tuple[str, str]] = []
 
     if dry_run:
         ui.print_dry_run_header()
 
-    for idx, it in enumerate(items, 1):
-        name, info = it
-        host = info.get("host", "")
-        user = info.get("user", "mflkee")
-        if nb.is_self(host):
-            ui.print_machine_result(name, "skipped", "это эта машина", dry_run)
-            skip += 1
-            continue
-        ip = resolve_host(host)
-        if not ip or not check_port(ip):
-            ui.print_machine_result(name, "skipped", "офлайн", dry_run)
-            skip += 1
-            continue
-        ui.print_progress_bar(idx, total, name)
-        rcmd = _remote_sync_script(repo_path, branch, remote_url)
-        r = ssh_run(ip, rcmd, user=user, timeout=300, retries=3)
-        if r.success and "NO_CHEZMOI" not in r.stdout:
-            ui.print_machine_result(name, "success", dry_run=dry_run)
+    def _sync(item: tuple[str, dict]) -> tuple[str, str, str]:
+        return _sync_one_machine(item, nb, repo_path, branch, remote_url, dry_run)
+
+    if jobs == 1 or total <= 1:
+        results = [_sync(it) for it in items]
+    else:
+        workers = max(1, min(jobs, total))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_sync, items))
+
+    ok = skip = fail = 0
+    errors: list[tuple[str, str]] = []
+
+    for idx, (name, status, note) in enumerate(results, 1):
+        if not dry_run and status not in ("skipped",):
+            ui.print_progress_bar(idx, total, name)
+        ui.print_machine_result(name, status, note, dry_run)
+        if status == "success":
             ok += 1
-        elif "NO_CHEZMOI" in (r.stdout if r.success else ""):
-            ui.print_machine_result(name, "skipped", "chezmoi не установлен", dry_run)
+        elif status == "skipped":
             skip += 1
         else:
-            note = r.stderr.replace("\n", "; ")[:200]
-            ui.print_machine_result(name, "failed", note, dry_run)
             errors.append((name, note))
             fail += 1
 
@@ -451,16 +507,16 @@ def cmd_sync(
             ip = resolve_host(host)
             if not ip or not check_port(ip):
                 continue
-            status = st_health(
+            st_status = st_health(
                 ip,
                 user=info.get("user", "mflkee"),
                 auto_restart=True,
                 auto_resolve=True,
             )
-            if status.running:
-                if status.conflicts:
+            if st_status.running:
+                if st_status.conflicts:
                     ui.print_ok(
-                        f"  {name}: OK ({len(status.conflicts)} конфликтов решено)"
+                        f"  {name}: OK ({len(st_status.conflicts)} конфликтов решено)"
                     )
                     st_ok += 1
                 else:
@@ -483,18 +539,18 @@ def cmd_sync(
             ip = resolve_host(host)
             if not ip or not check_port(ip):
                 continue
-            status = obs_health(
+            obs_status = obs_health(
                 ip,
                 user=info.get("user", "mflkee"),
                 auto_restart=True,
             )
-            if status.api_responsive:
-                ui.print_ok(f"  {name}: OK (HTTP {status.http_code})")
+            if obs_status.api_responsive:
+                ui.print_ok(f"  {name}: OK (HTTP {obs_status.http_code})")
                 obs_ok += 1
             else:
                 ui.print_warn(
                     f"  {name}: REST API не отвечает"
-                    + (f" ({status.error[:60]})" if status.error else "")
+                    + (f" ({obs_status.error[:60]})" if obs_status.error else "")
                 )
                 obs_warn += 1
         if not obs_ok and not obs_warn:

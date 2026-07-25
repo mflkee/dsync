@@ -1,4 +1,5 @@
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,13 +31,15 @@ class GitResult:
 def _git(repo_path: Path, args: list[str], timeout: int = 30) -> GitResult:
     logger.debug("git %s (cwd=%s)", " ".join(args), repo_path)
     try:
+        env = os.environ.copy()
+        env.update({"LC_ALL": "C", "LANG": "C"})
         result = subprocess.run(
             ["git"] + args,
             capture_output=True,
             text=True,
             timeout=timeout,
             cwd=repo_path,
-            env={"LC_ALL": "C", "LANG": "C"},
+            env=env,
         )
         if result.returncode != 0:
             logger.debug("git %s failed: %s", args[0], result.stderr.strip()[:200])
@@ -162,35 +165,59 @@ def re_add_secrets() -> GitResult:
         return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
 
 
-def re_add_noctalia() -> GitResult:
-    """Re-add noctalia settings so chezmoi source stays in sync with live files."""
-    noctalia_dir = Path.home() / ".config" / "noctalia"
-    if not noctalia_dir.is_dir():
-        return GitResult(success=True)
-    # Get list of chezmoi-managed files to avoid errors on unmanaged files
+def _chezmoi_managed_set() -> set[str]:
+    """Return set of chezmoi-managed target paths (e.g. '.config/noctalia/settings.json')."""
     try:
-        managed_result = subprocess.run(
+        result = subprocess.run(
             ["chezmoi", "managed", "--include", "files"],
             capture_output=True,
             text=True,
             timeout=15,
         )
-        managed_files = (
-            set(managed_result.stdout.strip().splitlines())
-            if managed_result.returncode == 0
-            else set()
-        )
+        if result.returncode == 0 and result.stdout.strip():
+            return set(result.stdout.strip().splitlines())
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        managed_files = set()
+        pass
+    return set()
+
+
+def _target_to_source_path(target: str) -> str:
+    """Convert chezmoi target path to source path.
+
+    chezmoi uses dot_ prefix for hidden dirs, tilde_ for home:
+      .config/noctalia/settings.json -> dot_config/noctalia/settings.json
+      .local/bin/foo -> dot_local/bin/foo
+      ~/foo -> tilde_home/foo
+    """
+    parts = target.split("/")
+    result = []
+    for part in parts:
+        if part.startswith("."):
+            result.append("dot_" + part[1:])
+        elif part == "~":
+            result.append("tilde_home")
+        else:
+            result.append(part)
+    return "/".join(result)
+
+
+def re_add_noctalia() -> GitResult:
+    """Re-add noctalia settings so chezmoi source stays in sync with live files."""
+    noctalia_dir = Path.home() / ".config" / "noctalia"
+    if not noctalia_dir.is_dir():
+        return GitResult(success=True)
+
+    managed = _chezmoi_managed_set()
+
     targets = []
-    for f in noctalia_dir.iterdir():
+    for f in noctalia_dir.rglob("*"):
         if not f.is_file():
             continue
-        # chezmoi managed outputs paths like dot_config/noctalia/settings.json
-        rel = str(Path("~") / f.relative_to(Path.home())).replace("\\", "/")
-        chezmoi_path = "dot_config/noctalia/" + f.name
-        if chezmoi_path in managed_files or rel in managed_files:
+        rel = str(f.relative_to(Path.home()))  # .config/noctalia/theme-profile.toml
+        source_rel = _target_to_source_path(rel)
+        if rel in managed or source_rel in managed:
             targets.append(str(f))
+
     if not targets:
         return GitResult(success=True)
     try:
