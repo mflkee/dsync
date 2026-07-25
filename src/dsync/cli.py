@@ -38,7 +38,7 @@ from .netbird import Peer, get_status
 from .project_cli import cmd_project_clone, cmd_project_status, cmd_project_sync
 from .projects import remote_sync_script as project_remote_sync_script
 from .projects import sync_project_repo
-from .resolver import resolve_host
+from .resolver import clear_cache, resolve_host
 from .ssh_client import check_connectivity, check_port
 from .ssh_client import run as ssh_run
 from .zen import export_zen, find_profile, import_zen
@@ -270,6 +270,7 @@ def resolve_conflict(repo: Path, branch: str, strategy: str) -> bool | None:
 
 
 def cmd_status(config: Config):
+    clear_cache()
     ui.print_header()
 
     nb = get_status()
@@ -381,6 +382,7 @@ def cmd_sync(
     dry_run: bool = False,
     jobs: int = 4,
 ):
+    clear_cache()
     ui.print_header()
     logger.info("sync started (dry=%s, strategy=%s)", dry_run, strategy or "ours")
     if dry_run:
@@ -639,6 +641,7 @@ def cmd_push(
     dry_run: bool = False,
     jobs: int = 4,
 ):
+    clear_cache()
     nb = get_status()
     if nb is None:
         ui.print_error("NetBird недоступен")
