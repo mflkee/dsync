@@ -116,6 +116,7 @@ def remote_sync_script(repo_path: str, branch: str, remote_url: str | None) -> s
     return f"""export PATH="$HOME/.local/bin:$PATH"
 if [ -d {shlex.quote(repo_path)}/.git ]; then
   cd {shlex.quote(repo_path)}
+  [ -n {url} ] && git remote set-url origin {url} 2>/dev/null || true
   git fetch origin {shlex.quote(branch)} 2>&1 || true
   git pull --rebase origin {shlex.quote(branch)} 2>&1 || echo "GIT_CONFLICT"
 elif [ -n {url} ]; then

@@ -88,6 +88,7 @@ def _remote_sync_script(repo_path: str, branch: str, remote_url: str) -> str:
 C="$(command -v chezmoi)"
 if [ -d {q_repo}/.git ]; then
   cd {q_repo}
+  git remote set-url origin {q_url} 2>/dev/null || true
   git fetch origin {q_branch} 2>&1 || true
   git reset HEAD . 2>/dev/null
   git checkout -- . 2>/dev/null
