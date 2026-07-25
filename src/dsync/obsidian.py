@@ -65,12 +65,6 @@ def check_api(
     r_svc = ssh_run(ip, _CHECK_SERVICE, user=user, timeout=timeout)
     service_active = r_svc.success and r_svc.stdout.strip() == "active"
 
-    if not service_active:
-        return ObsidianStatus(
-            api_responsive=False,
-            service_active=False,
-        )
-
     if not api_key:
         api_key = os.environ.get("OBSIDIAN_API_KEY", DEFAULT_API_KEY)
     cmd = _check_api_cmd(api_key)
@@ -79,7 +73,7 @@ def check_api(
         logger.info("obsidian API check failed on %s: %s", ip, r.stderr[:100])
         return ObsidianStatus(
             api_responsive=False,
-            service_active=True,
+            service_active=service_active,
             error=r.stderr[:200],
         )
 
@@ -94,12 +88,15 @@ def check_api(
         logger.info("obsidian API OK on %s (HTTP %d)", ip, http_code)
     else:
         logger.warning(
-            "obsidian API unhealthy on %s: HTTP %d, service=active", ip, http_code
+            "obsidian API unhealthy on %s: HTTP %d, service=%s",
+            ip,
+            http_code,
+            "active" if service_active else "inactive",
         )
 
     return ObsidianStatus(
         api_responsive=api_responsive,
-        service_active=True,
+        service_active=service_active,
         http_code=http_code,
     )
 
@@ -144,7 +141,7 @@ def health_check(
         ip: Target machine IP
         user: SSH user
         api_key: Obsidian API key for auth
-        auto_restart: Restart service if not responding
+        auto_restart: Restart service if not responding (only if service was active)
         pull: Pull vault changes before restart
 
     Returns:
@@ -152,7 +149,7 @@ def health_check(
     """
     status = check_api(ip, user=user, api_key=api_key)
 
-    if not status.api_responsive and auto_restart:
+    if not status.api_responsive and auto_restart and status.service_active:
         if restart(ip, user=user, pull=pull):
             status = check_api(ip, user=user, api_key=api_key)
 
