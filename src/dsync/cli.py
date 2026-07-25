@@ -1175,6 +1175,164 @@ def cmd_syncthing(config: Config, action: str, machines: list[str]) -> int:
     return 1
 
 
+def cmd_doctor(config: Config, jobs: int = 4) -> int:
+    """Run comprehensive diagnostics on the dsync infrastructure."""
+    ui.print_header()
+    ui.print_section("doctor")
+    ok = warn = fail = 0
+
+    # --- NetBird ---
+    ui.print_section("netbird")
+    nb = get_status()
+    if nb is None:
+        ui.print_error("NetBird недоступен")
+        fail += 1
+        nb_ok = False
+    else:
+        ui.print_ok(f"Daemon: {nb.daemon_status}")
+        ui.print_info(f"Self: {nb.self_fqdn} ({nb.self_ip})")
+        connected = sum(1 for p in nb.peers if p.is_connected)
+        ui.print_info(f"Peers: {len(nb.peers)} total, {connected} connected")
+        ok += 1
+        nb_ok = True
+
+    # --- Config ---
+    ui.print_section("config")
+    errors = config.validate()
+    if errors:
+        for e in errors:
+            ui.print_error(e)
+        fail += len(errors)
+    else:
+        ui.print_ok("Конфигурация валидна")
+        ok += 1
+
+    # --- chezmoi ---
+    ui.print_section("chezmoi")
+    import subprocess as _sp
+    try:
+        r = _sp.run(["chezmoi", "--version"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            ui.print_ok(f"chezmoi: {r.stdout.strip().splitlines()[0]}")
+            ok += 1
+        else:
+            ui.print_error("chezmoi не найден")
+            fail += 1
+    except (OSError, _sp.TimeoutExpired):
+        ui.print_error("chezmoi не найден")
+        fail += 1
+
+    gs = git_status(config.git_source)
+    if gs.error:
+        ui.print_error(f"dotfiles git: {gs.error}")
+        fail += 1
+    elif gs.is_clean:
+        ui.print_ok("dotfiles: чисто")
+        ok += 1
+    else:
+        parts = []
+        if gs.staged:
+            parts.append(f"{gs.staged} staged")
+        if gs.unstaged:
+            parts.append(f"{gs.unstaged} unstaged")
+        if gs.untracked:
+            parts.append(f"{gs.untracked} untracked")
+        ui.print_warn(f"dotfiles: {', '.join(parts)}")
+        warn += 1
+    if gs.ahead > 0:
+        ui.print_info(f"  ahead: {gs.ahead}")
+    if gs.behind > 0:
+        ui.print_info(f"  behind: {gs.behind}")
+
+    # --- SSH ---
+    ui.print_section("ssh")
+    machines = config.machines
+    if not machines:
+        ui.print_warn("Нет машин в конфиге")
+        warn += 1
+    else:
+        for name, info in machines.items():
+            host = info["host"]
+            user = info.get("user", "mflkee")
+            if nb is not None and nb.is_self(host):
+                ui.print_info(f"  {name}: текущая машина")
+                ok += 1
+                continue
+            ip = resolve_host(host)
+            if not ip or ip == host:
+                ui.print_warn(f"  {name}: IP не найден ({host})")
+                warn += 1
+                continue
+            if not check_port(ip):
+                ui.print_warn(f"  {name}: порт 22 недоступен ({ip})")
+                warn += 1
+                continue
+            if check_connectivity(ip, user):
+                ui.print_ok(f"  {name}: SSH OK ({user}@{ip})")
+                ok += 1
+            else:
+                ui.print_warn(f"  {name}: SSH аутентификация не удалась ({user}@{ip})")
+                warn += 1
+
+    # --- Syncthing ---
+    ui.print_section("syncthing")
+    if not machines:
+        ui.print_info("  нет машин")
+    else:
+        from .syncthing import check_running as st_check
+        for name, info in machines.items():
+            host = info["host"]
+            user = info.get("user", "mflkee")
+            if nb is not None and nb.is_self(host):
+                ip = nb.self_ip
+            else:
+                ip = resolve_host(host)
+            if not ip or not check_port(ip):
+                continue
+            st_status = st_check(ip, user=user)
+            if st_status.running:
+                ui.print_ok(f"  {name}: работает (uptime {st_status.uptime}s)")
+                ok += 1
+            else:
+                ui.print_warn(f"  {name}: не работает")
+                warn += 1
+
+    # --- Obsidian ---
+    ui.print_section("obsidian REST API")
+    if not machines:
+        ui.print_info("  нет машин")
+    else:
+        from .obsidian import check_api as obs_check
+        for name, info in machines.items():
+            host = info["host"]
+            user = info.get("user", "mflkee")
+            if nb is not None and nb.is_self(host):
+                ip = nb.self_ip
+            else:
+                ip = resolve_host(host)
+            if not ip or not check_port(ip):
+                continue
+            status = obs_check(ip, user=user)
+            if status.api_responsive:
+                ui.print_ok(f"  {name}: OK (HTTP {status.http_code})")
+                ok += 1
+            elif status.service_active:
+                ui.print_warn(f"  {name}: сервис активен, API не отвечает")
+                warn += 1
+            else:
+                ui.print_info(f"  {name}: сервис не установлен")
+
+    # --- Summary ---
+    ui.print_section("итог")
+    ui.print_ok(f"Пройдено: {ok}")
+    if warn:
+        ui.print_warn(f"Предупреждений: {warn}")
+    if fail:
+        ui.print_error(f"Ошибок: {fail}")
+
+    return 0 if fail == 0 else 1
+
+
 def main():
     config = Config.ensure_default()
     setup_logging(str(config.log_file), config.log_level)
@@ -1351,6 +1509,12 @@ def main():
         help="Машины (по умолчанию все online)",
     )
 
+    # doctor subcommand
+    doctor_p = sub.add_parser("doctor", help="Полная диагностика инфраструктуры")
+    doctor_p.add_argument(
+        "--jobs", "-j", type=int, default=4, help="Количество параллельных проверок"
+    )
+
     args = parser.parse_args()
 
     if args.command == "status":
@@ -1469,6 +1633,8 @@ def main():
             )
     elif args.command == "syncthing":
         return cmd_syncthing(config, args.st_action, args.machines)
+    elif args.command == "doctor":
+        return cmd_doctor(config, jobs=args.jobs)
     return 1
 
 
