@@ -361,10 +361,11 @@ def cmd_status(config: Config):
             if status.api_responsive:
                 ui.print_ok(f"  {name}: OK (HTTP {status.http_code})")
                 obs_ok += 1
-            else:
-                svc = "active" if status.service_active else "inactive"
-                ui.print_warn(f"  {name}: REST API не отвечает (service={svc})")
+            elif status.service_active:
+                ui.print_warn(f"  {name}: REST API не отвечает (сервис запущен)")
                 obs_warn += 1
+            else:
+                ui.print_info(f"  {name}: сервис не установлен")
         if not obs_ok and not obs_warn:
             ui.print_info("  нет доступных машин для проверки")
 
@@ -550,12 +551,14 @@ def cmd_sync(
             if obs_status.api_responsive:
                 ui.print_ok(f"  {name}: OK (HTTP {obs_status.http_code})")
                 obs_ok += 1
-            else:
+            elif obs_status.service_active:
                 ui.print_warn(
                     f"  {name}: REST API не отвечает"
                     + (f" ({obs_status.error[:60]})" if obs_status.error else "")
                 )
                 obs_warn += 1
+            else:
+                ui.print_info(f"  {name}: сервис не установлен")
         if not obs_ok and not obs_warn:
             ui.print_info("  нет доступных машин для проверки")
 

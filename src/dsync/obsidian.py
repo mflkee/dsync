@@ -62,6 +62,15 @@ def check_api(
     """Check if Obsidian REST API is responding on a remote machine."""
     logger.debug("check obsidian API on %s", ip)
 
+    r_svc = ssh_run(ip, _CHECK_SERVICE, user=user, timeout=timeout)
+    service_active = r_svc.success and r_svc.stdout.strip() == "active"
+
+    if not service_active:
+        return ObsidianStatus(
+            api_responsive=False,
+            service_active=False,
+        )
+
     if not api_key:
         api_key = os.environ.get("OBSIDIAN_API_KEY", DEFAULT_API_KEY)
     cmd = _check_api_cmd(api_key)
@@ -70,7 +79,7 @@ def check_api(
         logger.info("obsidian API check failed on %s: %s", ip, r.stderr[:100])
         return ObsidianStatus(
             api_responsive=False,
-            service_active=False,
+            service_active=True,
             error=r.stderr[:200],
         )
 
@@ -81,23 +90,16 @@ def check_api(
         http_code = 0
         api_responsive = False
 
-    # Also check service status
-    r_svc = ssh_run(ip, _CHECK_SERVICE, user=user, timeout=timeout)
-    service_active = r_svc.success and r_svc.stdout.strip() == "active"
-
     if api_responsive:
         logger.info("obsidian API OK on %s (HTTP %d)", ip, http_code)
     else:
         logger.warning(
-            "obsidian API unhealthy on %s: HTTP %d, service=%s",
-            ip,
-            http_code,
-            "active" if service_active else "inactive",
+            "obsidian API unhealthy on %s: HTTP %d, service=active", ip, http_code
         )
 
     return ObsidianStatus(
         api_responsive=api_responsive,
-        service_active=service_active,
+        service_active=True,
         http_code=http_code,
     )
 
