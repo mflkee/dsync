@@ -60,6 +60,9 @@ def sync_project_repo(repo: Path, branch: str, remote: str | None = None) -> Git
     if gs.error:
         return GitResult(success=False, stderr=f"git status: {gs.error}")
 
+    # Use the actual current branch, falling back to configured branch
+    active_branch = gs.current_branch or branch
+
     if not gs.is_clean:
         add = _git(repo, ["add", "-A"])
         if not add.success:
@@ -67,20 +70,27 @@ def sync_project_repo(repo: Path, branch: str, remote: str | None = None) -> Git
         commit_msg = f"project sync: {repo.name}"
         commit = _git(repo, ["commit", "-m", commit_msg])
         if not commit.success:
+            # If commit fails due to missing author, skip push (unlikely with env fix)
+            if "Author identity unknown" in commit.stderr or "tell me who you are" in commit.stderr:
+                return GitResult(success=True, stderr="пропущен: автор не указан")
             return commit
+
+    if not gs.has_remote:
+        return GitResult(success=True, stderr="нет remote — push пропущен")
 
     fetch = _git(repo, ["fetch", "origin"], timeout=30)
     if not fetch.success:
         return fetch
 
-    ahead, behind = _diverged(repo, branch)
+    ahead, behind = _diverged(repo, active_branch)
     if behind > 0:
-        pull = _git(repo, ["pull", "--rebase", "origin", branch], timeout=60)
+        pull = _git(repo, ["pull", "--rebase", "origin", active_branch], timeout=60)
         if not pull.success:
             return pull
 
-    if ahead > 0 or gs.ahead > 0:
-        push = _git(repo, ["push", "origin", branch], timeout=60)
+    total_ahead = ahead + max(0, gs.ahead - ahead)
+    if total_ahead > 0:
+        push = _git(repo, ["push", "origin", active_branch], timeout=60)
         if not push.success:
             return push
 
