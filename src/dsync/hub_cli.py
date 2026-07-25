@@ -132,8 +132,10 @@ def _parse_hub_output(stdout: str) -> tuple[list[list[str]], str]:
                 rows.append([name, ui.result_badge("skipped"), "dirty — пропущен"])
             elif status == "noremote":
                 rows.append([name, ui.result_badge("skipped"), "нет remote"])
-            elif status == "timeout":
-                rows.append([name, ui.result_badge("skipped"), f"timeout: {detail}"])
+            elif status == "unreachable":
+                rows.append(
+                    [name, ui.result_badge("skipped"), "недоступен — пропущен"]
+                )
             else:
                 rows.append([name, ui.result_badge("failed"), detail])
     return rows, error

@@ -14,7 +14,9 @@ def test_obsidian_status_ok():
 
 
 def test_obsidian_status_down():
-    s = ObsidianStatus(api_responsive=False, service_active=False, http_code=0, error="timeout")
+    s = ObsidianStatus(
+        api_responsive=False, service_active=False, http_code=0, error="timeout"
+    )
     assert not s.api_responsive
     assert not s.service_active
     assert s.error == "timeout"
@@ -39,6 +41,7 @@ def test_check_api_mocked_success(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         calls.append(cmd)
         from dsync.ssh_client import SSHResult
+
         if "is-active obsidian.service" in cmd:
             return SSHResult(stdout="active", stderr="", returncode=0, success=True)
         if "27123" in cmd:
@@ -57,6 +60,7 @@ def test_check_api_mocked_success(monkeypatch):
 def test_check_api_mocked_service_inactive(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
+
         if "is-active obsidian.service" in cmd:
             return SSHResult(stdout="inactive", stderr="", returncode=4, success=False)
         if "27123" in cmd:

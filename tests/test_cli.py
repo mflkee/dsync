@@ -81,8 +81,17 @@ def test_parse_hub_output_error_line():
 
 
 def test_target_to_source_path():
-    assert _target_to_source_path(".config/noctalia/settings.json") == "dot_config/noctalia/settings.json"
-    assert _target_to_source_path(".config/niri/config.kdl") == "dot_config/niri/config.kdl"
+    assert (
+        _target_to_source_path(".config/noctalia/settings.json")
+        == "dot_config/noctalia/settings.json"
+    )
+    assert (
+        _target_to_source_path(".config/niri/config.kdl")
+        == "dot_config/niri/config.kdl"
+    )
     assert _target_to_source_path(".local/bin/foo") == "dot_local/bin/foo"
     assert _target_to_source_path("projects/foo/bar.py") == "projects/foo/bar.py"
-    assert _target_to_source_path(".config/noctalia/theme-profile.toml") == "dot_config/noctalia/theme-profile.toml"
+    assert (
+        _target_to_source_path(".config/noctalia/theme-profile.toml")
+        == "dot_config/noctalia/theme-profile.toml"
+    )

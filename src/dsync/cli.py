@@ -184,7 +184,11 @@ def _sync_one_machine(
     if "NO_CHEZMOI" in r.stdout:
         return name, "skipped", "chezmoi не установлен"
 
-    note = r.stderr.replace("\n", "; ")[:200] if r.stderr else r.stdout.replace("\n", "; ")[:200]
+    note = (
+        r.stderr.replace("\n", "; ")[:200]
+        if r.stderr
+        else r.stdout.replace("\n", "; ")[:200]
+    )
     if not note:
         note = f"код {r.returncode}"
     return name, "failed", note
@@ -1208,6 +1212,7 @@ def cmd_doctor(config: Config, jobs: int = 4) -> int:
     # --- chezmoi ---
     ui.print_section("chezmoi")
     import subprocess as _sp
+
     try:
         r = _sp.run(["chezmoi", "--version"], capture_output=True, text=True, timeout=5)
         if r.returncode == 0:
@@ -1278,6 +1283,7 @@ def cmd_doctor(config: Config, jobs: int = 4) -> int:
         ui.print_info("  нет машин")
     else:
         from .syncthing import check_running as st_check
+
         for name, info in machines.items():
             host = info["host"]
             user = info.get("user", "mflkee")
@@ -1301,6 +1307,7 @@ def cmd_doctor(config: Config, jobs: int = 4) -> int:
         ui.print_info("  нет машин")
     else:
         from .obsidian import check_api as obs_check
+
         for name, info in machines.items():
             host = info["host"]
             user = info.get("user", "mflkee")
@@ -1331,6 +1338,46 @@ def cmd_doctor(config: Config, jobs: int = 4) -> int:
     return 0 if fail == 0 else 1
 
 
+def _print_help():
+    ui.print_header()
+    ui.print_info("Децентрализованная синхронизация dotfiles через NetBird")
+    ui._print()
+    ui.print_section("команды")
+    ui._print(
+        ui._make_kv_table(
+            [
+                ["dsync sync", "полный цикл синхронизации: chezmoi → github → все машины"],
+                ["dsync status", "статус NetBird, машин и chezmoi"],
+                ["dsync push", "закоммитить и отправить dotfiles на все машины"],
+                ["dsync pull", "получить dotfiles с GitHub и применить chezmoi"],
+                ["dsync doctor", "полная диагностика инфраструктуры"],
+                ["dsync setup", "настроить SSH-доступ ко всем машинам"],
+                ["dsync add <имя> <host>", "добавить машину в конфиг"],
+                ["dsync remove <имя>", "удалить машину из конфига"],
+                ["dsync discover", "обновить FQDN/IP машин из NetBird"],
+                ["dsync hub pull", "pull всех git-репозиториев (локально + удалённо)"],
+                ["dsync hub status", "статус всех git-репозиториев"],
+                ["dsync project sync", "синхронизировать проекты на всех машинах"],
+                ["dsync project status", "статус проектов"],
+                ["dsync project clone", "клонировать проекты на удалённые машины"],
+                ["dsync syncthing status", "статус Syncthing на всех машинах"],
+                ["dsync syncthing resolve", "авто-разрешение конфликтов Syncthing"],
+                ["dsync zen export|import|info", "Zen Browser: экспорт/импорт профиля"],
+                ["dsync timer --enable", "авто-синхронизация каждые 30 минут"],
+            ]
+        )
+    )
+    ui._print()
+    ui.print_section("примеры")
+    ui.print_info("dsync sync                        # полная синхронизация")
+    ui.print_info("dsync sync --dry-run              # посмотреть что будет")
+    ui.print_info("dsync sync --only notebook        # только одна машина")
+    ui.print_info("dsync sync --jobs 8               # 8 параллельных SSH")
+    ui.print_info("dsync doctor                      # диагностика всего")
+    ui.print_info("dsync hub pull --local            # pull только локально")
+    ui.print_info("dsync project sync metroLog       # синхронизировать один проект")
+
+
 def main():
     config = Config.ensure_default()
     setup_logging(str(config.log_file), config.log_level)
@@ -1341,7 +1388,10 @@ def main():
     parser = argparse.ArgumentParser(
         prog="dsync", description="Decentralized chezmoi dotfiles sync via NetBird"
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "--version", action="version", version="dsync 0.1.0"
+    )
+    sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("status", help="Показать статус всех машин")
     sync_p = sub.add_parser("sync", help="Полный цикл синхронизации")
@@ -1513,7 +1563,18 @@ def main():
         "--jobs", "-j", type=int, default=4, help="Количество параллельных проверок"
     )
 
+    # help subcommand — friendly help page
+    sub.add_parser("help", help="Показать справку с примерами")
+
     args = parser.parse_args()
+
+    if not args.command:
+        _print_help()
+        return 0
+
+    if args.command == "help":
+        _print_help()
+        return 0
 
     if args.command == "status":
         return cmd_status(config)

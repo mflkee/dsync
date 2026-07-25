@@ -130,7 +130,7 @@ find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
     https_url=$(echo "$remote_url" | sed 's|^git@\\(.*\\):\\(.*\\)|https://\\1/\\2|')
     git remote set-url origin "$https_url" 2>/dev/null || true
   fi
-  timeout 30 git fetch origin --quiet 2>/dev/null || {{ echo "HUB|$name|timeout|fetch"; continue; }}
+  timeout 30 git fetch origin --quiet 2>/dev/null || {{ echo "HUB|$name|unreachable|fetch"; continue; }}
   out=$(timeout 30 git pull --ff-only 2>&1)
   rc=$?
   if [ $rc -eq 0 ]; then
@@ -139,7 +139,7 @@ find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
       *) echo "HUB|$name|updated|" ;;
     esac
   elif [ $rc -eq 124 ]; then
-    echo "HUB|$name|timeout|pull"
+    echo "HUB|$name|unreachable|pull"
   else
     detail=$(echo "$out" | tr '\\n' ' ' | cut -c1-80)
     echo "HUB|$name|failed|$detail"

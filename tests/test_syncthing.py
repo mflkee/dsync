@@ -37,10 +37,9 @@ def test_syncthing_status_with_conflicts():
 def test_check_running_mocked_success(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
+
         data = {"ok": True, "uptime": 7200, "myID": "abcdef123456"}
-        return SSHResult(
-            stdout=json.dumps(data), stderr="", returncode=0, success=True
-        )
+        return SSHResult(stdout=json.dumps(data), stderr="", returncode=0, success=True)
 
     monkeypatch.setattr("dsync.syncthing.ssh_run", fake_run)
     status = check_running("1.2.3.4")
@@ -53,9 +52,8 @@ def test_check_running_mocked_success(monkeypatch):
 def test_check_running_mocked_not_running(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
-        return SSHResult(
-            stdout='{"ok":false}', stderr="", returncode=0, success=True
-        )
+
+        return SSHResult(stdout='{"ok":false}', stderr="", returncode=0, success=True)
 
     monkeypatch.setattr("dsync.syncthing.ssh_run", fake_run)
     status = check_running("1.2.3.4")
@@ -66,6 +64,7 @@ def test_check_running_mocked_not_running(monkeypatch):
 def test_check_running_mocked_ssh_fail(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
+
         return SSHResult(
             stdout="", stderr="connection refused", returncode=1, success=False
         )
@@ -80,6 +79,7 @@ def test_check_running_mocked_ssh_fail(monkeypatch):
 def test_check_running_mocked_parse_error(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
+
         return SSHResult(
             stdout="not json at all", stderr="", returncode=0, success=True
         )
@@ -94,6 +94,7 @@ def test_check_running_mocked_parse_error(monkeypatch):
 def test_check_conflicts_mocked_no_conflicts(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
+
         return SSHResult(stdout="[]", stderr="", returncode=0, success=True)
 
     monkeypatch.setattr("dsync.syncthing.ssh_run", fake_run)
@@ -105,10 +106,9 @@ def test_check_conflicts_mocked_no_conflicts(monkeypatch):
 def test_check_conflicts_mocked_has_conflicts(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
+
         data = [{"id": "abc", "path": "/sync", "conflicts": 2}]
-        return SSHResult(
-            stdout=json.dumps(data), stderr="", returncode=0, success=True
-        )
+        return SSHResult(stdout=json.dumps(data), stderr="", returncode=0, success=True)
 
     monkeypatch.setattr("dsync.syncthing.ssh_run", fake_run)
     conflicts = check_conflicts("1.2.3.4")
@@ -120,6 +120,7 @@ def test_check_conflicts_mocked_has_conflicts(monkeypatch):
 def test_check_conflicts_mocked_ssh_fail(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
+
         return SSHResult(stdout="", stderr="timeout", returncode=1, success=False)
 
     monkeypatch.setattr("dsync.syncthing.ssh_run", fake_run)
@@ -131,9 +132,8 @@ def test_check_conflicts_mocked_ssh_fail(monkeypatch):
 def test_resolve_conflicts_mocked_success(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
-        return SSHResult(
-            stdout='{"resolved":5}', stderr="", returncode=0, success=True
-        )
+
+        return SSHResult(stdout='{"resolved":5}', stderr="", returncode=0, success=True)
 
     monkeypatch.setattr("dsync.syncthing.ssh_run", fake_run)
     resolved = resolve_conflicts("1.2.3.4")
@@ -144,6 +144,7 @@ def test_resolve_conflicts_mocked_success(monkeypatch):
 def test_resolve_conflicts_mocked_ssh_fail(monkeypatch):
     def fake_run(ip, cmd, **kwargs):
         from dsync.ssh_client import SSHResult
+
         return SSHResult(stdout="", stderr="fail", returncode=1, success=False)
 
     monkeypatch.setattr("dsync.syncthing.ssh_run", fake_run)

@@ -71,7 +71,10 @@ def sync_project_repo(repo: Path, branch: str, remote: str | None = None) -> Git
         commit = _git(repo, ["commit", "-m", commit_msg])
         if not commit.success:
             # If commit fails due to missing author, skip push (unlikely with env fix)
-            if "Author identity unknown" in commit.stderr or "tell me who you are" in commit.stderr:
+            if (
+                "Author identity unknown" in commit.stderr
+                or "tell me who you are" in commit.stderr
+            ):
                 return GitResult(success=True, stderr="пропущен: автор не указан")
             return commit
 

@@ -16,7 +16,9 @@ def test_ssh_result_failure():
 
 
 def test_ssh_result_is_transient_timeout():
-    r = SSHResult(stdout="", stderr="ssh: connect timed out", returncode=-1, success=False)
+    r = SSHResult(
+        stdout="", stderr="ssh: connect timed out", returncode=-1, success=False
+    )
     assert r.is_transient
 
 
@@ -43,11 +45,13 @@ def test_run_mocked_success(monkeypatch):
     def fake_run(cmd, **kwargs):
         class R:
             pass
+
         r = R()
         r.stdout = "output"
         r.stderr = ""
         r.returncode = 0
         return r
+
     monkeypatch.setattr("dsync.ssh_client.subprocess.run", fake_run)
     r = run("1.2.3.4", "echo ok", user="test", timeout=10)
     assert r.success
@@ -56,8 +60,10 @@ def test_run_mocked_success(monkeypatch):
 
 def test_run_mocked_timeout(monkeypatch):
     import subprocess
+
     def fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=10)
+
     monkeypatch.setattr("dsync.ssh_client.subprocess.run", fake_run)
     r = run("1.2.3.4", "sleep 999", user="test", timeout=1)
     assert not r.success
@@ -67,6 +73,7 @@ def test_run_mocked_timeout(monkeypatch):
 def test_run_mocked_ssh_not_found(monkeypatch):
     def fake_run(cmd, **kwargs):
         raise FileNotFoundError
+
     monkeypatch.setattr("dsync.ssh_client.subprocess.run", fake_run)
     r = run("1.2.3.4", "cmd", user="test")
     assert not r.success

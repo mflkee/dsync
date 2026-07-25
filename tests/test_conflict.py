@@ -79,9 +79,7 @@ def test_has_conflict_detects_uu(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         conflict,
         "_git",
-        lambda p, a, timeout=30: GitResult(
-            success=True, stdout="UU a.txt\n M b.txt\n"
-        ),
+        lambda p, a, timeout=30: GitResult(success=True, stdout="UU a.txt\n M b.txt\n"),
     )
     assert conflict.has_conflict(tmp_path) is True
 

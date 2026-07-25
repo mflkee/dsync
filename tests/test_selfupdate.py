@@ -7,20 +7,39 @@ from dsync import selfupdate
 
 def _init_repo(path: Path):
     subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(path), "config", "user.email", "t@t.com"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(path), "config", "user.name", "T"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "t@t.com"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "T"],
+        check=True,
+        capture_output=True,
+    )
     (path / "f.txt").write_text("x")
-    subprocess.run(["git", "-C", str(path), "add", "."], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(path), "commit", "-m", "init"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(path), "add", "."], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+    )
 
 
 def _fake_uv_tool(tmp_path: Path, source: Path) -> Path:
     tool = tmp_path / "uv" / "tools" / "dsync"
     dist = tool / "lib" / "python3.13" / "site-packages" / "dsync-0.1.0.dist-info"
     dist.mkdir(parents=True)
-    (dist / "direct_url.json").write_text(json.dumps({
-        "url": f"file://{source}", "dir_info": {"editable": True},
-    }))
+    (dist / "direct_url.json").write_text(
+        json.dumps(
+            {
+                "url": f"file://{source}",
+                "dir_info": {"editable": True},
+            }
+        )
+    )
     return tool
 
 

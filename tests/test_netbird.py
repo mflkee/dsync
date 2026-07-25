@@ -83,7 +83,11 @@ def test_get_status_tolerates_missing_peers(monkeypatch):
     nb = _run_status(
         monkeypatch,
         json.dumps(
-            {"fqdn": "self.netbird.cloud", "netbirdIp": "100.64.0.1/16", "daemonStatus": "connected"}
+            {
+                "fqdn": "self.netbird.cloud",
+                "netbirdIp": "100.64.0.1/16",
+                "daemonStatus": "connected",
+            }
         ),
     )
     assert nb is not None
