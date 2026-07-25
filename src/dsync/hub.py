@@ -108,6 +108,7 @@ def remote_hub_script(root: str) -> str:
     Выводит строки HUB|name|status|detail для парсинга на локальной стороне.
     """
     return f"""export PATH="$HOME/.local/bin:$PATH"
+exec 2>&1
 root=$(awk -F'"' '/^\\[hub\\]/{{f=1;next}} /^\\[/{{f=0}} f && /root/{{print $2}}' "$HOME/.config/dsync/config.toml" 2>/dev/null)
 root=${{root:-{shlex.quote(root)}}}
 root="${{root/#\\~/$HOME}}"
@@ -116,7 +117,7 @@ find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
   repo="${{d%/.git}}"
   name="${{repo##*/}}"
   cd "$repo" 2>/dev/null || continue
-  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  if [ -n "$(timeout 5 git status --porcelain 2>/dev/null)" ]; then
     echo "HUB|$name|dirty|"
     continue
   fi
@@ -124,15 +125,24 @@ find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
     echo "HUB|$name|noremote|"
     continue
   fi
-  git fetch origin --quiet 2>/dev/null
-  out=$(git pull --ff-only 2>&1)
-  if [ $? -eq 0 ]; then
+  remote_url=$(git remote get-url origin 2>/dev/null)
+  if [ -n "$remote_url" ] && echo "$remote_url" | grep -q '^git@'; then
+    https_url=$(echo "$remote_url" | sed 's|git@|https://|; s|:|/|')
+    git remote set-url origin "$https_url" 2>/dev/null || true
+  fi
+  timeout 30 git fetch origin --quiet 2>/dev/null || {{ echo "HUB|$name|timeout|fetch"; continue; }}
+  out=$(timeout 30 git pull --ff-only 2>&1)
+  rc=$?
+  if [ $rc -eq 0 ]; then
     case "$out" in
       *"Already up to date"*) echo "HUB|$name|uptodate|" ;;
       *) echo "HUB|$name|updated|" ;;
     esac
+  elif [ $rc -eq 124 ]; then
+    echo "HUB|$name|timeout|pull"
   else
     detail=$(echo "$out" | tr '\\n' ' ' | cut -c1-80)
     echo "HUB|$name|failed|$detail"
   fi
-done"""
+done
+exit 0"""
