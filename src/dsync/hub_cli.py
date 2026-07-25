@@ -153,7 +153,7 @@ def _hub_pull_machine(
         return machine_name, [], "SSH порт 22 недоступен"
     if dry_run:
         return machine_name, [], "dry-run"
-    r = ssh_run(ip, hub.remote_hub_script(root), user=user, timeout=300)
+    r = ssh_run(ip, hub.remote_hub_script(root), user=user, timeout=120)
     if not r.success:
         return machine_name, [], f"SSH: {r.stderr.replace(chr(10), '; ')[:120]}"
     rows, error = _parse_hub_output(r.stdout)
