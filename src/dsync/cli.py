@@ -85,20 +85,21 @@ def _remote_sync_script(repo_path: str, branch: str, remote_url: str) -> str:
         os.path.join(repo_path, "private_dot_config", "chezmoi", "key.txt")
     )
     return f"""export PATH="$HOME/.local/bin:$PATH"
+exec 2>&1
 C="$(command -v chezmoi)"
 if [ -d {q_repo}/.git ]; then
   cd {q_repo}
   git remote set-url origin {q_url} 2>/dev/null || true
-  git fetch origin {q_branch} 2>&1 || true
-  git reset HEAD . 2>/dev/null
-  git checkout -- . 2>/dev/null
-  git clean -fd 2>/dev/null
-  if ! git pull --rebase origin {q_branch} 2>&1; then
-    git rebase --abort 2>/dev/null
-    git reset --hard origin/{q_branch} 2>/dev/null
+  git fetch origin {q_branch} || true
+  git reset HEAD . 2>/dev/null || true
+  git checkout -- . 2>/dev/null || true
+  git clean -fd 2>/dev/null || true
+  if ! git pull --rebase origin {q_branch}; then
+    git rebase --abort 2>/dev/null || true
+    git reset --hard origin/{q_branch} || true
   fi
 else
-  rm -rf {q_repo} && git clone {q_url} {q_repo}
+  rm -rf {q_repo} && git clone {q_url} {q_repo} || {{ echo "CLONE_FAIL"; exit 0; }}
 fi
 if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
 # Ensure chezmoi sourceDir points to the right place
@@ -144,7 +145,8 @@ if [ -n "$CHEZMOI_ERR" ] || [ -n "$THEME_ERR" ]; then
   echo "SYNC_PARTIAL"
   [ -n "$CHEZMOI_ERR" ] && echo "  $CHEZMOI_ERR"
   [ -n "$THEME_ERR" ] && echo "  $THEME_ERR"
-fi"""
+fi
+exit 0"""
 
 
 def _sync_one_machine(
