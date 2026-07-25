@@ -1187,14 +1187,12 @@ def cmd_doctor(config: Config, jobs: int = 4) -> int:
     if nb is None:
         ui.print_error("NetBird недоступен")
         fail += 1
-        nb_ok = False
     else:
         ui.print_ok(f"Daemon: {nb.daemon_status}")
         ui.print_info(f"Self: {nb.self_fqdn} ({nb.self_ip})")
         connected = sum(1 for p in nb.peers if p.is_connected)
         ui.print_info(f"Peers: {len(nb.peers)} total, {connected} connected")
         ok += 1
-        nb_ok = True
 
     # --- Config ---
     ui.print_section("config")
