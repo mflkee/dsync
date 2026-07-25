@@ -127,7 +127,7 @@ find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
   fi
   remote_url=$(git remote get-url origin 2>/dev/null)
   if [ -n "$remote_url" ] && echo "$remote_url" | grep -q '^git@'; then
-    https_url=$(echo "$remote_url" | sed 's|git@|https://|; s|:|/|')
+    https_url=$(echo "$remote_url" | sed 's|^git@\\(.*\\):\\(.*\\)|https://\\1/\\2|')
     git remote set-url origin "$https_url" 2>/dev/null || true
   fi
   timeout 30 git fetch origin --quiet 2>/dev/null || {{ echo "HUB|$name|timeout|fetch"; continue; }}
