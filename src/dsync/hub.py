@@ -118,8 +118,9 @@ find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
   name="${{repo##*/}}"
   cd "$repo" 2>/dev/null || continue
   if [ -n "$(timeout 5 git status --porcelain 2>/dev/null)" ]; then
-    echo "HUB|$name|dirty|"
-    continue
+    git add -A 2>/dev/null
+    git commit -m "dsync: auto-commit" 2>/dev/null || {{ echo "HUB|$name|dirty|"; continue; }}
+    echo "HUB|$name|committed|"
   fi
   if ! git rev-parse --abbrev-ref '@{{upstream}}' >/dev/null 2>&1; then
     echo "HUB|$name|noremote|"

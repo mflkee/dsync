@@ -130,6 +130,8 @@ def _parse_hub_output(stdout: str) -> tuple[list[list[str]], str]:
                 rows.append([name, ui.result_badge("success"), "актуален"])
             elif status == "dirty":
                 rows.append([name, ui.result_badge("skipped"), "dirty — пропущен"])
+            elif status == "committed":
+                rows.append([name, ui.result_badge("success"), "авто-коммит"])
             elif status == "noremote":
                 rows.append([name, ui.result_badge("skipped"), "нет remote"])
             elif status == "unreachable":
