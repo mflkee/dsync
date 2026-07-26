@@ -311,3 +311,47 @@ def chezmoi_apply(timeout: int = 120) -> GitResult:
         return GitResult(success=False, stderr="chezmoi apply timed out", returncode=-1)
     except FileNotFoundError:
         return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
+
+
+def tmux_export(dest: Path) -> GitResult:
+    """Export current tmux session state to a file in the dotfiles repo.
+
+    Copies the latest tmux-resurrect save to dest.
+    Works only if tmux is running and tmux-resurrect is installed.
+    """
+    resurrect_dir = Path.home() / ".local" / "share" / "tmux" / "resurrect"
+    last = resurrect_dir / "last"
+    if not last.exists():
+        return GitResult(success=True, stdout="no tmux-resurrect data")
+
+    import shutil
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(last.resolve(), dest)
+    return GitResult(success=True, stdout="tmux session exported")
+
+
+def tmux_import(source: Path) -> GitResult:
+    """Import tmux session state from a dotfiles file to the resurrect directory.
+
+    Copies source to the tmux-resurrect 'last' symlink target.
+    The session will be restored on next tmux start by tmux-continuum.
+    """
+    if not source.exists():
+        return GitResult(success=True, stdout="no tmux session to import")
+
+    import shutil
+
+    resurrect_dir = Path.home() / ".local" / "share" / "tmux" / "resurrect"
+    resurrect_dir.mkdir(parents=True, exist_ok=True)
+
+    last = resurrect_dir / "last"
+    if last.is_symlink():
+        last.unlink()
+    elif last.exists():
+        last.unlink()
+
+    dest = resurrect_dir / source.name
+    shutil.copy2(source, dest)
+    last.symlink_to(dest.name)
+    return GitResult(success=True, stdout="tmux session imported")

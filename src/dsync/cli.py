@@ -18,6 +18,8 @@ from .chezmoi import (
     fetch,
     push,
     re_add_modified,
+    tmux_export,
+    tmux_import,
 )
 from .chezmoi import get_status as git_status
 from .config import Config
@@ -141,6 +143,8 @@ if ! out=$(~/.local/bin/noctalia-overrides.sh 2>&1); then
 fi
 # Import Zen Browser profile
 dsync zen import 2>/dev/null || true
+# Import tmux session
+dsync tmux import 2>/dev/null || true
 # Report errors
 if [ -n "$CHEZMOI_ERR" ] || [ -n "$THEME_ERR" ]; then
   echo "SYNC_PARTIAL"
@@ -417,6 +421,15 @@ def cmd_sync(
                 ui.print_ok("Zen профиль экспортирован")
             else:
                 ui.print_info("Zen Browser не найден — пропускаю")
+
+        ui.print_section("tmux session")
+        tmux_dest = repo / "dot_config" / "dsync" / "tmux-session.txt"
+        with ui.spinner_ctx("Экспорт tmux сессии..."):
+            r = tmux_export(tmux_dest)
+        if r.success and "no tmux" not in r.stdout:
+            ui.print_ok("Tmux сессия экспортирована")
+        else:
+            ui.print_info("Tmux не запущен — пропускаю")
 
     if not dry_run:
         with ui.spinner_ctx("chezmoi re-add..."):
@@ -819,6 +832,15 @@ def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
                 ui.print_ok("Zen профиль импортирован")
             else:
                 ui.print_info("Zen Browser не найден — пропускаю")
+
+    tmux_src = config.git_source / "dot_config" / "dsync" / "tmux-session.txt"
+    if tmux_src.exists():
+        with ui.spinner_ctx("Импорт tmux сессии..."):
+            r = tmux_import(tmux_src)
+        if r.success:
+            ui.print_ok("Tmux сессия импортирована")
+        else:
+            ui.print_info("Tmux не запущен — пропускаю")
 
     return 0
 
@@ -1566,6 +1588,12 @@ def main():
         "--jobs", "-j", type=int, default=4, help="Количество параллельных проверок"
     )
 
+    # tmux subcommand (for remote sync script)
+    tmux_p = sub.add_parser("tmux", help="Экспорт/импорт tmux сессий")
+    tmux_sub = tmux_p.add_subparsers(dest="tmux_action")
+    tmux_sub.add_parser("export", help="Экспорт tmux сессии в dotfiles")
+    tmux_sub.add_parser("import", help="Импорт tmux сессии из dotfiles")
+
     # help subcommand — friendly help page
     sub.add_parser("help", help="Показать справку с примерами")
 
@@ -1697,6 +1725,25 @@ def main():
         return cmd_syncthing(config, args.st_action, args.machines)
     elif args.command == "doctor":
         return cmd_doctor(config, jobs=args.jobs)
+    elif args.command == "tmux":
+        repo = config.git_source
+        if args.tmux_action == "export":
+            tmux_dest = repo / "dot_config" / "dsync" / "tmux-session.txt"
+            r = tmux_export(tmux_dest)
+            if r.success:
+                ui.print_ok("Tmux сессия экспортирована")
+                return 0
+            ui.print_error(f"Ошибка: {r.stderr}")
+            return 1
+        elif args.tmux_action == "import":
+            tmux_src = repo / "dot_config" / "dsync" / "tmux-session.txt"
+            r = tmux_import(tmux_src)
+            if r.success:
+                ui.print_ok("Tmux сессия импортирована")
+                return 0
+            ui.print_error(f"Ошибка: {r.stderr}")
+            return 1
+        return 1
     return 1
 
 
