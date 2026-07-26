@@ -17,8 +17,7 @@ from .chezmoi import (
     diverts_check,
     fetch,
     push,
-    re_add_noctalia,
-    re_add_secrets,
+    re_add_modified,
 )
 from .chezmoi import get_status as git_status
 from .config import Config
@@ -415,19 +414,12 @@ def cmd_sync(
         return 1
 
     if not dry_run:
-        with ui.spinner_ctx("chezmoi re-add secrets..."):
-            r = re_add_secrets()
+        with ui.spinner_ctx("chezmoi re-add..."):
+            r = re_add_modified()
         if r.success:
-            ui.print_ok("Secrets re-add — OK")
+            ui.print_ok("chezmoi re-add — OK")
         elif r.stderr:
             ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
-
-        with ui.spinner_ctx("noctalia re-add..."):
-            r = re_add_noctalia()
-        if r.success:
-            ui.print_ok("Noctalia re-add — OK")
-        elif r.stderr:
-            ui.print_warn(f"chezmoi re-add noctalia: {r.stderr[:200]}")
 
     if not gs.is_clean:
         if dry_run:
@@ -672,19 +664,12 @@ def cmd_push(
         ui.print_ok("Noctalia тема экспортирована")
 
     if not dry_run:
-        with ui.spinner_ctx("chezmoi re-add secrets..."):
-            r = re_add_secrets()
+        with ui.spinner_ctx("chezmoi re-add..."):
+            r = re_add_modified()
         if r.success:
-            ui.print_ok("Secrets re-add — OK")
+            ui.print_ok("chezmoi re-add — OK")
         elif r.stderr:
             ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
-
-        with ui.spinner_ctx("noctalia re-add..."):
-            r = re_add_noctalia()
-        if r.success:
-            ui.print_ok("Noctalia re-add — OK")
-        elif r.stderr:
-            ui.print_warn(f"chezmoi re-add noctalia: {r.stderr[:200]}")
 
     gs = git_status(repo)
     if gs.error:

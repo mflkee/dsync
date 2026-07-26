@@ -158,9 +158,61 @@ def re_add_secrets() -> GitResult:
             returncode=result.returncode,
         )
     except subprocess.TimeoutExpired:
-        return GitResult(
-            success=False, stderr="chezmoi re-add timed out", returncode=-1
+        return GitResult(success=False, stderr="chezmoi re-add timed out", returncode=-1)
+    except FileNotFoundError:
+        return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
+
+
+def re_add_modified() -> GitResult:
+    """Re-add ALL chezmoi-managed files that differ from the source state.
+
+    Uses `chezmoi status` to find modified files, then `chezmoi re-add`s them.
+    This catches changes made through Noctalia, GUI settings, or direct edits.
+    """
+    try:
+        status_r = subprocess.run(
+            ["chezmoi", "status"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
+        if status_r.returncode != 0:
+            return GitResult(success=False, stderr=f"chezmoi status: {status_r.stderr[:200]}",
+                             returncode=status_r.returncode)
+
+        # chezmoi status outputs lines like: " M .config/niri/config.kdl"
+        targets = []
+        for line in status_r.stdout.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # First char is status (M, A, D, R), skip only R (already removed)
+            if len(stripped) < 3:
+                continue
+            flag = stripped[0]
+            path = stripped[2:].strip()
+            if flag in ("M", "A") and path:
+                targets.append(Path.home() / path)
+
+        if not targets:
+            return GitResult(success=True)
+
+        logger.info("re-add %d modified chezmoi files: %s", len(targets),
+                     ", ".join(str(t.relative_to(Path.home())) for t in targets[:5]))
+        result = subprocess.run(
+            ["chezmoi", "re-add"] + [str(t) for t in targets],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return GitResult(
+            success=result.returncode == 0,
+            stdout=result.stdout.strip(),
+            stderr=result.stderr.strip(),
+            returncode=result.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        return GitResult(success=False, stderr="chezmoi re-add timed out", returncode=-1)
     except FileNotFoundError:
         return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
 
