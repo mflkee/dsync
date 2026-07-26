@@ -1388,6 +1388,7 @@ def _print_help():
                 ["dsync syncthing status", "статус Syncthing на всех машинах"],
                 ["dsync syncthing resolve", "авто-разрешение конфликтов Syncthing"],
                 ["dsync zen export|import|info", "Zen Browser: экспорт/импорт профиля"],
+                ["dsync tmux export|import", "tmux: экспорт/импорт сессий"],
                 ["dsync timer --enable", "авто-синхронизация каждые 30 минут"],
             ]
         )
