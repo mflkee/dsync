@@ -158,14 +158,13 @@ exec 2>&1
 C="$(command -v chezmoi)"
 if [ -d {q_repo}/.git ]; then
   cd {q_repo}
-  git remote set-url origin {q_url} 2>/dev/null || true
-  git fetch origin {q_branch} || true
+  git fetch {q_url} {q_branch} || true
   git reset HEAD . 2>/dev/null || true
   git checkout -- . 2>/dev/null || true
   git clean -fd 2>/dev/null || true
-  if ! git pull --rebase origin {q_branch}; then
+  if ! git pull --rebase {q_url} {q_branch}; then
     git rebase --abort 2>/dev/null || true
-    git reset --hard origin/{q_branch} || true
+    git reset --hard FETCH_HEAD || true
   fi
 else
   rm -rf {q_repo} && git clone {q_url} {q_repo} || {{ echo "CLONE_FAIL"; exit 0; }}

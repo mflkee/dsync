@@ -46,7 +46,8 @@ def test_remote_sync_script_includes_pull_and_clone():
     script = projects.remote_sync_script(
         "/home/user/myapp", "main", "https://example.com/repo.git"
     )
-    assert "git pull --rebase origin main" in script
+    assert "git pull --rebase" in script
+    assert "https://example.com/repo.git" in script
     assert "git clone https://example.com/repo.git /home/user/myapp" in script
 
 
