@@ -308,6 +308,8 @@ def tmux_theme_sync(dest: Path) -> GitResult:
     }
 
     lines = [f"{k}='{v}'" for k, v in mapping.items()]
+    colors_joined = " ".join(lines)
+    content = f"set -g @dracula-colors \"{colors_joined}\"\n"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text("\n".join(lines) + "\n")
+    dest.write_text(content)
     return GitResult(success=True, stdout="tmux theme synced")

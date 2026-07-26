@@ -96,6 +96,15 @@ def _sync_prep(config: Config, dry_run: bool) -> int:
         else:
             ui.print_info("Tmux не запущен — пропускаю")
 
+        ui.print_section("tmux theme")
+        theme_dest = repo / "dot_config" / "dsync" / "tmux-theme.conf"
+        with ui.spinner_ctx("Синхронизация темы tmux..."):
+            r = tmux_theme_sync(theme_dest)
+        if r.success:
+            ui.print_ok("Tmux тема синхронизирована")
+        else:
+            ui.print_info(f"Tmux тема: {r.stderr[:100]}")
+
     if not dry_run:
         with ui.spinner_ctx("chezmoi re-add..."):
             r = re_add_modified()
