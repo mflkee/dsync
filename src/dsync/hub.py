@@ -80,7 +80,13 @@ def pull_repo(repo: Path) -> GitResult:
     if gs.error:
         return GitResult(success=False, stderr=gs.error)
     if not gs.is_clean:
-        return GitResult(success=False, stderr="dirty")
+        add = _git(repo, ["add", "-A"], timeout=10)
+        if add.success:
+            commit_r = _git(repo, ["commit", "-m", "dsync: auto-commit"], timeout=10)
+            if not commit_r.success:
+                return GitResult(success=False, stderr="dirty")
+        else:
+            return GitResult(success=False, stderr="dirty")
     if not gs.has_remote:
         return GitResult(success=False, stderr="no remote")
     fetch = _git(repo, ["fetch", "origin", "--quiet"], timeout=30)

@@ -65,7 +65,8 @@ def test_pull_repo_skips_dirty(tmp_path: Path):
     _init_repo(repo, dirty=True)
     r = hub.pull_repo(repo)
     assert r.success is False
-    assert r.stderr == "dirty"
+    # auto-commit succeeds, then fails on no remote (test repo has no upstream)
+    assert r.stderr == "no remote"
 
 
 def test_pull_repo_no_remote(tmp_path: Path):
