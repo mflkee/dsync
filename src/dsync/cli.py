@@ -20,6 +20,7 @@ from .chezmoi import (
     re_add_modified,
     tmux_export,
     tmux_import,
+    tmux_theme_sync,
 )
 from .chezmoi import get_status as git_status
 from .config import Config

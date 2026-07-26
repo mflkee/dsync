@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -244,8 +246,6 @@ def tmux_export(dest: Path) -> GitResult:
     if not last.exists():
         return GitResult(success=True, stdout="no tmux-resurrect data")
 
-    import shutil
-
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(last.resolve(), dest)
     return GitResult(success=True, stdout="tmux session exported")
@@ -260,8 +260,6 @@ def tmux_import(source: Path) -> GitResult:
     if not source.exists():
         return GitResult(success=True, stdout="no tmux session to import")
 
-    import shutil
-
     resurrect_dir = Path.home() / ".local" / "share" / "tmux" / "resurrect"
     resurrect_dir.mkdir(parents=True, exist_ok=True)
 
@@ -275,3 +273,41 @@ def tmux_import(source: Path) -> GitResult:
     shutil.copy2(source, dest)
     last.symlink_to(dest.name)
     return GitResult(success=True, stdout="tmux session imported")
+
+
+def tmux_theme_sync(dest: Path) -> GitResult:
+    """Generate tmux color theme from current Noctalia theme.
+
+    Reads ~/.config/noctalia/colors.json (Material Design 3 format),
+    maps to tmux dracula color names, and writes an @dracula-colors
+    config snippet that can be sourced by tmux.conf.
+    """
+    colors_path = Path.home() / ".config" / "noctalia" / "colors.json"
+    if not colors_path.exists():
+        return GitResult(success=True, stdout="no noctalia colors")
+
+    try:
+        with open(colors_path) as f:
+            noctalia = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return GitResult(success=False, stderr="failed to read noctalia colors")
+
+    m = noctalia
+    mapping = {
+        "dark_gray": m.get("mSurface", "#1a1b26"),
+        "white": m.get("mOnSurface", "#c0caf5"),
+        "gray": m.get("mSurfaceVariant", "#24283b"),
+        "light_purple": m.get("mPrimary", "#7aa2f7"),
+        "dark_purple": m.get("mSecondary", "#bb9af7"),
+        "green": m.get("mTertiary", "#9ece6a"),
+        "red": m.get("mError", "#f7768e"),
+        "yellow": m.get("mPrimary", "#7aa2f7"),
+        "cyan": m.get("mSecondary", "#bb9af7"),
+        "orange": m.get("mError", "#f7768e"),
+        "pink": m.get("mSecondary", "#bb9af7"),
+    }
+
+    lines = [f"{k}='{v}'" for k, v in mapping.items()]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("\n".join(lines) + "\n")
+    return GitResult(success=True, stdout="tmux theme synced")
