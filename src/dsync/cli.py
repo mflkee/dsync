@@ -67,6 +67,64 @@ def _theme_apply() -> bool:
         return False
 
 
+def _sync_prep(config: Config, dry_run: bool) -> int:
+    """Shared preparation: theme export + re-add + git commit. Returns 0 on success."""
+    hostname = os.uname().nodename
+    repo = config.git_source
+
+    if not dry_run:
+        if _theme_export():
+            ui.print_ok("Тема экспортирована")
+        else:
+            ui.print_info("noctalia-theme-export: пропускаю (не найден или ошибка)")
+
+        ui.print_section("zen browser")
+        zen_dest = repo / "dot_config" / "dsync" / "zen.json"
+        with ui.spinner_ctx("Экспорт Zen Browser..."):
+            if export_zen(zen_dest):
+                ui.print_ok("Zen профиль экспортирован")
+            else:
+                ui.print_info("Zen Browser не найден — пропускаю")
+
+        ui.print_section("tmux session")
+        tmux_dest = repo / "dot_config" / "dsync" / "tmux-session.txt"
+        with ui.spinner_ctx("Экспорт tmux сессии..."):
+            r = tmux_export(tmux_dest)
+        if r.success and "no tmux" not in r.stdout:
+            ui.print_ok("Tmux сессия экспортирована")
+        else:
+            ui.print_info("Tmux не запущен — пропускаю")
+
+    if not dry_run:
+        with ui.spinner_ctx("chezmoi re-add..."):
+            r = re_add_modified()
+        if r.success:
+            ui.print_ok("chezmoi re-add — OK")
+        elif r.stderr:
+            ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
+
+    gs = git_status(repo)
+    if gs.error:
+        ui.print_error(f"Ошибка git: {gs.error}")
+        return 1
+
+    if gs.is_clean:
+        ui.print_ok("Локально чисто")
+    elif not dry_run:
+        ui.print_section("local changes")
+        with ui.spinner_ctx("Коммит..."):
+            msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            r = commit(repo, msg)
+        if r.success:
+            ui.print_ok("Закоммичено")
+        elif r.stderr:
+            ui.print_error(f"Ошибка коммита: {r.stderr}")
+            return 1
+    else:
+        ui.print_info("Есть локальные изменения — будут закоммичены")
+    return 0
+
+
 def _filter_machines(config: Config, only: list[str]) -> dict:
     """Return machines from config filtered by names; empty filter = all."""
     machines = config.machines
@@ -395,9 +453,8 @@ def cmd_sync(
     ui.print_header()
     logger.info("sync started (dry=%s, strategy=%s)", dry_run, strategy or "ours")
     if dry_run:
-        ui.print_panel(
-            "dry-run", "Изменения не применяются, только отчёт", style="yellow"
-        )
+        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
+
     hostname = os.uname().nodename
     repo = config.git_source
     branch = config.git_branch
@@ -407,58 +464,8 @@ def cmd_sync(
         ui.print_section("self update")
         auto_self_update()
 
-    if not dry_run:
-        ui.print_section("noctalia theme")
-        if _theme_export():
-            ui.print_ok("Тема экспортирована")
-        else:
-            ui.print_info("noctalia-theme-export: пропускаю (не найден или ошибка)")
-
-        ui.print_section("zen browser")
-        zen_dest = repo / "dot_config" / "dsync" / "zen.json"
-        with ui.spinner_ctx("Экспорт Zen Browser..."):
-            if export_zen(zen_dest):
-                ui.print_ok("Zen профиль экспортирован")
-            else:
-                ui.print_info("Zen Browser не найден — пропускаю")
-
-        ui.print_section("tmux session")
-        tmux_dest = repo / "dot_config" / "dsync" / "tmux-session.txt"
-        with ui.spinner_ctx("Экспорт tmux сессии..."):
-            r = tmux_export(tmux_dest)
-        if r.success and "no tmux" not in r.stdout:
-            ui.print_ok("Tmux сессия экспортирована")
-        else:
-            ui.print_info("Tmux не запущен — пропускаю")
-
-    if not dry_run:
-        with ui.spinner_ctx("chezmoi re-add..."):
-            r = re_add_modified()
-        if r.success:
-            ui.print_ok("chezmoi re-add — OK")
-        elif r.stderr:
-            ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
-
-    gs = git_status(repo)
-    if gs.error:
-        ui.print_error(f"Ошибка git: {gs.error}")
+    if _sync_prep(config, dry_run) != 0:
         return 1
-
-    if not gs.is_clean:
-        if dry_run:
-            ui.print_info("Есть локальные изменения — будут закоммичены")
-        else:
-            ui.print_section("local changes")
-            with ui.spinner_ctx("Коммит..."):
-                msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                r = commit(repo, msg)
-            if r.success:
-                ui.print_ok("Закоммичено")
-            else:
-                ui.print_error(f"Ошибка коммита: {r.stderr}")
-                return 1
-    else:
-        ui.print_ok("Локально чисто")
 
     ui.print_section("github sync")
     with ui.spinner_ctx("Fetch..."):
@@ -679,40 +686,15 @@ def cmd_push(
 
     ui.print_header()
     if dry_run:
-        ui.print_panel(
-            "dry-run", "Изменения не применяются, только отчёт", style="yellow"
-        )
+        ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
 
-    if not dry_run and _theme_export():
-        ui.print_ok("Noctalia тема экспортирована")
+    hostname = os.uname().nodename
+    repo = config.git_source
+    branch = config.git_branch
+    remote_url = config.git_remote_url or "https://github.com/mflkee/dotfiles.git"
 
-    if not dry_run:
-        with ui.spinner_ctx("chezmoi re-add..."):
-            r = re_add_modified()
-        if r.success:
-            ui.print_ok("chezmoi re-add — OK")
-        elif r.stderr:
-            ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
-
-    gs = git_status(repo)
-    if gs.error:
-        ui.print_error(f"Git: {gs.error}")
+    if _sync_prep(config, dry_run) != 0:
         return 1
-
-    if not gs.is_clean:
-        if dry_run:
-            ui.print_info("Есть локальные изменения — будут закоммичены")
-        else:
-            with ui.spinner_ctx("Коммит..."):
-                msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                r = commit(repo, msg)
-            if r.success:
-                ui.print_ok("Закоммичено")
-            else:
-                ui.print_error(f"Ошибка: {r.stderr}")
-                return 1
-    else:
-        ui.print_ok("Изменений нет")
 
     ui.print_section("github sync")
     with ui.spinner_ctx("Fetch..."):

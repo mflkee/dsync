@@ -139,30 +139,6 @@ def diverts_check(repo_path: Path, branch: str = "main") -> tuple[int, int]:
         return (0, 0)
 
 
-def re_add_secrets() -> GitResult:
-    """Re-add encrypted secrets so chezmoi source stays in sync with live files."""
-    secrets = Path.home() / ".config" / "zsh" / "secrets.zsh"
-    if not secrets.exists():
-        return GitResult(success=True)
-    try:
-        result = subprocess.run(
-            ["chezmoi", "re-add", str(secrets)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return GitResult(
-            success=result.returncode == 0,
-            stdout=result.stdout.strip(),
-            stderr=result.stderr.strip(),
-            returncode=result.returncode,
-        )
-    except subprocess.TimeoutExpired:
-        return GitResult(success=False, stderr="chezmoi re-add timed out", returncode=-1)
-    except FileNotFoundError:
-        return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
-
-
 def re_add_modified() -> GitResult:
     """Re-add ALL chezmoi-managed files that differ from the source state.
 
@@ -217,22 +193,6 @@ def re_add_modified() -> GitResult:
         return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
 
 
-def _chezmoi_managed_set() -> set[str]:
-    """Return set of chezmoi-managed target paths (e.g. '.config/noctalia/settings.json')."""
-    try:
-        result = subprocess.run(
-            ["chezmoi", "managed", "--include", "files"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return set(result.stdout.strip().splitlines())
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    return set()
-
-
 def _target_to_source_path(target: str) -> str:
     """Convert chezmoi target path to source path.
 
@@ -251,46 +211,6 @@ def _target_to_source_path(target: str) -> str:
         else:
             result.append(part)
     return "/".join(result)
-
-
-def re_add_noctalia() -> GitResult:
-    """Re-add noctalia settings so chezmoi source stays in sync with live files."""
-    noctalia_dir = Path.home() / ".config" / "noctalia"
-    if not noctalia_dir.is_dir():
-        return GitResult(success=True)
-
-    managed = _chezmoi_managed_set()
-
-    targets = []
-    for f in noctalia_dir.rglob("*"):
-        if not f.is_file():
-            continue
-        rel = str(f.relative_to(Path.home()))  # .config/noctalia/theme-profile.toml
-        source_rel = _target_to_source_path(rel)
-        if rel in managed or source_rel in managed:
-            targets.append(str(f))
-
-    if not targets:
-        return GitResult(success=True)
-    try:
-        result = subprocess.run(
-            ["chezmoi", "re-add"] + targets,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return GitResult(
-            success=result.returncode == 0,
-            stdout=result.stdout.strip(),
-            stderr=result.stderr.strip(),
-            returncode=result.returncode,
-        )
-    except subprocess.TimeoutExpired:
-        return GitResult(
-            success=False, stderr="chezmoi re-add timed out", returncode=-1
-        )
-    except FileNotFoundError:
-        return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
 
 
 def chezmoi_apply(timeout: int = 120) -> GitResult:
