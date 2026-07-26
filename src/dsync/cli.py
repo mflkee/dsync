@@ -679,11 +679,6 @@ def cmd_push(
         ui.print_info("Добавь: dsync add <имя> <host>")
         return 1
 
-    hostname = os.uname().nodename
-    repo = config.git_source
-    branch = config.git_branch
-    remote_url = config.git_remote_url or "https://github.com/mflkee/dotfiles.git"
-
     ui.print_header()
     if dry_run:
         ui.print_panel("dry-run", "Изменения не применяются, только отчёт", style="yellow")
