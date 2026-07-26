@@ -139,6 +139,8 @@ fi
 if ! out=$(~/.local/bin/noctalia-overrides.sh 2>&1); then
   THEME_ERR="${{THEME_ERR:+$THEME_ERR; }}overrides: $out"
 fi
+# Import Zen Browser profile
+dsync zen import 2>/dev/null || true
 # Report errors
 if [ -n "$CHEZMOI_ERR" ] || [ -n "$THEME_ERR" ]; then
   echo "SYNC_PARTIAL"
@@ -408,10 +410,13 @@ def cmd_sync(
         else:
             ui.print_info("noctalia-theme-export: пропускаю (не найден или ошибка)")
 
-    gs = git_status(repo)
-    if gs.error:
-        ui.print_error(f"Ошибка git: {gs.error}")
-        return 1
+        ui.print_section("zen browser")
+        zen_dest = repo / "dot_config" / "dsync" / "zen.json"
+        with ui.spinner_ctx("Экспорт Zen Browser..."):
+            if export_zen(zen_dest):
+                ui.print_ok("Zen профиль экспортирован")
+            else:
+                ui.print_info("Zen Browser не найден — пропускаю")
 
     if not dry_run:
         with ui.spinner_ctx("chezmoi re-add..."):
@@ -420,6 +425,11 @@ def cmd_sync(
             ui.print_ok("chezmoi re-add — OK")
         elif r.stderr:
             ui.print_warn(f"chezmoi re-add: {r.stderr[:200]}")
+
+    gs = git_status(repo)
+    if gs.error:
+        ui.print_error(f"Ошибка git: {gs.error}")
+        return 1
 
     if not gs.is_clean:
         if dry_run:
@@ -801,6 +811,14 @@ def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
 
     if _theme_apply():
         ui.print_ok("Noctalia тема применена")
+
+    zen_src = config.git_source / "dot_config" / "dsync" / "zen.json"
+    if zen_src.exists():
+        with ui.spinner_ctx("Импорт Zen Browser..."):
+            if import_zen(zen_src):
+                ui.print_ok("Zen профиль импортирован")
+            else:
+                ui.print_info("Zen Browser не найден — пропускаю")
 
     return 0
 
