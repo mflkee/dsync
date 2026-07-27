@@ -49,22 +49,48 @@ logger = logging.getLogger(__name__)
 
 
 def _theme_export() -> bool:
+    logger.info("theme export: starting noctalia-theme-export")
     try:
         r = subprocess.run(
             ["noctalia-theme-export"], capture_output=True, text=True, timeout=10
         )
+        if r.returncode == 0:
+            logger.info("theme export: ok — %s", r.stdout.strip()[:200])
+        else:
+            logger.warning(
+                "theme export: failed (rc=%d) — %s",
+                r.returncode,
+                r.stderr.strip()[:200],
+            )
         return r.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError as e:
+        logger.warning("theme export: command not found — %s", e)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning("theme export: timed out after 10s")
         return False
 
 
 def _theme_apply() -> bool:
+    logger.info("theme apply: starting noctalia-theme-apply")
     try:
         r = subprocess.run(
             ["noctalia-theme-apply"], capture_output=True, text=True, timeout=10
         )
+        if r.returncode == 0:
+            logger.info("theme apply: ok — %s", r.stdout.strip()[:200])
+        else:
+            logger.warning(
+                "theme apply: failed (rc=%d) — %s",
+                r.returncode,
+                r.stderr.strip()[:200],
+            )
         return r.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError as e:
+        logger.warning("theme apply: command not found — %s", e)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning("theme apply: timed out after 10s")
         return False
 
 
