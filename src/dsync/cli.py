@@ -48,50 +48,39 @@ from .zen import export_zen, find_profile, import_zen
 logger = logging.getLogger(__name__)
 
 
-def _theme_export() -> bool:
-    logger.info("theme export: starting noctalia-theme-export")
+def _run_script(name: str, cmd: list[str], timeout: int = 10) -> bool:
+    """Run an external script, log result, return success."""
+    logger.info("%s: starting %s", name, cmd[0])
     try:
-        r = subprocess.run(
-            ["noctalia-theme-export"], capture_output=True, text=True, timeout=10
-        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if r.returncode == 0:
-            logger.info("theme export: ok — %s", r.stdout.strip()[:200])
+            logger.info("%s: ok — %s", name, r.stdout.strip()[:200])
         else:
             logger.warning(
-                "theme export: failed (rc=%d) — %s",
+                "%s: failed (rc=%d) — %s",
+                name,
                 r.returncode,
                 r.stderr.strip()[:200],
             )
         return r.returncode == 0
     except OSError as e:
-        logger.warning("theme export: command not found — %s", e)
+        logger.warning("%s: command not found — %s", name, e)
         return False
     except subprocess.TimeoutExpired:
-        logger.warning("theme export: timed out after 10s")
+        logger.warning("%s: timed out after %ds", name, timeout)
         return False
+
+
+def _theme_export() -> bool:
+    ok = _run_script("noctalia-export", ["noctalia-theme-export"])
+    _run_script("zen-theme-export", ["zen-theme-export"])
+    return ok
 
 
 def _theme_apply() -> bool:
-    logger.info("theme apply: starting noctalia-theme-apply")
-    try:
-        r = subprocess.run(
-            ["noctalia-theme-apply"], capture_output=True, text=True, timeout=10
-        )
-        if r.returncode == 0:
-            logger.info("theme apply: ok — %s", r.stdout.strip()[:200])
-        else:
-            logger.warning(
-                "theme apply: failed (rc=%d) — %s",
-                r.returncode,
-                r.stderr.strip()[:200],
-            )
-        return r.returncode == 0
-    except OSError as e:
-        logger.warning("theme apply: command not found — %s", e)
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("theme apply: timed out after 10s")
-        return False
+    ok = _run_script("noctalia-apply", ["noctalia-theme-apply"])
+    _run_script("zen-theme-apply", ["zen-theme-apply"])
+    return ok
 
 
 def _log_theme_profile(repo: Path) -> None:
