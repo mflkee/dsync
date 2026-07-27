@@ -99,10 +99,16 @@ def get_status(repo_path: Path) -> GitStatus:
 
 
 def commit(repo_path: Path, message: str) -> GitResult:
+    logger.info("git commit: %s (cwd=%s)", message, repo_path)
     add = _git(repo_path, ["add", "-A"])
     if not add.success:
         return add
-    return _git(repo_path, ["commit", "-m", message])
+    r = _git(repo_path, ["commit", "-m", message])
+    if r.success:
+        logger.info("git commit: ok — %s", r.stdout.strip()[:100])
+    else:
+        logger.warning("git commit: failed — %s", r.stderr.strip()[:200])
+    return r
 
 
 def pull(repo_path: Path, branch: str = "main") -> GitResult:
@@ -110,7 +116,13 @@ def pull(repo_path: Path, branch: str = "main") -> GitResult:
 
 
 def fetch(repo_path: Path) -> GitResult:
-    return _git(repo_path, ["fetch", "origin"], timeout=30)
+    logger.info("git fetch origin (cwd=%s)", repo_path)
+    r = _git(repo_path, ["fetch", "origin"], timeout=30)
+    if r.success:
+        logger.info("git fetch: ok")
+    else:
+        logger.warning("git fetch: failed — %s", r.stderr.strip()[:200])
+    return r
 
 
 def get_remote_url(repo_path: Path, remote: str = "origin") -> str | None:
@@ -122,7 +134,13 @@ def get_remote_url(repo_path: Path, remote: str = "origin") -> str | None:
 
 
 def push(repo_path: Path, branch: str = "main") -> GitResult:
-    return _git(repo_path, ["push", "origin", branch], timeout=180)
+    logger.info("git push origin %s (cwd=%s)", branch, repo_path)
+    r = _git(repo_path, ["push", "origin", branch], timeout=180)
+    if r.success:
+        logger.info("git push: ok")
+    else:
+        logger.warning("git push: failed — %s", r.stderr.strip()[:200])
+    return r
 
 
 def diverts_check(repo_path: Path, branch: str = "main") -> tuple[int, int]:
@@ -131,12 +149,15 @@ def diverts_check(repo_path: Path, branch: str = "main") -> tuple[int, int]:
         repo_path, ["rev-list", "--count", "--left-right", f"HEAD...origin/{branch}"]
     )
     if not r.success:
+        logger.warning("diverts_check: failed — %s", r.stderr.strip()[:100])
         return (0, 0)
     parts = r.stdout.split()
     if len(parts) != 2:
         return (0, 0)
     try:
-        return int(parts[0]), int(parts[1])
+        ahead, behind = int(parts[0]), int(parts[1])
+        logger.info("diverts_check: ahead=%d behind=%d (branch=%s)", ahead, behind, branch)
+        return ahead, behind
     except ValueError:
         return (0, 0)
 
@@ -216,6 +237,7 @@ def _target_to_source_path(target: str) -> str:
 
 
 def chezmoi_apply(timeout: int = 120) -> GitResult:
+    logger.info("chezmoi apply --force (timeout=%ds)", timeout)
     try:
         result = subprocess.run(
             ["chezmoi", "apply", "--force"],
@@ -223,6 +245,14 @@ def chezmoi_apply(timeout: int = 120) -> GitResult:
             text=True,
             timeout=timeout,
         )
+        if result.returncode == 0:
+            logger.info("chezmoi apply: ok")
+        else:
+            logger.warning(
+                "chezmoi apply: failed (rc=%d) — %s",
+                result.returncode,
+                result.stderr.strip()[:200],
+            )
         return GitResult(
             success=result.returncode == 0,
             stdout=result.stdout.strip(),
@@ -230,8 +260,10 @@ def chezmoi_apply(timeout: int = 120) -> GitResult:
             returncode=result.returncode,
         )
     except subprocess.TimeoutExpired:
+        logger.warning("chezmoi apply: timed out after %ds", timeout)
         return GitResult(success=False, stderr="chezmoi apply timed out", returncode=-1)
     except FileNotFoundError:
+        logger.warning("chezmoi apply: chezmoi not found")
         return GitResult(success=False, stderr="chezmoi not found", returncode=-2)
 
 
