@@ -301,18 +301,26 @@ def _sync_one_machine(
 
     ip = resolve_host(host)
     if not ip or not check_port(ip):
+        logger.info("remote sync[%s]: offline (ip=%s)", name, ip)
         return name, "skipped", "офлайн"
 
     if dry_run:
         return name, "success", "будет синхронизировано"
 
+    logger.info("remote sync[%s]: starting (host=%s, ip=%s)", name, host, ip)
     rcmd = _remote_sync_script(repo_path, branch, remote_url)
     r = ssh_run(ip, rcmd, user=user, timeout=300, retries=3)
+
+    if r.stdout:
+        for line in r.stdout.strip().splitlines():
+            logger.info("remote sync[%s] stdout: %s", name, line[:200])
 
     if r.success and "NO_CHEZMOI" not in r.stdout:
         if "SYNC_PARTIAL" in r.stdout:
             note = "синхронизировано (с предупреждениями)"
+            logger.info("remote sync[%s]: ok with warnings", name)
             return name, "success", note
+        logger.info("remote sync[%s]: ok", name)
         return name, "success", ""
 
     if "NO_CHEZMOI" in r.stdout:
@@ -325,6 +333,7 @@ def _sync_one_machine(
     )
     if not note:
         note = f"код {r.returncode}"
+    logger.warning("remote sync[%s]: failed — %s", name, note[:200])
     return name, "failed", note
 
 
@@ -882,19 +891,23 @@ def cmd_pull(config: Config, strategy: str = "", dry_run: bool = False):
         ui.print_info("Будет выполнен chezmoi apply (dry-run)")
         return 0
 
+    _log_theme_profile(repo)
     with ui.spinner_ctx("chezmoi apply..."):
         r = chezmoi_apply()
     if r.success:
         ui.print_ok("chezmoi apply — OK")
+        logger.info("cmd_pull: chezmoi apply ok")
     else:
         ui.print_warn(
             f"chezmoi apply: {r.stderr[:200]}"
             if r.stderr
             else "chezmoi apply: предупреждения"
         )
+        logger.warning("cmd_pull: chezmoi apply — %s", r.stderr[:200] if r.stderr else "warnings")
 
     if _theme_apply():
         ui.print_ok("Noctalia тема применена")
+    _log_theme_profile(repo)
 
     zen_src = config.git_source / "dot_config" / "dsync" / "zen.json"
     if zen_src.exists():

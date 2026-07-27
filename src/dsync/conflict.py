@@ -69,16 +69,23 @@ def safe_pull(repo_path: Path, branch: str = "main") -> tuple[GitResult, bool]:
     (UU files present or CONFLICT markers in output). Network/auth
     failures return had_conflict=False so callers can retry/report.
     """
+    import logging
+
+    _logger = logging.getLogger(__name__)
+    _logger.info("safe_pull: pull --rebase origin %s (cwd=%s)", branch, repo_path)
     r = _git(repo_path, ["pull", "--rebase", "origin", branch], timeout=60)
 
     if r.success:
+        _logger.info("safe_pull: ok — %s", r.stdout.strip()[:200])
         return (r, False)
 
+    _logger.warning("safe_pull: pull failed — %s", r.stderr.strip()[:200])
     output = (r.stdout + "\n" + r.stderr).lower()
     conflict_markers = ("conflict", "could not apply", "failed to merge")
     looks_like_conflict = any(m in output for m in conflict_markers)
 
     if has_conflict(repo_path):
+        _logger.warning("safe_pull: real conflict detected (UU files), aborting")
         if is_rebasing(repo_path):
             rebase_abort(repo_path)
         else:
@@ -86,6 +93,7 @@ def safe_pull(repo_path: Path, branch: str = "main") -> tuple[GitResult, bool]:
         return (r, True)
 
     if is_rebasing(repo_path):
+        _logger.warning("safe_pull: rebase in progress, aborting")
         rebase_abort(repo_path)
         return (r, looks_like_conflict)
 
