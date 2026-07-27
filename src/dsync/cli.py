@@ -1490,7 +1490,6 @@ def _print_help():
 
 def main():
     config = Config.ensure_default()
-    setup_logging(str(config.log_file), config.log_level)
 
     for err in config.validate():
         ui.print_warn(f"config: {err}")
@@ -1686,6 +1685,9 @@ def main():
     sub.add_parser("help", help="Показать справку с примерами")
 
     args = parser.parse_args()
+
+    log_level = "DEBUG" if getattr(args, "debug", False) else config.log_level
+    setup_logging(str(config.log_file), log_level)
 
     if not args.command:
         _print_help()
