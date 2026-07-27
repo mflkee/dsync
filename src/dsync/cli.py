@@ -250,10 +250,13 @@ if ! out=$(cd {q_repo} && "$C" apply --force 2>&1); then
 elif ! out=$(cd {q_repo} && "$C" apply 2>&1); then
   CHEZMOI_ERR="chezmoi: $out"
 fi
-# Apply noctalia theme
+# Apply noctalia + zen themes
 THEME_ERR=""
 if ! out=$(noctalia-theme-apply 2>&1); then
   THEME_ERR="theme: $out"
+fi
+if ! out=$(zen-theme-apply 2>&1); then
+  THEME_ERR="${{THEME_ERR:+$THEME_ERR; }}zen-theme: $out"
 fi
 # Apply noctalia overrides
 if ! out=$(~/.local/bin/noctalia-overrides.sh 2>&1); then
