@@ -1501,6 +1501,9 @@ def main():
     parser.add_argument(
         "--version", action="version", version="dsync 0.1.0"
     )
+    parser.add_argument(
+        "--debug", action="store_true", help="Включить DEBUG логирование"
+    )
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("status", help="Показать статус всех машин")
