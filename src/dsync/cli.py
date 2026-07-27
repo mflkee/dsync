@@ -94,14 +94,42 @@ def _theme_apply() -> bool:
         return False
 
 
+def _log_theme_profile(repo: Path) -> None:
+    """Log current theme profile state for diagnostics."""
+    profile = repo / "dot_config" / "noctalia" / "theme-profile.toml"
+    if profile.exists():
+        content = profile.read_text()
+        import hashlib
+
+        h = hashlib.sha256(content.encode()).hexdigest()[:12]
+        # Extract theme name if present
+        theme_name = "unknown"
+        for line in content.splitlines():
+            if line.strip().startswith("name"):
+                theme_name = line.split("=", 1)[-1].strip().strip('"')
+                break
+        logger.info(
+            "theme profile: %s (hash=%s, lines=%d)",
+            profile,
+            h,
+            len(content.splitlines()),
+        )
+        logger.info("theme profile name: %s", theme_name)
+    else:
+        logger.warning("theme profile not found: %s", profile)
+
+
 def _sync_prep(config: Config, dry_run: bool) -> int:
     """Shared preparation: theme export + re-add + git commit. Returns 0 on success."""
     hostname = os.uname().nodename
     repo = config.git_source
+    logger.info("sync_prep: hostname=%s repo=%s", hostname, repo)
 
     if not dry_run:
+        _log_theme_profile(repo)
         if _theme_export():
             ui.print_ok("Тема экспортирована")
+            _log_theme_profile(repo)
         else:
             ui.print_info("noctalia-theme-export: пропускаю (не найден или ошибка)")
 
@@ -143,6 +171,14 @@ def _sync_prep(config: Config, dry_run: bool) -> int:
     if gs.error:
         ui.print_error(f"Ошибка git: {gs.error}")
         return 1
+
+    logger.info(
+        "sync_prep: git status — clean=%s, ahead=%d, behind=%d, files_changed=%d",
+        gs.is_clean,
+        gs.ahead,
+        gs.behind,
+        len(gs.modified) + len(gs.untracked),
+    )
 
     if gs.is_clean:
         ui.print_ok("Локально чисто")
@@ -507,15 +543,36 @@ def cmd_sync(
         fetch(repo)
 
     ahead, behind = diverts_check(repo, branch)
+    logger.info("github sync: ahead=%d behind=%d", ahead, behind)
     if behind > 0:
         ui.print_info(f"Удалённых коммитов: {behind}")
         if dry_run:
             ui.print_info("Будет выполнен pull")
         else:
+            _log_theme_profile(repo)
             with ui.spinner_ctx("Pull..."):
                 r, had_conflict = safe_pull(repo, branch)
             if r.success:
                 ui.print_ok("Pull выполнен")
+                logger.info("pull ok — stdout: %s", r.stdout.strip()[:200])
+                _log_theme_profile(repo)
+                # Re-export theme after pull — other machines may have pushed
+                # their version; capture current local state so it's not lost.
+                logger.info("post-pull: re-exporting theme to preserve local state")
+                if _theme_export():
+                    ui.print_ok("Тема ре-экспортирована после pull")
+                    logger.info("post-pull: theme re-exported")
+                else:
+                    logger.info("post-pull: theme re-export skipped (noctalia not available)")
+                with ui.spinner_ctx("chezmoi re-add..."):
+                    r2 = re_add_modified()
+                if r2.success:
+                    ui.print_ok("chezmoi re-add — OK")
+                gs_recheck = git_status(repo)
+                if not gs_recheck.is_clean:
+                    msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                    logger.info("post-pull: committing re-export changes")
+                    commit(repo, msg)
             elif had_conflict:
                 ui._print()
                 ui.print_warn("Конфликт при pull!")
@@ -544,8 +601,10 @@ def cmd_sync(
                 r = push(repo, branch)
             if r.success:
                 ui.print_ok("Запущено на GitHub")
+                logger.info("push ok")
             else:
                 ui.print_error(f"Ошибка push: {r.stderr}")
+                logger.error("push failed: %s", r.stderr[:200])
                 return 1
 
     nb = get_status()
