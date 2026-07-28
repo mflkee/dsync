@@ -408,4 +408,19 @@ def import_zen(source: Path) -> bool:
         _write_lz4(profile / "zen-live-folders.jsonlz4", export["live_folders"])
         ui.print_ok("zen-live-folders.jsonlz4 — обновлён")
 
+    _clean_sessionstore(profile)
     return True
+
+
+def _clean_sessionstore(profile: Path) -> None:
+    """Remove Firefox sessionstore files so Zen uses the imported session."""
+    sessionstore = profile / "sessionstore.jsonlz4"
+    if sessionstore.exists():
+        sessionstore.unlink()
+        ui.print_info("sessionstore.jsonlz4 — удалён (восстановление сессии отключено)")
+
+    backups = profile / "sessionstore-backups"
+    if backups.is_dir():
+        import shutil
+        shutil.rmtree(backups)
+        ui.print_info("sessionstore-backups/ — удалены")
