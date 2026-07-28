@@ -166,7 +166,7 @@ def _sync_prep(config: Config, dry_run: bool) -> int:
         gs.is_clean,
         gs.ahead,
         gs.behind,
-        len(gs.modified) + len(gs.untracked),
+        gs.staged + gs.unstaged + gs.untracked,
     )
 
     if gs.is_clean:
