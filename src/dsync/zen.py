@@ -134,13 +134,18 @@ def export_zen(dest: Path) -> Path | None:
     return dest
 
 
-def _merge_groups(local_groups: list, export_groups: list) -> list:
-    """Merge groups by name. Add new groups, update matching ones."""
+def _merge_groups(local_groups: list, export_groups: list) -> tuple[list, dict]:
+    """Merge groups by name. Add new groups, update matching ones.
+
+    Returns (merged_groups, old_id_to_new_id_map).
+    """
     merged = list(local_groups)
     local_by_name = {g.get("name"): g for g in merged if g.get("name")}
+    id_map: dict[str, str] = {}
 
     for eg in export_groups:
         name = eg.get("name")
+        old_id = eg.get("id", "")
         if not name:
             continue
         if name in local_by_name:
@@ -149,8 +154,9 @@ def _merge_groups(local_groups: list, export_groups: list) -> list:
             for key in ("color", "pinned", "collapsed", "saveOnWindowClose"):
                 if key in eg:
                     lg[key] = eg[key]
+            if old_id:
+                id_map[old_id] = lg["id"]
         else:
-            # Add new group with new ID
             new_id = str(uuid.uuid4().int)[:19]
             new_group = {
                 "id": new_id,
@@ -162,15 +168,21 @@ def _merge_groups(local_groups: list, export_groups: list) -> list:
                 "saveOnWindowClose": eg.get("saveOnWindowClose", True),
             }
             merged.append(new_group)
+            if old_id:
+                id_map[old_id] = new_id
 
-    return merged
+    return merged, id_map
 
 
 def _merge_folders(
-    local_folders: list, export_folders: list, group_id_map: dict | None = None
-) -> list:
-    """Merge folders by name+workspaceId."""
+    local_folders: list, export_folders: list, workspace_id_map: dict | None = None
+) -> tuple[list, dict]:
+    """Merge folders by name+workspaceId.
+
+    Returns (merged_folders, old_id_to_new_id_map).
+    """
     merged = list(local_folders)
+    id_map: dict[str, str] = {}
 
     def _key(f):
         return (f.get("name"), f.get("workspaceId", ""))
@@ -180,21 +192,28 @@ def _merge_folders(
     for ef in export_folders:
         k = _key(ef)
         name = ef.get("name")
+        old_id = ef.get("id", "")
         if not name:
             continue
+        # Translate workspaceId if needed
+        ws_id = ef.get("workspaceId", "")
+        if workspace_id_map and ws_id in workspace_id_map:
+            ws_id = workspace_id_map[ws_id]
+            k = (name, ws_id)
         if k in local_keys:
             idx = local_keys[k]
             lf = merged[idx]
             for key in ("collapsed", "pinned", "userIcon", "saveOnWindowClose"):
                 if key in ef:
                     lf[key] = ef[key]
+            if old_id:
+                id_map[old_id] = lf["id"]
         else:
-            # Create new folder. IDs are machine-local, so generate new.
             new_id = str(uuid.uuid4().int)[:19]
             nf = {
                 "id": new_id,
                 "name": name,
-                "workspaceId": ef.get("workspaceId", ""),
+                "workspaceId": ws_id,
                 "pinned": ef.get("pinned", True),
                 "collapsed": ef.get("collapsed", False),
                 "splitViewGroup": ef.get("splitViewGroup", False),
@@ -205,32 +224,39 @@ def _merge_folders(
                 if key in ef:
                     nf[key] = ef[key]
             merged.append(nf)
+            if old_id:
+                id_map[old_id] = new_id
 
-    return merged
+    return merged, id_map
 
 
 def _merge_spaces(
     local_spaces: list, export_spaces: list, containers: dict | None = None
-) -> list:
-    """Merge workspaces by name. Add new ones, update matching ones."""
+) -> tuple[list, dict]:
+    """Merge workspaces by name. Add new ones, update matching ones.
+
+    Returns (merged_spaces, old_uuid_to_new_uuid_map).
+    """
     merged = list(local_spaces)
     local_by_name = {s.get("name"): s for s in merged if s.get("name")}
+    uuid_map: dict[str, str] = {}
 
     for es in export_spaces:
         name = es.get("name")
+        old_uuid = es.get("uuid", "")
         if not name:
             continue
         if name in local_by_name:
-            # Update existing workspace properties
             ls = local_by_name[name]
             for key in ("icon", "theme", "hasCollapsedPinnedTabs"):
                 if key in es:
                     ls[key] = es[key]
+            if old_uuid:
+                uuid_map[old_uuid] = ls["uuid"]
         else:
-            # Generate new UUID and create workspace
-            new_uuid = str(uuid.uuid4()).upper()
+            new_uuid = "{" + str(uuid.uuid4()).upper() + "}"
             new_workspace: dict = {
-                "uuid": "{" + new_uuid + "}",
+                "uuid": new_uuid,
                 "name": name,
                 "icon": es.get(
                     "icon", "chrome://browser/skin/zen-icons/selectable/circle.svg"
@@ -246,18 +272,16 @@ def _merge_spaces(
                 ),
                 "hasCollapsedPinnedTabs": False,
             }
-            # Try to find matching container
             if containers and es.get("containerTabId") is not None:
                 exported_ctid = es["containerTabId"]
-                # Look up the container by userContextId from containers.json
                 for identity in containers.get("identities", []):
                     if identity.get("userContextId") == exported_ctid:
-                        # The same container name exists locally, use its userContextId
-                        # For standard containers, they match by l10nId
                         break
             merged.append(new_workspace)
+            if old_uuid:
+                uuid_map[old_uuid] = new_uuid
 
-    return merged
+    return merged, uuid_map
 
 
 def import_zen(source: Path) -> bool:
