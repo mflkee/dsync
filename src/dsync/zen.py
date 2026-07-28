@@ -220,9 +220,13 @@ def _merge_folders(
                 "saveOnWindowClose": ef.get("saveOnWindowClose", True),
                 "emptyTabIds": [],
             }
-            for key in ("prevSiblingInfo", "parentId", "userIcon"):
+            for key in ("prevSiblingInfo", "userIcon"):
                 if key in ef:
                     nf[key] = ef[key]
+            if "parentId" in ef and ef["parentId"] in id_map:
+                nf["parentId"] = id_map[ef["parentId"]]
+            elif "parentId" in ef:
+                nf["parentId"] = ef["parentId"]
             merged.append(nf)
             if old_id:
                 id_map[old_id] = new_id
@@ -321,44 +325,67 @@ def import_zen(source: Path) -> bool:
         old_folders_count = len(local.get("folders", []))
 
         # Merge spaces
+        workspace_uuid_map: dict[str, str] = {}
         if export.get("spaces") is not None:
-            local["spaces"] = _merge_spaces(
+            merged, wmap = _merge_spaces(
                 local.get("spaces", []),
                 export["spaces"],
                 export.get("containers"),
             )
+            local["spaces"] = merged
+            workspace_uuid_map = wmap
 
         # Merge groups
+        group_id_map: dict[str, str] = {}
         if export.get("groups") is not None:
-            local["groups"] = _merge_groups(
+            merged, gmap = _merge_groups(
                 local.get("groups", []),
                 export["groups"],
             )
+            local["groups"] = merged
+            group_id_map = gmap
 
         # Merge folders
+        folder_id_map: dict[str, str] = {}
         if export.get("folders") is not None:
-            local["folders"] = _merge_folders(
+            merged, fmap = _merge_folders(
                 local.get("folders", []),
                 export["folders"],
+                workspace_uuid_map,
             )
+            local["folders"] = merged
+            folder_id_map = fmap
 
         # Add new pinned tabs from export that don't exist locally
-        # Build a set of all local URLs
         new_tabs_added = 0
         if export.get("pinned_tabs"):
             local_tabs = local.get("tabs", [])
             for pt in export["pinned_tabs"]:
-                # Get the URL
                 entries = pt.get("entries", [])
                 if not entries:
                     continue
                 url = entries[0].get("url", "")
                 if not url or url == "about:blank":
                     continue
-                # Check if we already have this URL
                 if _tabs_contain(local_tabs, url):
                     continue
-                # Create a new tab entry
+
+                # Translate group/workspace/folder IDs from export to local
+                group_id = pt.get("groupId", "")
+                if group_id in group_id_map:
+                    group_id = group_id_map[group_id]
+
+                zen_workspace = pt.get("zenWorkspace", "")
+                if zen_workspace in workspace_uuid_map:
+                    zen_workspace = workspace_uuid_map[zen_workspace]
+
+                folder_id = pt.get("zenLiveFolderItemId", "")
+                if folder_id in folder_id_map:
+                    folder_id = folder_id_map[folder_id]
+                elif folder_id:
+                    # If folder ID not found in map, don't link to a stale ID
+                    folder_id = None
+
                 new_tab = {
                     "entries": [
                         {
@@ -371,6 +398,10 @@ def import_zen(source: Path) -> bool:
                     "pinned": pt.get("pinned", True),
                     "hidden": False,
                     "index": len(local_tabs) + 1,
+                    "groupId": group_id or None,
+                    "zenWorkspace": zen_workspace or None,
+                    "zenLiveFolderItemId": folder_id,
+                    "zenSyncId": pt.get("zenSyncId", ""),
                     "userContextId": pt.get("userContextId", 0),
                     "attributes": {},
                 }
