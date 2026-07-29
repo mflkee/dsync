@@ -62,6 +62,11 @@ def auto_self_update() -> bool:
             f"dsync отстаёт на {st.behind}, но репозиторий грязный — пропускаю"
         )
         return True
+    if st.ahead > 0:
+        ui.print_warn(
+            f"dsync отстаёт на {st.behind}, но есть {st.ahead} локальных коммитов — пропускаю"
+        )
+        return True
     ui.print_info(f"dsync отстаёт на {st.behind} коммитов, обновляю...")
     with ui.spinner_ctx("Обновление dsync..."):
         r = selfupdate.self_update()

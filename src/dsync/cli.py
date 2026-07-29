@@ -12,12 +12,14 @@ import lz4.block
 
 from . import ui
 from .chezmoi import (
+    _git,
     chezmoi_apply,
     commit,
     diverts_check,
     fetch,
     push,
     re_add_modified,
+    starship_theme_sync,
     tmux_export,
     tmux_import,
     tmux_theme_sync,
@@ -148,6 +150,15 @@ def _sync_prep(config: Config, dry_run: bool) -> int:
         else:
             ui.print_info(f"Tmux тема: {r.stderr[:100]}")
 
+        ui.print_section("starship theme")
+        starship_dest = repo / "dot_config" / "starship.toml"
+        with ui.spinner_ctx("Синхронизация темы starship..."):
+            r = starship_theme_sync(starship_dest)
+        if r.success:
+            ui.print_ok("Starship тема синхронизирована")
+        else:
+            ui.print_info(f"Starship тема: {r.stderr[:100]}")
+
     if not dry_run:
         with ui.spinner_ctx("chezmoi re-add..."):
             r = re_add_modified()
@@ -173,11 +184,26 @@ def _sync_prep(config: Config, dry_run: bool) -> int:
         ui.print_ok("Локально чисто")
     elif not dry_run:
         ui.print_section("local changes")
+        st = _git(repo, ["status", "--short"])
+        if st.success and st.stdout:
+            for line in st.stdout.splitlines()[:20]:
+                ui.print_info(f"  {line}")
+            if len(st.stdout.splitlines()) > 20:
+                ui.print_info(f"  ... и ещё {len(st.stdout.splitlines()) - 20} файлов")
         with ui.spinner_ctx("Коммит..."):
             msg = f"sync: {hostname} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             r = commit(repo, msg)
         if r.success:
             ui.print_ok("Закоммичено")
+            # Explicitly show divergence after commit so the user sees why push
+            # will or will not happen.
+            gs_post = git_status(repo)
+            if gs_post.ahead > 0:
+                ui.print_info(f"Локально впереди на {gs_post.ahead} — будет запушено")
+            elif gs_post.behind > 0:
+                ui.print_info(f"Локально позади на {gs_post.behind} — сначала pull")
+            else:
+                ui.print_info("Ветки синхронизированы — push не требуется")
         elif r.stderr:
             ui.print_error(f"Ошибка коммита: {r.stderr}")
             return 1
@@ -197,6 +223,44 @@ def _filter_machines(config: Config, only: list[str]) -> dict:
     return {n: i for n, i in machines.items() if n in only}
 
 
+def _apply_local(repo: Path, config: Config) -> None:
+    """Apply dotfiles locally: chezmoi, themes, zen, tmux."""
+    _log_theme_profile(repo)
+    with ui.spinner_ctx("chezmoi apply..."):
+        r = chezmoi_apply()
+    if r.success:
+        ui.print_ok("chezmoi apply — OK")
+        logger.info("local apply: chezmoi apply ok")
+    else:
+        ui.print_warn(
+            f"chezmoi apply: {r.stderr[:200]}"
+            if r.stderr
+            else "chezmoi apply: предупреждения"
+        )
+        logger.warning("local apply: chezmoi apply — %s", r.stderr[:200] if r.stderr else "warnings")
+
+    if _theme_apply():
+        ui.print_ok("Noctalia тема применена")
+    _log_theme_profile(repo)
+
+    zen_src = config.git_source / "dot_config" / "dsync" / "zen.json"
+    if zen_src.exists():
+        with ui.spinner_ctx("Импорт Zen Browser..."):
+            if import_zen(zen_src):
+                ui.print_ok("Zen профиль импортирован")
+            else:
+                ui.print_info("Zen Browser не найден — пропускаю")
+
+    tmux_src = config.git_source / "dot_config" / "dsync" / "tmux-session.txt"
+    if tmux_src.exists():
+        with ui.spinner_ctx("Импорт tmux сессии..."):
+            r = tmux_import(tmux_src)
+        if r.success:
+            ui.print_ok("Tmux сессия импортирована")
+        else:
+            ui.print_info("Tmux не запущен — пропускаю")
+
+
 def _remote_sync_script(repo_path: str, branch: str, remote_url: str) -> str:
     q_repo = shlex.quote(repo_path)
     q_branch = shlex.quote(branch)
@@ -209,20 +273,31 @@ exec 2>&1
 C="$(command -v chezmoi)"
 if [ -d {q_repo}/.git ]; then
   cd {q_repo}
-  git fetch {q_url} {q_branch} || true
+  if [ -n {q_url} ]; then
+    git fetch {q_url} {q_branch} || true
+  fi
+  git stash push -m "dsync-auto-$(date +%s)" 2>/dev/null || true
   git reset HEAD . 2>/dev/null || true
   git checkout -- . 2>/dev/null || true
   git clean -fd 2>/dev/null || true
-  if ! git pull --rebase {q_url} {q_branch}; then
-    git rebase --abort 2>/dev/null || true
-    git reset --hard FETCH_HEAD || true
+  if [ -n {q_url} ]; then
+    if ! git pull --rebase {q_url} {q_branch}; then
+      git rebase --abort 2>/dev/null || true
+      git reset --hard FETCH_HEAD || true
+    fi
+  else
+    echo "NO_REMOTE_URL"
   fi
 else
-  rm -rf {q_repo} && git clone {q_url} {q_repo} || {{ echo "CLONE_FAIL"; exit 0; }}
+  if [ -n {q_url} ]; then
+    rm -rf {q_repo} && git clone {q_url} {q_repo} || {{ echo "CLONE_FAIL"; exit 0; }}
+  else
+    echo "NO_REMOTE_URL"; exit 0
+  fi
 fi
 if [ -z "$C" ]; then echo "NO_CHEZMOI"; exit 0; fi
 # Ensure chezmoi sourceDir points to the right place
-if [ "$("$C" source-path 2>/dev/null)" != "{repo_path}" ]; then
+if [ "$("$C" source-path 2>/dev/null)" != {q_repo} ]; then
   mkdir -p "$HOME/.config/chezmoi"
   CFG="$HOME/.config/chezmoi/chezmoi.toml"
   python3 -c "
@@ -231,7 +306,7 @@ lines = cfg.split(chr(10))
 # Remove any existing sourceDir from anywhere
 lines = [l for l in lines if not l.startswith('sourceDir ')]
 # Prepend sourceDir at the top
-lines.insert(0, 'sourceDir = \"{repo_path}\"')
+lines.insert(0, 'sourceDir = ' + repr({q_repo}))
 open('$CFG', 'w').write(chr(10).join([l for l in lines if l]))
 " 2>/dev/null || true
 fi
@@ -383,10 +458,14 @@ def resolve_conflict(repo: Path, branch: str, strategy: str) -> bool | None:
     if strategy == "theirs":
         r = _git(repo, ["fetch", "origin"])
         if r.success:
-            r = _git(repo, ["merge", "-X", "theirs", f"origin/{branch}"], timeout=60)
-        if r.success:
-            ui.print_ok("Оставлена удалённая версия (theirs)")
-            return False
+            from .conflict import stash_pop, stash_push
+
+            stash_push(repo)
+            r = _git(repo, ["reset", "--hard", f"origin/{branch}"])
+            if r.success:
+                stash_pop(repo)
+                ui.print_ok("Оставлена удалённая версия (theirs)")
+                return False
         ui.print_error(f"Ошибка: {r.stderr[:200]}")
         return None
 
@@ -550,6 +629,17 @@ def cmd_sync(
         if dry_run:
             ui.print_info("Будет выполнен pull")
         else:
+            log_r = _git(
+                repo, ["log", f"HEAD..origin/{branch}", "--oneline", "--no-decorate"]
+            )
+            if log_r.success and log_r.stdout:
+                for line in log_r.stdout.splitlines()[:10]:
+                    ui.print_info(f"  → {line}")
+            diff_r = _git(repo, ["diff", "--stat", f"HEAD..origin/{branch}"])
+            if diff_r.success and diff_r.stdout:
+                ui.print_info("Изменения:")
+                for line in diff_r.stdout.splitlines()[:10]:
+                    ui.print_info(f"  {line}")
             _log_theme_profile(repo)
             with ui.spinner_ctx("Pull..."):
                 r, had_conflict = safe_pull(repo, branch)
@@ -598,6 +688,12 @@ def cmd_sync(
         if dry_run:
             ui.print_info(f"Локальных коммитов: {ahead} — будут запушены")
         else:
+            log_r = _git(
+                repo, ["log", f"origin/{branch}..HEAD", "--oneline", "--no-decorate"]
+            )
+            if log_r.success and log_r.stdout:
+                for line in log_r.stdout.splitlines()[:10]:
+                    ui.print_info(f"  ← {line}")
             with ui.spinner_ctx("Push..."):
                 r = push(repo, branch)
             if r.success:
@@ -607,6 +703,11 @@ def cmd_sync(
                 ui.print_error(f"Ошибка push: {r.stderr}")
                 logger.error("push failed: %s", r.stderr[:200])
                 return 1
+    else:
+        ui.print_ok("Push не требуется — нет локальных коммитов")
+
+    if not dry_run:
+        _apply_local(repo, config)
 
     nb = get_status()
     if nb is None:
@@ -726,8 +827,12 @@ def cmd_sync(
                     ppath.as_posix(), pbranch, pinfo.get("remote")
                 )
                 sr = ssh_run(mip, script, user=minfo.get("user", "mflkee"), timeout=300)
-                if sr.success:
+                if sr.success and "GIT_CONFLICT" not in sr.stdout and "NO_REMOTE_URL" not in sr.stdout:
                     ui.print_ok(f"  {mname}: OK")
+                elif "GIT_CONFLICT" in sr.stdout:
+                    ui.print_warn(f"  {mname}: конфликт git")
+                elif "NO_REMOTE_URL" in sr.stdout:
+                    ui.print_warn(f"  {mname}: не указан remote URL")
                 else:
                     ui.print_warn(f"  {mname}: {sr.stderr[:80]}")
 
@@ -796,6 +901,17 @@ def cmd_push(
         if dry_run:
             ui.print_info("Будет выполнен pull")
         else:
+            log_r = _git(
+                repo, ["log", f"HEAD..origin/{branch}", "--oneline", "--no-decorate"]
+            )
+            if log_r.success and log_r.stdout:
+                for line in log_r.stdout.splitlines()[:10]:
+                    ui.print_info(f"  → {line}")
+            diff_r = _git(repo, ["diff", "--stat", f"HEAD..origin/{branch}"])
+            if diff_r.success and diff_r.stdout:
+                ui.print_info("Изменения:")
+                for line in diff_r.stdout.splitlines()[:10]:
+                    ui.print_info(f"  {line}")
             with ui.spinner_ctx("Pull..."):
                 r, had_conflict = safe_pull(repo, branch)
             if r.success:
@@ -820,6 +936,12 @@ def cmd_push(
         if dry_run:
             ui.print_info(f"Локальных коммитов: {ahead} — будут запушены")
         else:
+            log_r = _git(
+                repo, ["log", f"origin/{branch}..HEAD", "--oneline", "--no-decorate"]
+            )
+            if log_r.success and log_r.stdout:
+                for line in log_r.stdout.splitlines()[:10]:
+                    ui.print_info(f"  ← {line}")
             with ui.spinner_ctx("Push..."):
                 r = push(repo, branch)
             if r.success:
@@ -827,6 +949,11 @@ def cmd_push(
             else:
                 ui.print_error(f"Ошибка push: {r.stderr}")
                 return 1
+    else:
+        ui.print_ok("Push не требуется — нет локальных коммитов")
+
+    if not dry_run:
+        _apply_local(repo, config)
 
     ui.print_section("push to machines")
     ok_count, skip_count, fail_count = _sync_machines_parallel(

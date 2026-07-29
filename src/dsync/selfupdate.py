@@ -16,6 +16,7 @@ class SelfStatus:
     branch: str = ""
     current_sha: str = ""
     remote_sha: str = ""
+    ahead: int = 0
     behind: int = 0
     is_clean: bool = True
     editable: bool = False
@@ -23,7 +24,7 @@ class SelfStatus:
 
     @property
     def up_to_date(self) -> bool:
-        return not self.error and self.behind == 0
+        return not self.error and self.ahead == 0 and self.behind == 0
 
 
 def find_install_source() -> Path | None:
@@ -79,12 +80,17 @@ def get_self_status(do_fetch: bool = True) -> SelfStatus:
         st.error = f"нет origin/{branch}"
         return st
 
-    div = _git(src, ["rev-list", "--count", f"HEAD..origin/{branch}"])
+    div = _git(
+        src, ["rev-list", "--count", "--left-right", "HEAD...origin/{branch}"]
+    )
     if div.success:
-        try:
-            st.behind = int(div.stdout)
-        except ValueError:
-            pass
+        parts = div.stdout.split()
+        if len(parts) == 2:
+            try:
+                st.ahead = int(parts[0])
+                st.behind = int(parts[1])
+            except ValueError:
+                pass
     return st
 
 
@@ -99,6 +105,11 @@ def self_update() -> GitResult:
         )
     if st.behind == 0:
         return GitResult(success=True, stdout="up-to-date")
+    if st.ahead > 0:
+        return GitResult(
+            success=False,
+            stderr=f"есть {st.ahead} локальных коммитов — сначала запушь или сбрось",
+        )
 
     assert st.source is not None
     pull = _git(st.source, ["pull", "--ff-only"], timeout=60)

@@ -257,11 +257,8 @@ def _merge_spaces(
                 ),
                 "hasCollapsedPinnedTabs": False,
             }
-            if containers and es.get("containerTabId") is not None:
-                exported_ctid = es["containerTabId"]
-                for identity in containers.get("identities", []):
-                    if identity.get("userContextId") == exported_ctid:
-                        break
+            if es.get("containerTabId") is not None:
+                new_workspace["containerTabId"] = es["containerTabId"]
             merged.append(new_workspace)
             if old_uuid:
                 uuid_map[old_uuid] = new_uuid
@@ -374,6 +371,7 @@ def import_zen(source: Path) -> bool:
         _reconcile_group_folder_ids(local, folder_id_map)
 
         # Replace pinned tabs with exported ones (with ID translation)
+        new_tabs_added = 0
         if export.get("pinned_tabs"):
             local_tabs = local.get("tabs", [])
             new_pinned: list[dict] = []
