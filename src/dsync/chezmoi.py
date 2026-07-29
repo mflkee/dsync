@@ -360,6 +360,8 @@ def tmux_theme_sync(dest: Path) -> GitResult:
         lines.append(f'    ["{k}"]="{v}"')
     lines.append(")")
     lines.append("")
+    lines.append('RESET="#[fg=${THEME[foreground]},bg=${THEME[background]},nobold,noitalics,nounderscore,nodim]"')
+    lines.append("")
 
     override = Path.home() / ".config" / "dsync" / "tokyo-night-theme-override.sh"
     override.parent.mkdir(parents=True, exist_ok=True)
