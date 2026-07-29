@@ -5,7 +5,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from .chezmoi import GitResult, _git
+from .chezmoi import GitResult, _git, _git_with_retry
 from .chezmoi import get_status as git_status
 
 
@@ -61,7 +61,7 @@ def discover_repos(root: Path) -> list[Path]:
 def check_repo(repo: Path, do_fetch: bool = True) -> HubRepo:
     hr = HubRepo(name=repo.name, path=repo)
     if do_fetch:
-        _git(repo, ["fetch", "origin", "--quiet"], timeout=30)
+        _git_with_retry(repo, ["fetch", "origin", "--quiet"], timeout=120, retries=2)
     gs = git_status(repo)
     hr.branch = gs.current_branch
     hr.is_clean = gs.is_clean
@@ -95,7 +95,7 @@ def pull_repo(repo: Path) -> GitResult:
             return GitResult(success=False, stderr="dirty")
     if not gs.has_remote:
         return GitResult(success=False, stderr="no remote")
-    fetch = _git(repo, ["fetch", "origin", "--quiet"], timeout=60)
+    fetch = _git_with_retry(repo, ["fetch", "origin", "--quiet"], timeout=120, retries=2)
     if not fetch.success:
         return fetch
     # Try rebase first (handles diverged histories gracefully)

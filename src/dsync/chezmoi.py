@@ -58,6 +58,27 @@ def _git(repo_path: Path, args: list[str], timeout: int = 30) -> GitResult:
         return GitResult(success=False, stderr="git not found", returncode=-2)
 
 
+def _git_with_retry(repo_path: Path, args: list[str], timeout: int = 30, retries: int = 1) -> GitResult:
+    """Run git with optional retry for transient network failures."""
+    for attempt in range(retries):
+        r = _git(repo_path, args, timeout=timeout)
+        if r.success:
+            return r
+        err = r.stderr.lower()
+        if "could not read username" in err or "no such device or address" in err:
+            # HTTPS auth failure — no point retrying
+            r.stderr = f"git auth failed (HTTPS without credentials): {r.stderr[:120]}"
+            return r
+        if "timed out" in err or "connection refused" in err or "no route to host" in err:
+            if attempt < retries - 1:
+                logger.info("git %s transient failure, retrying (%d/%d)", args[0], attempt + 1, retries)
+                import time
+                time.sleep(2 ** attempt)
+                continue
+        return r
+    return r
+
+
 def get_status(repo_path: Path) -> GitStatus:
     gs = GitStatus()
 
