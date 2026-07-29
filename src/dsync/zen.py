@@ -388,8 +388,6 @@ def import_zen(source: Path) -> bool:
             local["tabs"] = [t for t in local_tabs if not t.get("pinned")] + new_pinned
             new_tabs_added = len(new_pinned)
 
-            local["tabs"] = local_tabs
-
         if export.get("live_folders") is not None:
             local.setdefault("liveFolders", [])
             # Merge live folders by checking if they exist
