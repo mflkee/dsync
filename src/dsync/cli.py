@@ -260,6 +260,16 @@ def _apply_local(repo: Path, config: Config) -> None:
         else:
             ui.print_info("Tmux не запущен — пропускаю")
 
+    # Reload tmux config so theme changes apply to running sessions
+    try:
+        subprocess.run(
+            ["tmux", "source-file", str(Path.home() / ".config" / "tmux" / "tmux.conf")],
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
 
 def _remote_sync_script(repo_path: str, branch: str, remote_url: str) -> str:
     q_repo = shlex.quote(repo_path)
@@ -319,11 +329,15 @@ if [ ! -f "$HOME/.config/chezmoi/key.txt" ]; then
 fi
 dsync self update 2>/dev/null || true
 # Apply chezmoi changes
+export NONINTERACTIVE=1
 CHEZMOI_ERR=""
 if ! out=$(cd {q_repo} && "$C" apply --force 2>&1); then
   CHEZMOI_ERR="chezmoi: $out"
-elif ! out=$(cd {q_repo} && "$C" apply 2>&1); then
-  CHEZMOI_ERR="chezmoi: $out"
+fi
+# If chezmoi failed on install scripts, try to still apply file targets
+# so that critical configs (niri outputs, tmux, starship) are present.
+if [ -n "$CHEZMOI_ERR" ]; then
+  cd {q_repo} && "$C" apply --force --refresh-externals=false 2>/dev/null || true
 fi
 # Apply noctalia + zen themes
 THEME_ERR=""
@@ -337,10 +351,17 @@ fi
 if ! out=$(~/.local/bin/noctalia-overrides.sh 2>&1); then
   THEME_ERR="${{THEME_ERR:+$THEME_ERR; }}overrides: $out"
 fi
+# Run per-machine monitor setup if chezmoi skipped it due to script failure.
+# This ensures niri outputs are configured even when install scripts abort.
+if [ -f "$HOME/.config/niri/set-outputs.sh" ]; then
+  bash "$HOME/.config/niri/set-outputs.sh" 2>/dev/null || true
+fi
 # Import Zen Browser profile
 dsync zen import 2>/dev/null || true
 # Import tmux session
 dsync tmux import 2>/dev/null || true
+# Reload tmux config so theme changes apply to running sessions
+tmux source-file "$HOME/.config/tmux/tmux.conf" 2>/dev/null || true
 # Report errors
 if [ -n "$CHEZMOI_ERR" ] || [ -n "$THEME_ERR" ]; then
   echo "SYNC_PARTIAL"
