@@ -260,6 +260,15 @@ def _apply_local(repo: Path, config: Config) -> None:
         else:
             ui.print_info("Tmux не запущен — пропускаю")
 
+    # Ensure tokyo-night-tmux themes.sh supports override loading.
+    themes_sh = Path.home() / ".tmux" / "plugins" / "tokyo-night-tmux" / "src" / "themes.sh"
+    if themes_sh.exists():
+        content = themes_sh.read_text()
+        if "tokyo-night-theme-override.sh" not in content:
+            logger.info("patching themes.sh to support override")
+            patch = '\n# Noctalia color override\nif [ -f "$HOME/.config/dsync/tokyo-night-theme-override.sh" ]; then\n    source "$HOME/.config/dsync/tokyo-night-theme-override.sh"\nfi\n'
+            themes_sh.write_text(content + patch)
+
     # Reload tmux config so theme changes apply to running sessions.
     # Tmux config is at ~/.tmux.conf, not ~/.config/tmux/tmux.conf.
     try:
@@ -376,6 +385,11 @@ fi
 dsync zen import 2>/dev/null || true
 # Import tmux session
 dsync tmux import 2>/dev/null || true
+# Patch tokyo-night-tmux themes.sh if it doesn't support override
+THEMES_SH="$HOME/.tmux/plugins/tokyo-night-tmux/src/themes.sh"
+if [ -f "$THEMES_SH" ] && ! grep -q "tokyo-night-theme-override.sh" "$THEMES_SH" 2>/dev/null; then
+  printf '\n# Noctalia color override\nif [ -f "$HOME/.config/dsync/tokyo-night-theme-override.sh" ]; then\n    source "$HOME/.config/dsync/tokyo-night-theme-override.sh"\nfi\n' >> "$THEMES_SH"
+fi
 # Reload tmux config and re-run tokyo-night-tmux theme so colour
 # overrides take effect immediately in running sessions.
 tmux source-file "$HOME/.tmux.conf" 2>/dev/null || true
