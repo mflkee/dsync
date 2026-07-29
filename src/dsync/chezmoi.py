@@ -310,9 +310,10 @@ def tmux_import(source: Path) -> GitResult:
 def tmux_theme_sync(dest: Path) -> GitResult:
     """Generate tmux color theme from current Noctalia theme.
 
-    Reads ~/.config/noctalia/colors.json (Material Design 3 format),
-    maps to tmux dracula color names, and writes an @dracula-colors
-    config snippet that can be sourced by tmux.conf.
+    For tokyo-night-tmux: generates ~/.config/dsync/tokyo-night-theme-override.sh
+    which overrides THEME colors after themes.sh runs. The tmux.conf runs
+    tmux-tokyo-night-theme-apply on startup to patch themes.sh and generate
+    the override.
     """
     colors_path = Path.home() / ".config" / "noctalia" / "colors.json"
     if not colors_path.exists():
@@ -326,22 +327,46 @@ def tmux_theme_sync(dest: Path) -> GitResult:
 
     m = noctalia
     mapping = {
-        "dark_gray": m.get("mSurface", "#1a1b26"),
-        "white": m.get("mOnSurface", "#c0caf5"),
-        "gray": m.get("mSurfaceVariant", "#24283b"),
-        "light_purple": m.get("mPrimary", "#7aa2f7"),
-        "dark_purple": m.get("mSecondary", "#bb9af7"),
-        "green": m.get("mTertiary", "#9ece6a"),
-        "red": m.get("mError", "#f7768e"),
-        "yellow": m.get("mPrimary", "#7aa2f7"),
+        "background": m.get("mSurface", "#1a1b26"),
+        "foreground": m.get("mOnSurface", "#c0caf5"),
+        "black": m.get("mSurface", "#1a1b26"),
+        "blue": m.get("mPrimary", "#7aa2f7"),
         "cyan": m.get("mSecondary", "#bb9af7"),
-        "orange": m.get("mError", "#f7768e"),
-        "pink": m.get("mSecondary", "#bb9af7"),
+        "green": m.get("mTertiary", "#9ece6a"),
+        "magenta": m.get("mSecondary", "#bb9af7"),
+        "red": m.get("mError", "#f7768e"),
+        "white": m.get("mOnSurface", "#c0caf5"),
+        "yellow": m.get("mPrimary", "#7aa2f7"),
+        "bblack": m.get("mSurfaceVariant", "#24283b"),
+        "bblue": m.get("mPrimary", "#7aa2f7"),
+        "bcyan": m.get("mSecondary", "#bb9af7"),
+        "bgreen": m.get("mTertiary", "#9ece6a"),
+        "bmagenta": m.get("mSecondary", "#bb9af7"),
+        "bred": m.get("mError", "#f7768e"),
+        "bwhite": m.get("mOnSurfaceVariant", "#9aa5ce"),
+        "byellow": m.get("mPrimary", "#7aa2f7"),
+        "ghgreen": "#3fb950",
+        "ghmagenta": "#A371F7",
+        "ghred": "#d73a4a",
+        "ghyellow": "#d29922",
     }
 
-    lines = [f"{k}='{v}'" for k, v in mapping.items()]
-    colors_joined = " ".join(lines)
-    content = f"set -g @dracula-colors \"{colors_joined}\"\n"
+    lines = [
+        "#!/usr/bin/env bash",
+        "# Auto-generated from Noctalia colors — overrides THEME after themes.sh runs",
+        "declare -A THEME=(",
+    ]
+    for k, v in mapping.items():
+        lines.append(f'    ["{k}"]="{v}"')
+    lines.append(")")
+    lines.append("")
+
+    override = Path.home() / ".config" / "dsync" / "tokyo-night-theme-override.sh"
+    override.parent.mkdir(parents=True, exist_ok=True)
+    override.write_text("\n".join(lines))
+
+    # Also write a marker to the old tmux-theme.conf location for backward compat
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content)
+    dest.write_text("# Tokyo Night theme is now managed by tmux-tokyo-night-theme-apply\n")
+
     return GitResult(success=True, stdout="tmux theme synced")
