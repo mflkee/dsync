@@ -260,10 +260,26 @@ def _apply_local(repo: Path, config: Config) -> None:
         else:
             ui.print_info("Tmux не запущен — пропускаю")
 
-    # Reload tmux config so theme changes apply to running sessions
+    # Reload tmux config so theme changes apply to running sessions.
+    # Tmux config is at ~/.tmux.conf, not ~/.config/tmux/tmux.conf.
     try:
         subprocess.run(
-            ["tmux", "source-file", str(Path.home() / ".config" / "tmux" / "tmux.conf")],
+            ["tmux", "source-file", str(Path.home() / ".tmux.conf")],
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    # Explicitly re-run the tokyo-night-tmux theme script so colour
+    # overrides from ~/.config/dsync/tokyo-night-theme-override.sh take
+    # effect immediately in all running sessions.
+    try:
+        subprocess.run(
+            [
+                "tmux",
+                "run-shell",
+                str(Path.home() / ".tmux" / "plugins" / "tokyo-night-tmux" / "tokyo-night.tmux"),
+            ],
             capture_output=True,
             timeout=5,
         )
@@ -360,8 +376,10 @@ fi
 dsync zen import 2>/dev/null || true
 # Import tmux session
 dsync tmux import 2>/dev/null || true
-# Reload tmux config so theme changes apply to running sessions
-tmux source-file "$HOME/.config/tmux/tmux.conf" 2>/dev/null || true
+# Reload tmux config and re-run tokyo-night-tmux theme so colour
+# overrides take effect immediately in running sessions.
+tmux source-file "$HOME/.tmux.conf" 2>/dev/null || true
+tmux run-shell "$HOME/.tmux/plugins/tokyo-night-tmux/tokyo-night.tmux" 2>/dev/null || true
 # Report errors
 if [ -n "$CHEZMOI_ERR" ] || [ -n "$THEME_ERR" ]; then
   echo "SYNC_PARTIAL"
