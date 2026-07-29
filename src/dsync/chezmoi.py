@@ -236,7 +236,7 @@ def _target_to_source_path(target: str) -> str:
     return "/".join(result)
 
 
-def chezmoi_apply(timeout: int = 120) -> GitResult:
+def chezmoi_apply(timeout: int = 300) -> GitResult:
     logger.info("chezmoi apply --force (timeout=%ds)", timeout)
     try:
         result = subprocess.run(

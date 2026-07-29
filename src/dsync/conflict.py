@@ -73,6 +73,12 @@ def safe_pull(repo_path: Path, branch: str = "main") -> tuple[GitResult, bool]:
 
     _logger = logging.getLogger(__name__)
     _logger.info("safe_pull: pull --rebase origin %s (cwd=%s)", branch, repo_path)
+
+    # Capture pre-pull HEAD so we can detect if the tree moved even when
+    # git returns a non-zero exit code because of warnings.
+    pre = _git(repo_path, ["rev-parse", "HEAD"])
+    pre_head = pre.stdout.strip() if pre.success else ""
+
     r = _git(repo_path, ["pull", "--rebase", "origin", branch], timeout=60)
 
     if r.success:
@@ -80,6 +86,19 @@ def safe_pull(repo_path: Path, branch: str = "main") -> tuple[GitResult, bool]:
         return (r, False)
 
     _logger.warning("safe_pull: pull failed — %s", r.stderr.strip()[:200])
+
+    # If HEAD now matches origin/{branch}, git actually fast-forwarded despite
+    # printing warnings (e.g. "fetch updated the current branch head"). Treat as ok.
+    post = _git(repo_path, ["rev-parse", "HEAD"])
+    post_head = post.stdout.strip() if post.success else ""
+    origin_head = _git(repo_path, ["rev-parse", f"origin/{branch}"])
+    origin_sha = origin_head.stdout.strip() if origin_head.success else ""
+    if post_head and post_head == origin_sha and post_head != pre_head:
+        _logger.info("safe_pull: HEAD moved to origin/%s despite non-zero exit — treating as ok", branch)
+        r.success = True
+        r.returncode = 0
+        return (r, False)
+
     output = (r.stdout + "\n" + r.stderr).lower()
     conflict_markers = ("conflict", "could not apply", "failed to merge")
     looks_like_conflict = any(m in output for m in conflict_markers)

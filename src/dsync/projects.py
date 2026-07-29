@@ -119,8 +119,17 @@ def remote_sync_script(repo_path: str, branch: str, remote_url: str | None) -> s
     return f"""export PATH="$HOME/.local/bin:$PATH"
 if [ -d {shlex.quote(repo_path)}/.git ]; then
   cd {shlex.quote(repo_path)}
-  [ -n {url} ] && git fetch {url} {shlex.quote(branch)} 2>&1 || true
-  [ -n {url} ] && git pull --rebase {url} {shlex.quote(branch)} 2>&1 || echo "GIT_CONFLICT"
+  if [ -n {url} ]; then
+    git fetch {url} {shlex.quote(branch)} 2>&1 || true
+    git stash push -m "dsync-auto-$(date +%s)" 2>/dev/null || true
+    if ! git pull --rebase {url} {shlex.quote(branch)} 2>&1; then
+      git rebase --abort 2>/dev/null || true
+      git reset --hard FETCH_HEAD 2>/dev/null || true
+      echo "GIT_CONFLICT"
+    fi
+  else
+    echo "NO_REMOTE"
+  fi
 elif [ -n {url} ]; then
   git clone {url} {shlex.quote(repo_path)} 2>&1
   cd {shlex.quote(repo_path)} && git checkout {shlex.quote(branch)} 2>&1 || true

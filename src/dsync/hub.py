@@ -95,12 +95,26 @@ def pull_repo(repo: Path) -> GitResult:
             return GitResult(success=False, stderr="dirty")
     if not gs.has_remote:
         return GitResult(success=False, stderr="no remote")
-    fetch = _git(repo, ["fetch", "origin", "--quiet"], timeout=30)
+    fetch = _git(repo, ["fetch", "origin", "--quiet"], timeout=60)
     if not fetch.success:
         return fetch
-    pull = _git(repo, ["pull", "--ff-only"], timeout=120)
+    # Try rebase first (handles diverged histories gracefully)
+    pull = _git(repo, ["pull", "--rebase", "origin", gs.current_branch or "main"], timeout=120)
     if not pull.success:
-        return pull
+        # If rebase failed because of a real conflict, abort and report
+        rebase_head = repo / ".git" / "REBASE_HEAD"
+        if rebase_head.exists():
+            _git(repo, ["rebase", "--abort"], timeout=30)
+            return GitResult(success=False, stderr="merge conflict")
+        # Otherwise try a hard reset to origin (last resort for non-dotfiles hubs)
+        branch = gs.current_branch or "main"
+        reset = _git(repo, ["reset", "--hard", f"origin/{branch}"], timeout=30)
+        if reset.success:
+            return GitResult(success=True, stdout="reset to origin")
+        return GitResult(
+            success=False,
+            stderr=f"pull: {pull.stderr[:100]}; reset: {reset.stderr[:100]}",
+        )
     return GitResult(success=True, stdout=pull.stdout)
 
 
@@ -138,8 +152,9 @@ find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
     echo "HUB|$name|noremote|"
     continue
   fi
-  timeout 30 git fetch origin --quiet 2>/dev/null || {{ echo "HUB|$name|unreachable|fetch"; continue; }}
-  out=$(timeout 30 git pull --ff-only 2>&1)
+  timeout 60 git fetch origin --quiet 2>/dev/null || {{ echo "HUB|$name|unreachable|fetch"; continue; }}
+  git stash push -m "dsync-auto-$(date +%s)" 2>/dev/null || true
+  out=$(timeout 60 git pull --rebase origin "$(git rev-parse --abbrev-ref HEAD)" 2>&1)
   rc=$?
   if [ $rc -eq 0 ]; then
     case "$out" in
@@ -149,6 +164,9 @@ find "$root" -maxdepth 2 -name .git -type d 2>/dev/null | while read -r d; do
   elif [ $rc -eq 124 ]; then
     echo "HUB|$name|unreachable|pull"
   else
+    # Rebase conflict or other failure — abort and hard-reset to origin
+    git rebase --abort 2>/dev/null || true
+    git reset --hard "$(git rev-parse --abbrev-ref '@{{upstream}}')" 2>/dev/null || true
     detail=$(echo "$out" | tr '\\n' ' ' | cut -c1-80)
     echo "HUB|$name|failed|$detail"
   fi
