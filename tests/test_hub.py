@@ -77,9 +77,11 @@ def test_pull_repo_no_remote(tmp_path: Path):
     assert r.stderr == "no remote"
 
 
-def test_remote_hub_script_marks_dirty_and_ff_only():
+def test_remote_hub_script_has_rebase_and_fallback():
     script = hub.remote_hub_script("/home/user/projects")
-    assert "git pull --ff-only" in script
+    assert "git pull --rebase" in script
+    assert "git stash push" in script
+    assert "git rebase --abort" in script
     assert "HUB|$name|dirty|" in script
     assert "HUB|$name|updated|" in script
     assert "HUB|$name|uptodate|" in script
