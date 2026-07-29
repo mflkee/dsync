@@ -53,25 +53,6 @@ def _write_lz4(path: Path, obj: dict):
     path.write_bytes(b"mozLz40\0" + compressed)
 
 
-def _normalize_url(url: str) -> str:
-    """Normalize URL for dedup comparison."""
-    url = url.rstrip("/")
-    if url.startswith("https://"):
-        return url
-    if url.startswith("http://"):
-        return url
-    return url
-
-
-def _tabs_contain(tabs: list, url: str) -> bool:
-    url_norm = _normalize_url(url)
-    for t in tabs:
-        for e in t.get("entries", []):
-            if _normalize_url(e.get("url", "")) == url_norm:
-                return True
-    return False
-
-
 def _strip_tab(tab: dict) -> dict:
     """Remove bulky fields (images, storage, formdata) from a tab."""
     clean = {
@@ -356,10 +337,10 @@ def import_zen(source: Path) -> bool:
             local["folders"] = merged
             folder_id_map = fmap
 
-        # Add new pinned tabs from export that don't exist locally
-        new_tabs_added = 0
+        # Replace pinned tabs with exported ones (with ID translation)
         if export.get("pinned_tabs"):
             local_tabs = local.get("tabs", [])
+            new_pinned: list[dict] = []
             for pt in export["pinned_tabs"]:
                 entries = pt.get("entries", [])
                 if not entries:
@@ -367,10 +348,7 @@ def import_zen(source: Path) -> bool:
                 url = entries[0].get("url", "")
                 if not url or url == "about:blank":
                     continue
-                if _tabs_contain(local_tabs, url):
-                    continue
 
-                # Translate group/workspace/folder IDs from export to local
                 group_id = pt.get("groupId", "")
                 if group_id in group_id_map:
                     group_id = group_id_map[group_id]
@@ -383,7 +361,6 @@ def import_zen(source: Path) -> bool:
                 if folder_id in folder_id_map:
                     folder_id = folder_id_map[folder_id]
                 elif folder_id:
-                    # If folder ID not found in map, don't link to a stale ID
                     folder_id = None
 
                 new_tab = {
@@ -395,9 +372,9 @@ def import_zen(source: Path) -> bool:
                         }
                     ],
                     "lastAccessed": 0,
-                    "pinned": pt.get("pinned", True),
+                    "pinned": True,
                     "hidden": False,
-                    "index": len(local_tabs) + 1,
+                    "index": len(new_pinned) + 1,
                     "groupId": group_id or None,
                     "zenWorkspace": zen_workspace or None,
                     "zenLiveFolderItemId": folder_id,
@@ -405,8 +382,11 @@ def import_zen(source: Path) -> bool:
                     "userContextId": pt.get("userContextId", 0),
                     "attributes": {},
                 }
-                local_tabs.append(new_tab)
-                new_tabs_added += 1
+                new_pinned.append(new_tab)
+
+            # Keep only non-pinned tabs, replace pinned with exported
+            local["tabs"] = [t for t in local_tabs if not t.get("pinned")] + new_pinned
+            new_tabs_added = len(new_pinned)
 
             local["tabs"] = local_tabs
 
