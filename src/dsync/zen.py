@@ -269,6 +269,39 @@ def _merge_spaces(
     return merged, uuid_map
 
 
+def _reconcile_group_folder_ids(
+    local: dict,
+    folder_id_map: dict[str, str],
+) -> None:
+    """Align folder IDs with matching group IDs — Zen expects them to match."""
+    groups = {g.get("name"): g for g in local.get("groups", []) if g.get("name")}
+    old_to_new: dict[str, str] = {}
+    for f in local.get("folders", []):
+        name = f.get("name")
+        if not name or name not in groups:
+            continue
+        gid = groups[name].get("id")
+        fid = f.get("id")
+        if gid and fid and gid != fid:
+            old_to_new[fid] = gid
+            f["id"] = gid
+            # Update workspaceId if it differs
+            gws = groups[name].get("workspaceId")
+            if gws:
+                f["workspaceId"] = gws
+    # Propagate renames to folder_id_map
+    for old_id, new_id in old_to_new.items():
+        if old_id in folder_id_map:
+            folder_id_map[old_id] = new_id
+        else:
+            folder_id_map[old_id] = new_id
+    # Fix parentId references in folders
+    for f in local.get("folders", []):
+        pid = f.get("parentId")
+        if pid and pid in old_to_new:
+            f["parentId"] = old_to_new[pid]
+
+
 def import_zen(source: Path) -> bool:
     """Import Zen data from a JSON file into the local profile."""
     if not source.exists():
@@ -336,6 +369,9 @@ def import_zen(source: Path) -> bool:
             )
             local["folders"] = merged
             folder_id_map = fmap
+
+        # Reconcile group and folder IDs — in native Zen they share IDs
+        _reconcile_group_folder_ids(local, folder_id_map)
 
         # Replace pinned tabs with exported ones (with ID translation)
         if export.get("pinned_tabs"):
