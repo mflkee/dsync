@@ -1,0 +1,22 @@
+[package]
+name = "dsync"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+quinn = "0.11"
+rustls = "0.23"
+rustls-pemfile = "2"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+russh = "0.44"
+russh-keys = "0.44"
+directories = "6"
+rcgen = "0.13"
+uuid = { version = "1", features = ["v4"] }
