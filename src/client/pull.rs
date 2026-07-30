@@ -3,6 +3,7 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::protocol::PullRequest;
+use crate::zen::import;
 
 use super::connect::{connect, send_pull};
 
@@ -28,10 +29,16 @@ pub async fn pull(cfg: Config, _machine: Option<String>) -> Result<()> {
             state.projects.len(),
             state.zen.is_some(),
         );
-    }
 
-    // TODO: Фаза 2 — Zen import
-    // TODO: Фаза 3 — git pull projects
+        if let Some(zen) = &state.zen {
+            if name != &cfg.machine.name {
+                info!("importing Zen from {name}");
+                if let Err(e) = import::import(&cfg, &zen.data) {
+                    tracing::warn!("failed to import Zen from {name}: {e}");
+                }
+            }
+        }
+    }
 
     Ok(())
 }
