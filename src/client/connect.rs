@@ -78,6 +78,7 @@ pub async fn connect_with_retry(cfg: &Config) -> Result<Connection> {
 
     let endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
 
+    info!("connecting to hub at {addr}...");
     let mut last_connect_err = String::new();
     for attempt in 1..=4 {
         let config = make_client_config()?;

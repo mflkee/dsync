@@ -18,6 +18,8 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let args = cli::Cli::parse();
     let cfg = config::Config::load()?;
 

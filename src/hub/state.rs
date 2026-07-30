@@ -35,8 +35,10 @@ impl HubState {
 
     pub async fn update_machine(&self, state: MachineState) {
         let name = state.name.clone();
-        let mut machines = self.machines.write().await;
-        machines.insert(name, state);
+        {
+            let mut machines = self.machines.write().await;
+            machines.insert(name, state);
+        }
         self.save().await;
     }
 
