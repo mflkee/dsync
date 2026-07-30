@@ -332,9 +332,8 @@ def tmux_theme_sync(dest: Path) -> GitResult:
     """Generate tmux color theme from current Noctalia theme.
 
     For tokyo-night-tmux: generates ~/.config/dsync/tokyo-night-theme-override.sh
-    which overrides THEME colors after themes.sh runs. The tmux.conf runs
-    tmux-tokyo-night-theme-apply on startup to patch themes.sh and generate
-    the override.
+    which overrides THEME colors after themes.sh runs, then runs
+    tmux-tokyo-night-theme-apply to patch themes.sh and set tmux options.
     """
     colors_path = Path.home() / ".config" / "noctalia" / "colors.json"
     if not colors_path.exists():
@@ -391,6 +390,20 @@ def tmux_theme_sync(dest: Path) -> GitResult:
     # Also write a marker to the old tmux-theme.conf location for backward compat
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text("# Tokyo Night theme is now managed by tmux-tokyo-night-theme-apply\n")
+
+    # Run the apply script to patch themes.sh and set tmux options
+    apply_script = Path.home() / ".local" / "bin" / "tmux-tokyo-night-theme-apply"
+    if apply_script.exists():
+        try:
+            subprocess.run(
+                [str(apply_script)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     return GitResult(success=True, stdout="tmux theme synced")
 
