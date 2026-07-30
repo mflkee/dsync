@@ -6,7 +6,7 @@ use quinn::{Endpoint, Incoming, ServerConfig};
 use tracing::{error, info};
 
 use crate::config::Config;
-use crate::protocol::{PullRequest, PullResponse, PushRequest, PushResponse, StatusRequest, StatusResponse};
+use crate::protocol::{PullRequest, PullResponse, PushRequest, PushResponse};
 
 use super::state::HubState;
 

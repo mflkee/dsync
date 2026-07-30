@@ -20,3 +20,7 @@ russh-keys = "0.44"
 directories = "6"
 rcgen = "0.13"
 uuid = { version = "1", features = ["v4"] }
+lz4_flex = "0.11"
+sha2 = "0.10"
+hex = "0.4"
+regex = "1"
