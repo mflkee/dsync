@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -13,12 +12,15 @@ fn merge_groups(
     local: &mut Vec<Value>,
     exported: &[Value],
 ) -> HashMap<String, String> {
-    let mut local_by_name: HashMap<&str, &mut Value> = HashMap::new();
-    for g in local.iter_mut() {
-        if let Some(name) = g.get("name").and_then(|n| n.as_str()) {
-            local_by_name.insert(name, g);
-        }
-    }
+    let local_by_name: HashMap<String, usize> = local
+        .iter()
+        .enumerate()
+        .filter_map(|(i, g)| {
+            g.get("name")
+                .and_then(|n| n.as_str())
+                .map(|n| (n.to_string(), i))
+        })
+        .collect();
 
     let mut id_map: HashMap<String, String> = HashMap::new();
 
@@ -29,15 +31,17 @@ fn merge_groups(
         };
         let old_id = eg.get("id").and_then(|i| i.as_str()).unwrap_or_default();
 
-        if let Some(lg) = local_by_name.get(name) {
-            for key in &["color", "pinned", "collapsed", "saveOnWindowClose"] {
-                if let Some(val) = eg.get(*key) {
-                    lg.as_object_mut().map(|m| m.insert(key.to_string(), val.clone()));
+        if let Some(&idx) = local_by_name.get(name) {
+            if let Some(lg) = local.get_mut(idx).and_then(|v| v.as_object_mut()) {
+                for key in &["color", "pinned", "collapsed", "saveOnWindowClose"] {
+                    if let Some(val) = eg.get(*key) {
+                        lg.insert(key.to_string(), val.clone());
+                    }
                 }
-            }
-            if !old_id.is_empty() {
-                if let Some(lid) = lg.get("id").and_then(|i| i.as_str()) {
-                    id_map.insert(old_id.to_string(), lid.to_string());
+                if !old_id.is_empty() {
+                    if let Some(lid) = lg.get("id").and_then(|i| i.as_str()) {
+                        id_map.insert(old_id.to_string(), lid.to_string());
+                    }
                 }
             }
         } else {
@@ -89,10 +93,11 @@ fn merge_folders(
         )
     }
 
-    let mut local_idx: HashMap<(String, String), usize> = HashMap::new();
-    for (i, f) in local.iter().enumerate() {
-        local_idx.insert(folder_key(f), i);
-    }
+    let local_idx: HashMap<(String, String), usize> = local
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (folder_key(f), i))
+        .collect();
 
     let mut id_map: HashMap<String, String> = HashMap::new();
 
@@ -102,13 +107,13 @@ fn merge_folders(
             _ => continue,
         };
         let old_id = ef.get("id").and_then(|i| i.as_str()).unwrap_or_default();
-        let mut ws_id = ef.get("workspaceId").and_then(|w| w.as_str()).unwrap_or_default().to_string();
-        let mut key = (name.to_string(), ws_id.clone());
-
-        if let Some(mapped) = workspace_id_map.get(&ws_id) {
-            ws_id = mapped.clone();
-            key = (name.to_string(), ws_id.clone());
-        }
+        let ws_id = ef
+            .get("workspaceId")
+            .and_then(|w| w.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let ws_id = workspace_id_map.get(&ws_id).cloned().unwrap_or(ws_id);
+        let key = (name.to_string(), ws_id.clone());
 
         if let Some(&idx) = local_idx.get(&key) {
             if let Some(lf) = local.get_mut(idx).and_then(|v| v.as_object_mut()) {
@@ -142,8 +147,7 @@ fn merge_folders(
             }
 
             if let Some(pid) = ef.get("parentId").and_then(|p| p.as_str()) {
-                let mapped_pid = id_map.get(pid).cloned().unwrap_or_else(|| pid.to_string());
-                nf.insert("parentId".into(), mapped_pid.into());
+                nf.insert("parentId".into(), id_map.get(pid).cloned().unwrap_or_else(|| pid.to_string()).into());
             }
 
             local.push(Value::Object(nf));
@@ -160,12 +164,15 @@ fn merge_spaces(
     local: &mut Vec<Value>,
     exported: &[Value],
 ) -> HashMap<String, String> {
-    let mut local_by_name: HashMap<&str, &mut Value> = HashMap::new();
-    for s in local.iter_mut() {
-        if let Some(name) = s.get("name").and_then(|n| n.as_str()) {
-            local_by_name.insert(name, s);
-        }
-    }
+    let local_by_name: HashMap<String, usize> = local
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            s.get("name")
+                .and_then(|n| n.as_str())
+                .map(|n| (n.to_string(), i))
+        })
+        .collect();
 
     let mut uuid_map: HashMap<String, String> = HashMap::new();
 
@@ -176,15 +183,17 @@ fn merge_spaces(
         };
         let old_uuid = es.get("uuid").and_then(|u| u.as_str()).unwrap_or_default();
 
-        if let Some(ls) = local_by_name.get(name) {
-            for key in &["icon", "theme", "hasCollapsedPinnedTabs"] {
-                if let Some(val) = es.get(*key) {
-                    ls.as_object_mut().map(|m| m.insert(key.to_string(), val.clone()));
+        if let Some(&idx) = local_by_name.get(name) {
+            if let Some(ls) = local.get_mut(idx).and_then(|v| v.as_object_mut()) {
+                for key in &["icon", "theme", "hasCollapsedPinnedTabs"] {
+                    if let Some(val) = es.get(*key) {
+                        ls.insert(key.to_string(), val.clone());
+                    }
                 }
-            }
-            if !old_uuid.is_empty() {
-                if let Some(luuid) = ls.get("uuid").and_then(|u| u.as_str()) {
-                    uuid_map.insert(old_uuid.to_string(), luuid.to_string());
+                if !old_uuid.is_empty() {
+                    if let Some(luuid) = ls.get("uuid").and_then(|u| u.as_str()) {
+                        uuid_map.insert(old_uuid.to_string(), luuid.to_string());
+                    }
                 }
             }
         } else {
@@ -207,8 +216,8 @@ fn merge_spaces(
             ns.insert("theme".into(), es.get("theme").cloned().unwrap_or(default_theme));
             ns.insert("hasCollapsedPinnedTabs".into(), Value::Bool(false));
 
-            if es.get("containerTabId").and_then(|c| c.as_i64()).is_some() {
-                ns.insert("containerTabId".into(), es["containerTabId"].clone());
+            if let Some(ct) = es.get("containerTabId") {
+                ns.insert("containerTabId".into(), ct.clone());
             }
 
             local.push(Value::Object(ns));
@@ -254,7 +263,6 @@ fn reconcile_group_folder_ids(
             old_to_new.insert(fid.clone(), gid.clone());
             if let Some(fobj) = f.as_object_mut() {
                 fobj.insert("id".into(), gid.clone().into());
-
                 if let Some(gws) = g.get("workspaceId").and_then(|w| w.as_str()) {
                     fobj.insert("workspaceId".into(), gws.into());
                 }
@@ -263,23 +271,20 @@ fn reconcile_group_folder_ids(
     }
 
     for (old_id, new_id) in &old_to_new {
-        if !folder_id_map.contains_key(old_id) {
-            folder_id_map.insert(old_id.clone(), new_id.clone());
-        } else {
-            folder_id_map.insert(old_id.clone(), new_id.clone());
-        }
+        folder_id_map.insert(old_id.clone(), new_id.clone());
     }
 
     for f in folders.iter_mut() {
         if let Some(pid) = f.get("parentId").and_then(|p| p.as_str()) {
             if let Some(mapped) = old_to_new.get(pid) {
-                f.as_object_mut().map(|o| o.insert("parentId".into(), mapped.clone().into()));
+                f.as_object_mut()
+                    .map(|o| o.insert("parentId".into(), mapped.clone().into()));
             }
         }
     }
 }
 
-fn clean_sessionstore(profile: &Path) {
+fn clean_sessionstore(profile: &std::path::Path) {
     let sessionstore = profile.join("sessionstore.jsonlz4");
     if sessionstore.exists() {
         std::fs::remove_file(&sessionstore).ok();
@@ -299,9 +304,7 @@ fn generate_id() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    // mimic Python's uuid4().int → first 19 digits
-    let truncated = nanos % 10_000_000_000_000_000_000;
-    truncated.to_string()
+    (nanos % 10_000_000_000_000_000_000).to_string()
 }
 
 fn generate_uuid() -> String {
@@ -310,11 +313,8 @@ fn generate_uuid() -> String {
 }
 
 pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
-    let export: Value = serde_json::from_slice(data)
-        .context("parsing zen export json")?;
-
-    let profile = find_profile(&cfg.zen)
-        .context("Zen profile not found")?;
+    let export: Value = serde_json::from_slice(data).context("parsing zen export json")?;
+    let profile = find_profile(&cfg.zen).context("Zen profile not found")?;
 
     info!("importing Zen to {}", profile.display());
 
@@ -350,8 +350,7 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
         if let Some(espaces) = exported_spaces {
             let mut spaces = local.get("spaces").cloned().unwrap_or(Value::Array(vec![]));
             if let Some(arr) = spaces.as_array_mut() {
-                let map = merge_spaces(arr, espaces);
-                workspace_uuid_map = map;
+                workspace_uuid_map = merge_spaces(arr, espaces);
             }
             local.as_object_mut().map(|o| o.insert("spaces".into(), spaces));
         }
@@ -360,8 +359,7 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
         if let Some(egroups) = exported_groups {
             let mut groups = local.get("groups").cloned().unwrap_or(Value::Array(vec![]));
             if let Some(arr) = groups.as_array_mut() {
-                let map = merge_groups(arr, egroups);
-                group_id_map = map;
+                group_id_map = merge_groups(arr, egroups);
             }
             local.as_object_mut().map(|o| o.insert("groups".into(), groups));
         }
@@ -370,8 +368,7 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
         if let Some(efolders) = exported_folders {
             let mut folders = local.get("folders").cloned().unwrap_or(Value::Array(vec![]));
             if let Some(arr) = folders.as_array_mut() {
-                let map = merge_folders(arr, efolders, &workspace_uuid_map);
-                folder_id_map = map;
+                folder_id_map = merge_folders(arr, efolders, &workspace_uuid_map);
             }
             local.as_object_mut().map(|o| o.insert("folders".into(), folders));
         }
@@ -382,7 +379,7 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
         local.as_object_mut().map(|o| o.insert("folders".into(), folders));
 
         if let Some(pinned) = exported_pinned {
-            let mut local_tabs = local.get("tabs").cloned().unwrap_or(Value::Array(vec![]));
+            let local_tabs = local.get("tabs").cloned().unwrap_or(Value::Array(vec![]));
 
             let new_pinned: Vec<Value> = pinned
                 .iter()
@@ -394,32 +391,15 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
                         return None;
                     }
 
-                    let group_id = pt
-                        .get("groupId")
-                        .and_then(|g| g.as_str())
-                        .and_then(|g| group_id_map.get(g))
-                        .cloned();
-
-                    let zen_workspace = pt
-                        .get("zenWorkspace")
-                        .and_then(|w| w.as_str())
-                        .and_then(|w| workspace_uuid_map.get(w))
-                        .cloned();
-
-                    let folder_id = pt
-                        .get("zenLiveFolderItemId")
-                        .and_then(|f| f.as_str())
-                        .map(|f| {
-                            folder_id_map
-                                .get(f)
-                                .cloned()
-                                .unwrap_or_else(|| f.to_string())
-                        })
-                        .filter(|f| !f.is_empty());
-
+                    let group_id = pt.get("groupId").and_then(|g| g.as_str())
+                        .and_then(|g| group_id_map.get(g)).cloned();
+                    let zen_workspace = pt.get("zenWorkspace").and_then(|w| w.as_str())
+                        .and_then(|w| workspace_uuid_map.get(w)).cloned();
+                    let folder_id = pt.get("zenLiveFolderItemId").and_then(|f| f.as_str())
+                        .and_then(|f| folder_id_map.get(f)).cloned();
                     let title = entry.get("title").and_then(|t| t.as_str()).unwrap_or_default();
 
-                    let new_tab = serde_json::json!({
+                    Some(serde_json::json!({
                         "entries": [{
                             "url": url,
                             "title": title,
@@ -435,9 +415,7 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
                         "zenSyncId": pt.get("zenSyncId").and_then(|s| s.as_str()),
                         "userContextId": pt.get("userContextId").and_then(|c| c.as_i64()).unwrap_or(0),
                         "attributes": {}
-                    });
-
-                    Some(new_tab)
+                    }))
                 })
                 .enumerate()
                 .map(|(i, mut t)| {
@@ -457,13 +435,13 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
                 .unwrap_or_default();
 
             let mut all_tabs = non_pinned;
-            all_tabs.extend(new_pinned.clone());
+            all_tabs.extend(new_pinned);
             local.as_object_mut().map(|o| o.insert("tabs".into(), all_tabs.into()));
         }
 
         if let Some(lf) = exported_live_folders {
             let mut live_folders = local.get("liveFolders").cloned().unwrap_or(Value::Array(vec![]));
-            let existing_ids: std::collections::HashSet<String> = live_folders
+            let existing_ids: HashSet<String> = live_folders
                 .as_array()
                 .map(|arr| {
                     arr.iter()
@@ -497,7 +475,6 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
 
         let pinned_count = exported_pinned.map(|a| a.len()).unwrap_or(0);
         if pinned_count > 0 { info!("  pinned tabs: {pinned_count}"); }
-
         let total = local.get("tabs").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
         info!("  total tabs: {total}");
     } else {
@@ -511,13 +488,19 @@ pub fn import(cfg: &Config, data: &[u8]) -> Result<()> {
         });
 
         if let Some(ss) = exported_spaces {
-            new_sess.as_object_mut().map(|o| o.insert("spaces".into(), ss.iter().cloned().collect()));
+            new_sess
+                .as_object_mut()
+                .map(|o| o.insert("spaces".into(), ss.to_vec().into()));
         }
         if let Some(gs) = exported_groups {
-            new_sess.as_object_mut().map(|o| o.insert("groups".into(), gs.iter().cloned().collect()));
+            new_sess
+                .as_object_mut()
+                .map(|o| o.insert("groups".into(), gs.to_vec().into()));
         }
         if let Some(fs) = exported_folders {
-            new_sess.as_object_mut().map(|o| o.insert("folders".into(), fs.iter().cloned().collect()));
+            new_sess
+                .as_object_mut()
+                .map(|o| o.insert("folders".into(), fs.to_vec().into()));
         }
 
         write_mozlz4(&session_path, &new_sess)?;

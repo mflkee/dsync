@@ -551,6 +551,7 @@ dependencies = [
  "anyhow",
  "clap",
  "directories",
+ "dirs",
  "hex",
  "lz4_flex",
  "quinn",

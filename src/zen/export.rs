@@ -1,6 +1,5 @@
-use std::path::Path;
-
 use anyhow::{Context, Result};
+use serde_json::Value;
 use tracing::info;
 
 use super::lz4::read_mozlz4;
@@ -8,7 +7,7 @@ use super::profile::find_profile;
 use super::types::ZenExport;
 use crate::config::Config;
 
-fn strip_tab(tab: &serde_json::Value) -> serde_json::Value {
+fn strip_tab(tab: &Value) -> Value {
     let mut clean = tab.clone();
     for key in &["image", "storage", "formdata", "_zenPinnedInitialState"] {
         clean.as_object_mut().map(|m| m.remove(*key));
@@ -20,13 +19,13 @@ fn strip_tab(tab: &serde_json::Value) -> serde_json::Value {
             let title = last.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
             let mut clean_entry = serde_json::Map::new();
             if let Some(u) = url {
-                clean_entry.insert("url".into(), serde_json::Value::String(u));
+                clean_entry.insert("url".into(), Value::String(u));
             }
             if let Some(t) = title {
-                clean_entry.insert("title".into(), serde_json::Value::String(t));
+                clean_entry.insert("title".into(), Value::String(t));
             }
             clean.as_object_mut()
-                .map(|m| m.insert("entries".into(), vec![serde_json::Value::Object(clean_entry)].into()));
+                .map(|m| m.insert("entries".into(), vec![Value::Object(clean_entry)].into()));
         }
     }
 
@@ -34,9 +33,7 @@ fn strip_tab(tab: &serde_json::Value) -> serde_json::Value {
 }
 
 pub fn export(cfg: &Config) -> Result<Vec<u8>> {
-    let profile = find_profile(&cfg.zen)
-        .context("Zen profile not found")?;
-
+    let profile = find_profile(&cfg.zen).context("Zen profile not found")?;
     info!("exporting Zen from {}", profile.display());
 
     let data = ZenExport {
@@ -56,18 +53,16 @@ pub fn export(cfg: &Config) -> Result<Vec<u8>> {
 
     let containers_path = profile.join("containers.json");
     if containers_path.exists() {
-        let val = serde_json::from_str(
-            &std::fs::read_to_string(&containers_path)
-                .context("reading containers.json")?,
+        let val: Value = serde_json::from_str(
+            &std::fs::read_to_string(&containers_path).context("reading containers.json")?,
         )?;
         obj.insert("containers".into(), val);
     }
 
     let themes_path = profile.join("zen-themes.json");
     if themes_path.exists() {
-        let val = serde_json::from_str(
-            &std::fs::read_to_string(&themes_path)
-                .context("reading zen-themes.json")?,
+        let val: Value = serde_json::from_str(
+            &std::fs::read_to_string(&themes_path).context("reading zen-themes.json")?,
         )?;
         obj.insert("themes".into(), val);
     }
@@ -87,7 +82,7 @@ pub fn export(cfg: &Config) -> Result<Vec<u8>> {
         }
 
         if let Some(tabs) = sess.get("tabs").and_then(|t| t.as_array()) {
-            let pinned: Vec<serde_json::Value> = tabs
+            let pinned: Vec<Value> = tabs
                 .iter()
                 .filter(|t| t.get("pinned").and_then(|p| p.as_bool()).unwrap_or(false))
                 .map(strip_tab)
@@ -106,9 +101,7 @@ pub fn export(cfg: &Config) -> Result<Vec<u8>> {
         obj.insert("live_folders".into(), read_mozlz4(&live_folders_path)?);
     }
 
-    let json_bytes = serde_json::to_vec_pretty(&export)
-        .context("serializing zen export")?;
-
+    let json_bytes = serde_json::to_vec_pretty(&export).context("serializing zen export")?;
     info!("Zen export complete ({} bytes)", json_bytes.len());
     Ok(json_bytes)
 }
