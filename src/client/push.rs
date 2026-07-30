@@ -39,7 +39,10 @@ async fn collect_zen(_cfg: &Config) -> Result<Option<crate::protocol::ZenState>>
     Ok(None)
 }
 
-async fn collect_projects(_cfg: &Config) -> Result<Vec<crate::protocol::ProjectState>> {
-    // TODO: Фаза 3 — git status scanner на Rust
-    Ok(Vec::new())
+async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectState>> {
+    if let Some(projects) = &cfg.projects {
+        crate::projects::status::scan(projects)
+    } else {
+        Ok(Vec::new())
+    }
 }

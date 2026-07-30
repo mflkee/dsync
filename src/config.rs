@@ -10,7 +10,7 @@ pub struct Config {
     pub hub: Option<HubConfig>,
     pub hub_connect: Option<HubConnectConfig>,
     pub zen: Option<ZenConfig>,
-    pub projects: Option<ProjectsConfig>,
+    pub projects: Option<HashMap<String, ProjectConfig>>,
     pub remote: Option<HashMap<String, RemoteMachine>>,
 }
 
@@ -39,8 +39,11 @@ pub struct ZenConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct ProjectsConfig {
-    pub paths: Vec<PathBuf>,
+pub struct ProjectConfig {
+    pub path: PathBuf,
+    pub remote: Option<String>,
+    pub branch: Option<String>,
+    pub machines: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
