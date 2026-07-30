@@ -25,6 +25,7 @@ pub async fn run_server(cfg: Config) -> Result<()> {
     let server_config = make_server_config(cert, key)?;
     let endpoint = Endpoint::server(server_config, bind)?;
     let state = Arc::new(HubState::new(Some(data_dir)));
+    let cfg = Arc::new(cfg);
 
     info!("hub listening on {bind}");
 
@@ -34,8 +35,9 @@ pub async fn run_server(cfg: Config) -> Result<()> {
                 match incoming {
                     Some(incoming) => {
                         let state = state.clone();
+                        let cfg = cfg.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_connection(incoming, state).await {
+                            if let Err(e) = handle_connection(incoming, state, cfg).await {
                                 error!("connection error: {e}");
                             }
                         });
@@ -58,6 +60,7 @@ pub async fn run_server(cfg: Config) -> Result<()> {
 async fn handle_connection(
     incoming: Incoming,
     state: Arc<HubState>,
+    cfg: Arc<Config>,
 ) -> Result<()> {
     let connection = incoming.await?;
     let remote = connection.remote_address();
@@ -72,7 +75,7 @@ async fn handle_connection(
                     Ok(val) => {
                         let kind = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
                         let resp = match kind {
-                            "push" => handle_push(val, &state).await,
+                            "push" => handle_push(val, &state, &cfg).await,
                             "pull" => handle_pull(val, &state).await,
                             "status" => handle_status(&state).await,
                             _ => {
@@ -103,19 +106,22 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn handle_push(val: serde_json::Value, state: &HubState) -> serde_json::Value {
+async fn handle_push(val: serde_json::Value, state: &HubState, cfg: &Config) -> serde_json::Value {
     if let Ok(req) = serde_json::from_value::<PushRequest>(val) {
         let machine = req.machine.clone();
         state
             .update_machine(crate::protocol::MachineState {
                 name: machine.clone(),
                 last_push: req.timestamp,
-                zen: req.zen,
-                projects: req.projects,
+                zen: req.zen.clone(),
+                projects: req.projects.clone(),
             })
             .await;
         state.set_online(&machine, true).await;
         info!("push from {machine} accepted");
+
+        trigger_remote_pulls(&req, cfg).await;
+
         serde_json::to_value(PushResponse { ok: true, error: None }).unwrap_or_default()
     } else {
         serde_json::to_value(PushResponse {
@@ -123,6 +129,48 @@ async fn handle_push(val: serde_json::Value, state: &HubState) -> serde_json::Va
             error: Some("invalid push request".into()),
         })
         .unwrap_or_default()
+    }
+}
+
+async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config) {
+    let (Some(projects_cfg), Some(remote_cfg)) = (&cfg.projects, &cfg.remote) else {
+        return;
+    };
+
+    for project in &req.projects {
+        let Some(project_cfg) = projects_cfg.get(&project.name) else {
+            continue;
+        };
+        let Some(machines) = &project_cfg.machines else {
+            continue;
+        };
+
+        for machine_name in machines {
+            if machine_name == &req.machine {
+                continue;
+            }
+            let Some(remote) = remote_cfg.get(machine_name) else {
+                error!("no remote config for machine {machine_name}");
+                continue;
+            };
+
+            let host = remote.host.clone();
+            let port = remote.port;
+            let user = remote.user.clone();
+            let path = project_cfg.path.display().to_string();
+            let branch = project_cfg.branch.as_deref().unwrap_or("main").to_string();
+            let project_name = project.name.clone();
+            let machine_name = machine_name.clone();
+            let cmd = format!("cd {path} && git stash push && git pull --rebase origin {branch}");
+
+            tokio::spawn(async move {
+                info!("SSH pulling {project_name} on {machine_name} ({host})...");
+                match crate::ssh::client::exec(&host, port, &user, &cmd).await {
+                    Ok(_) => info!("SSH pull {machine_name}/{project_name}: OK"),
+                    Err(e) => error!("SSH pull {machine_name}/{project_name} failed: {e}"),
+                }
+            });
+        }
     }
 }
 
