@@ -549,6 +549,7 @@ name = "dsync"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "directories",
  "dirs",

@@ -53,52 +53,8 @@ fn git_pull(name: &str, path: &Path) -> Result<()> {
             .current_dir(path)
             .output()
             .ok();
-        Command::new("git")
-            .args(["stash", "pop"])
-            .current_dir(path)
-            .output()
-            .ok();
     }
 
-    Ok(())
-}
-
-pub fn sync_to_remote(
-    projects: &HashMap<String, ProjectConfig>,
-    remote_name: &str,
-    machine_host: &str,
-    machine_user: &str,
-) -> Result<()> {
-    for (name, config) in projects {
-        let path = expand_user_path(&config.path);
-        if !path.join(".git").exists() {
-            continue;
-        }
-
-        let branch = config
-            .branch
-            .clone()
-            .or_else(|| {
-                git_output(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
-            })
-            .unwrap_or_else(|| "main".to_string());
-
-        let remote_url = config.remote.clone().unwrap_or_default();
-
-        let script = format!(
-            r#"export PATH="$HOME/.local/bin:$PATH"
-cd {path}
-git stash push -m "dsync-auto-$(date +%s)" 2>/dev/null || true
-git pull --rebase {url} {branch} 2>&1 || echo GIT_CONFLICT"#,
-            path = path.to_string_lossy(),
-            url = &remote_url,
-            branch = &branch,
-        );
-
-        info!("SSH sync {name} on {remote_name} ({machine_host})");
-        let result = crate::ssh::client::exec(machine_host, 22, machine_user, &script)?;
-        info!("{name}@{remote_name}: {result}");
-    }
     Ok(())
 }
 
