@@ -1,0 +1,23 @@
+[Unit]
+Description=dsync hub — machine state synchronizer over QUIC
+Documentation=https://github.com/mflkee/dsync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/mflkee/.cargo/bin/dsync daemon
+Restart=on-failure
+RestartSec=5
+User=mflkee
+Group=mflkee
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/home/mflkee/.local/share/dsync
+
+[Install]
+WantedBy=default.target

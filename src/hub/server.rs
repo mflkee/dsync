@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use quinn::{Endpoint, Incoming, ServerConfig};
+use tokio::signal;
 use tracing::{error, info};
 
 use crate::config::Config;
@@ -14,22 +15,43 @@ pub async fn run_server(cfg: Config) -> Result<()> {
     let bind: SocketAddr = cfg.hub.as_ref().map(|h| &h.bind).unwrap().parse()?;
     info!("starting dsync hub on {bind}");
 
+    let data_dir = cfg
+        .hub
+        .as_ref()
+        .and_then(|h| h.data_dir.clone())
+        .unwrap_or_else(|| dirs::data_dir().unwrap_or_default().join("dsync"));
+
     let (cert, key) = load_or_generate_certs(&cfg)?;
     let server_config = make_server_config(cert, key)?;
     let endpoint = Endpoint::server(server_config, bind)?;
-    let state = Arc::new(HubState::new());
+    let state = Arc::new(HubState::new(Some(data_dir)));
 
     info!("hub listening on {bind}");
 
-    while let Some(incoming) = endpoint.accept().await {
-        let state = state.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(incoming, state).await {
-                error!("connection error: {e}");
+    loop {
+        tokio::select! {
+            incoming = endpoint.accept() => {
+                match incoming {
+                    Some(incoming) => {
+                        let state = state.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_connection(incoming, state).await {
+                                error!("connection error: {e}");
+                            }
+                        });
+                    }
+                    None => break,
+                }
             }
-        });
+            _ = signal::ctrl_c() => {
+                info!("shutting down hub");
+                endpoint.close(0u32.into(), b"shutdown");
+                break;
+            }
+        }
     }
 
+    info!("hub stopped");
     Ok(())
 }
 

@@ -1,25 +1,43 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use tokio::sync::RwLock;
 
 use crate::protocol::MachineState;
 
-#[derive(Default)]
 pub struct HubState {
     machines: RwLock<HashMap<String, MachineState>>,
     online: RwLock<HashMap<String, bool>>,
+    data_dir: Option<PathBuf>,
 }
 
 impl HubState {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(data_dir: Option<PathBuf>) -> Self {
+        let machines = data_dir
+            .as_ref()
+            .and_then(|d| Self::load_machines(d).ok())
+            .unwrap_or_default();
+
+        let online = machines.keys().map(|k| (k.clone(), false)).collect();
+
+        tracing::info!(
+            "hub state: {} machines loaded from disk",
+            machines.len()
+        );
+
+        Self {
+            machines: RwLock::new(machines),
+            online: RwLock::new(online),
+            data_dir,
+        }
     }
 
     pub async fn update_machine(&self, state: MachineState) {
         let name = state.name.clone();
         let mut machines = self.machines.write().await;
         machines.insert(name, state);
+        self.save().await;
     }
 
     pub async fn get_machine(&self, name: &str) -> Option<MachineState> {
@@ -59,5 +77,36 @@ impl HubState {
         }
 
         Ok(crate::protocol::StatusResponse { machines: resp })
+    }
+
+    async fn save(&self) {
+        let dir = match &self.data_dir {
+            Some(d) => d.clone(),
+            None => return,
+        };
+        let machines = self.machines.read().await;
+        let data = match serde_json::to_string_pretty(&*machines) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("failed to serialize state: {e}");
+                return;
+            }
+        };
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            tracing::error!("failed to create data dir {dir:?}: {e}");
+            return;
+        }
+        if let Err(e) = tokio::fs::write(dir.join("machines.json"), data).await {
+            tracing::error!("failed to save state: {e}");
+        }
+    }
+
+    fn load_machines(dir: &PathBuf) -> Result<HashMap<String, MachineState>> {
+        let path = dir.join("machines.json");
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        let data = std::fs::read_to_string(&path)?;
+        Ok(serde_json::from_str(&data)?)
     }
 }

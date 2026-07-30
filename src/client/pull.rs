@@ -5,12 +5,12 @@ use crate::config::Config;
 use crate::protocol::PullRequest;
 use crate::zen::import;
 
-use super::connect::{connect, send_pull};
+use super::connect::{connect_with_retry, send_pull};
 
 pub async fn pull(cfg: Config, _machine: Option<String>) -> Result<()> {
     info!("starting pull for {}", cfg.machine.name);
 
-    let conn = connect(&cfg).await?;
+    let conn = connect_with_retry(&cfg).await?;
 
     let req = PullRequest {
         machine: cfg.machine.name.clone(),

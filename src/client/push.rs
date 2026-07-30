@@ -4,12 +4,12 @@ use tracing::info;
 use crate::config::Config;
 use crate::protocol::PushRequest;
 
-use super::connect::{connect, send_push};
+use super::connect::{connect_with_retry, send_push};
 
 pub async fn push(cfg: Config, _machine: Option<String>) -> Result<()> {
     info!("starting push from {}", cfg.machine.name);
 
-    let conn = connect(&cfg).await?;
+    let conn = connect_with_retry(&cfg).await?;
 
     let projects = collect_projects(&cfg).await?;
     let zen = collect_zen(&cfg).await?;

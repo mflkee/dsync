@@ -68,7 +68,7 @@ fn make_client_config() -> Result<ClientConfig> {
     Ok(config)
 }
 
-pub async fn connect(cfg: &Config) -> Result<Connection> {
+pub async fn connect_with_retry(cfg: &Config) -> Result<Connection> {
     let addr = cfg
         .hub_connect
         .as_ref()
@@ -77,13 +77,30 @@ pub async fn connect(cfg: &Config) -> Result<Connection> {
         .unwrap_or_else(|| "127.0.0.1:42069".into());
 
     let endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
-    let config = make_client_config()?;
-    let connection = endpoint
-        .connect_with(config, addr.parse()?, "dsync.local")?
-        .await?;
 
-    info!("connected to hub at {addr}");
-    Ok(connection)
+    let mut last_connect_err = String::new();
+    for attempt in 1..=4 {
+        let config = make_client_config()?;
+        match endpoint.connect_with(config, addr.parse()?, "dsync.local") {
+            Ok(connecting) => match connecting.await {
+                Ok(conn) => {
+                    info!("connected to hub at {addr}");
+                    return Ok(conn);
+                }
+                Err(e) => {
+                    last_connect_err = format!("{e}");
+                    info!("connect attempt {attempt}/4 failed: {e}");
+                }
+            },
+            Err(e) => {
+                last_connect_err = format!("{e}");
+                info!("connect attempt {attempt}/4 failed: {e}");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+    }
+
+    anyhow::bail!("failed to connect to hub after 4 attempts: {last_connect_err}")
 }
 
 async fn send_recv(
@@ -121,7 +138,7 @@ pub async fn send_status(conn: &Connection, req: &StatusRequest) -> Result<Statu
 }
 
 pub async fn status(cfg: Config) -> Result<()> {
-    let conn = connect(&cfg).await?;
+    let conn = connect_with_retry(&cfg).await?;
     let req = StatusRequest {
         machine: cfg.machine.name.clone(),
     };
