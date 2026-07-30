@@ -125,12 +125,13 @@ fn make_server_config(
     cert_chain: Vec<rustls::pki_types::CertificateDer<'static>>,
     priv_key: rustls::pki_types::PrivateKeyDer<'static>,
 ) -> Result<ServerConfig> {
-    let crypto = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, priv_key)?;
-
-    let quic_config = quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?;
-    let mut config = ServerConfig::new(Arc::new(quic_config), Arc::new(quinn::TokenKey::new(&rand::random::<[u8; 32]>())));
+    let mut config = ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(
+            rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(cert_chain, priv_key)?,
+        )?,
+    ));
     config.transport = Arc::new(quinn::TransportConfig::default());
     Ok(config)
 }
