@@ -405,6 +405,20 @@ def tmux_theme_sync(dest: Path) -> GitResult:
         except (OSError, subprocess.TimeoutExpired):
             pass
 
+    # Reload tokyo-night-tmux in the running tmux server so new colors apply immediately
+    tokyo_script = Path.home() / ".tmux" / "plugins" / "tokyo-night-tmux" / "tokyo-night.tmux"
+    if tokyo_script.exists():
+        try:
+            subprocess.run(
+                ["tmux", "run-shell", str(tokyo_script)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
     return GitResult(success=True, stdout="tmux theme synced")
 
 
