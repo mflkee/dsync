@@ -6,6 +6,16 @@ use tokio::sync::RwLock;
 
 use crate::protocol::MachineState;
 
+fn expand(p: &PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    p.clone()
+}
+
 pub struct HubState {
     machines: RwLock<HashMap<String, MachineState>>,
     online: RwLock<HashMap<String, bool>>,
@@ -14,6 +24,7 @@ pub struct HubState {
 
 impl HubState {
     pub fn new(data_dir: Option<PathBuf>) -> Self {
+        let data_dir = data_dir.map(|d| expand(&d));
         let machines = data_dir
             .as_ref()
             .and_then(|d| Self::load_machines(d).ok())

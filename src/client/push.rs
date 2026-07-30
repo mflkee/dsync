@@ -11,9 +11,7 @@ pub async fn push(cfg: Config, _machine: Option<String>) -> Result<()> {
 
     let conn = connect_with_retry(&cfg).await?;
 
-    info!("collecting projects...");
     let projects = collect_projects(&cfg).await?;
-    info!("collecting zen...");
     let zen = collect_zen(&cfg).await?;
 
     let req = PushRequest {
@@ -25,7 +23,6 @@ pub async fn push(cfg: Config, _machine: Option<String>) -> Result<()> {
         projects,
     };
 
-    info!("sending push request...");
     let resp = send_push(&conn, &req).await?;
     if resp.ok {
         info!("push successful");
