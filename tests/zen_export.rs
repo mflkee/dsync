@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use dsync::config::{Config, MachineConfig};
 use dsync::zen::export;
 
