@@ -34,9 +34,26 @@ pub async fn push(cfg: Config, _machine: Option<String>) -> Result<()> {
     Ok(())
 }
 
-async fn collect_zen(_cfg: &Config) -> Result<Option<crate::protocol::ZenState>> {
-    // TODO: Фаза 2 — Zen export на Rust
-    Ok(None)
+async fn collect_zen(cfg: &Config) -> Result<Option<crate::protocol::ZenState>> {
+    use sha2::Digest;
+
+    match crate::zen::export::export(cfg) {
+        Ok(data) => {
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(&data);
+            let checksum = hex::encode(hasher.finalize());
+            info!(
+                "zen export ready ({} bytes, checksum {})",
+                data.len(),
+                &checksum[..12]
+            );
+            Ok(Some(crate::protocol::ZenState { data, checksum }))
+        }
+        Err(e) => {
+            tracing::warn!("zen export failed: {e}");
+            Ok(None)
+        }
+    }
 }
 
 async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectState>> {

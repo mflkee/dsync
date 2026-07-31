@@ -44,6 +44,7 @@ pub struct ProjectConfig {
     pub remote: Option<String>,
     pub branch: Option<String>,
     pub machines: Option<Vec<String>>,
+    pub post_pull: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

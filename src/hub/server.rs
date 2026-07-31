@@ -161,7 +161,14 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config) {
             let branch = project_cfg.branch.as_deref().unwrap_or("main").to_string();
             let project_name = project.name.clone();
             let machine_name = machine_name.clone();
-            let cmd = format!("cd {path} && git stash push && git pull --rebase origin {branch}");
+            let mut cmd = format!("cd {path} && git stash push && git pull --rebase origin {branch}");
+            if let Some(post) = &project_cfg.post_pull {
+                let post = post.trim();
+                if !post.is_empty() {
+                    cmd.push_str(" && ");
+                    cmd.push_str(post);
+                }
+            }
 
             tokio::spawn(async move {
                 info!("SSH pulling {project_name} on {machine_name} ({host})...");
