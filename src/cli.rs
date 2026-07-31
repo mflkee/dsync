@@ -23,6 +23,10 @@ pub enum Commands {
     },
     /// Show sync status
     Status,
+    /// Run diagnostics
+    Doctor,
+    /// Start Telegram bot
+    Bot,
 }
 
 impl Cli {

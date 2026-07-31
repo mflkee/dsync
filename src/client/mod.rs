@@ -1,4 +1,4 @@
-mod connect;
+pub mod connect;
 mod pull;
 mod push;
 

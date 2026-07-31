@@ -1,6 +1,8 @@
+mod bot;
 mod cli;
 mod client;
 mod config;
+mod doctor;
 mod hub;
 mod protocol;
 mod projects;
@@ -28,5 +30,7 @@ async fn main() -> Result<()> {
         cli::Commands::Push { machine } => client::push(cfg, machine).await,
         cli::Commands::Pull { machine } => client::pull(cfg, machine).await,
         cli::Commands::Status => client::status(cfg).await,
+        cli::Commands::Doctor => doctor::run(cfg).await,
+        cli::Commands::Bot => bot::run(cfg).await,
     }
 }
