@@ -58,6 +58,12 @@ async fn collect_zen(cfg: &Config) -> Result<Option<crate::protocol::ZenState>> 
 
 async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectState>> {
     if let Some(projects) = &cfg.projects {
+        for (name, config) in projects {
+            let path = crate::projects::status::expand_user_path(&config.path);
+            if let Err(e) = crate::projects::sync::commit_and_push(name, &path) {
+                tracing::warn!("{e}");
+            }
+        }
         crate::projects::status::scan(projects)
     } else {
         Ok(Vec::new())
