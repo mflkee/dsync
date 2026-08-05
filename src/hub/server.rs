@@ -117,7 +117,6 @@ async fn handle_push(val: serde_json::Value, state: &HubState, cfg: &Config) -> 
                 projects: req.projects.clone(),
             })
             .await;
-        state.set_online(&machine, true).await;
         info!("push from {machine} accepted");
 
         trigger_remote_pulls(&req, cfg).await;
@@ -148,6 +147,11 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config) {
         for machine_name in machines {
             if machine_name == &req.machine {
                 continue;
+            }
+            if let Some(target) = &req.target {
+                if machine_name != target {
+                    continue;
+                }
             }
             let Some(remote) = remote_cfg.get(machine_name) else {
                 error!("no remote config for machine {machine_name}");
@@ -183,7 +187,10 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config) {
 
 async fn handle_pull(val: serde_json::Value, state: &HubState) -> serde_json::Value {
     if let Ok(req) = serde_json::from_value::<PullRequest>(val) {
-        let machines = state.all_machines().await;
+        let mut machines = state.all_machines().await;
+        if let Some(machine) = req.filter.as_ref().and_then(|f| f.machine.as_ref()) {
+            machines.retain(|name, _| name == machine);
+        }
         info!("pull from {}: {} machines", req.machine, machines.len());
         serde_json::to_value(PullResponse { machines }).unwrap_or_default()
     } else {

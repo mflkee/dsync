@@ -8,6 +8,9 @@ pub struct PushRequest {
     pub timestamp: i64,
     pub zen: Option<ZenState>,
     pub projects: Vec<ProjectState>,
+    /// Restrict hub SSH-pulls to this machine (default: all in project config)
+    #[serde(default)]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -27,6 +30,9 @@ pub struct PullRequest {
 pub struct PullFilter {
     pub zen: bool,
     pub projects: bool,
+    /// Only return state for this machine
+    #[serde(default)]
+    pub machine: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

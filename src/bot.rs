@@ -308,11 +308,6 @@ async fn handle_command(
     Ok(())
 }
 
-async fn persist_sessions(sessions: &Sessions) {
-    let map = sessions.lock().await;
-    save_sessions(&map).await;
-}
-
 // ── callback handler ─────────────────────────────────
 
 async fn handle_callback(
@@ -342,7 +337,7 @@ async fn handle_callback(
         let m = sessions.lock().await.get(&chat_id).and_then(|s| s.machine.clone());
         let r = m.as_ref().and_then(|m| rm(&remotes, m));
         let ctrl_id = sessions.lock().await.get(&chat_id).and_then(|s| s.ctrl_msg);
-        if let (Some(machine), Some(remote)) = (m, r) {
+        if let (Some(_machine), Some(remote)) = (m, r) {
             let session = format!("dsync-bot-{chat_id}");
             let _ = ssh(&remote.host, remote.port, &remote.user,
                 &format!("tmux send-keys -t {session} {key}")).await;

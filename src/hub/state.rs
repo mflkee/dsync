@@ -16,9 +16,17 @@ fn expand(p: &PathBuf) -> PathBuf {
     p.clone()
 }
 
+const ONLINE_TIMEOUT_SECS: i64 = 35 * 60;
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 pub struct HubState {
     machines: RwLock<HashMap<String, MachineState>>,
-    online: RwLock<HashMap<String, bool>>,
     data_dir: Option<PathBuf>,
 }
 
@@ -30,8 +38,6 @@ impl HubState {
             .and_then(|d| Self::load_machines(d).ok())
             .unwrap_or_default();
 
-        let online = machines.keys().map(|k| (k.clone(), false)).collect();
-
         tracing::info!(
             "hub state: {} machines loaded from disk",
             machines.len()
@@ -39,7 +45,6 @@ impl HubState {
 
         Self {
             machines: RwLock::new(machines),
-            online: RwLock::new(online),
             data_dir,
         }
     }
@@ -53,36 +58,21 @@ impl HubState {
         self.save().await;
     }
 
-    pub async fn get_machine(&self, name: &str) -> Option<MachineState> {
-        let machines = self.machines.read().await;
-        machines.get(name).cloned()
-    }
-
     pub async fn all_machines(&self) -> HashMap<String, MachineState> {
         let machines = self.machines.read().await;
         machines.clone()
     }
 
-    pub async fn set_online(&self, name: &str, online: bool) {
-        let mut online_map = self.online.write().await;
-        online_map.insert(name.to_string(), online);
-    }
-
-    pub async fn is_online(&self, name: &str) -> bool {
-        let online_map = self.online.read().await;
-        online_map.get(name).copied().unwrap_or(false)
-    }
-
     pub async fn status(&self) -> Result<crate::protocol::StatusResponse> {
         let machines = self.machines.read().await;
-        let online_map = self.online.read().await;
+        let now = unix_now();
         let mut resp = std::collections::HashMap::new();
 
         for (name, state) in machines.iter() {
             resp.insert(
                 name.clone(),
                 crate::protocol::MachineStatus {
-                    online: online_map.get(name).copied().unwrap_or(false),
+                    online: now - state.last_push <= ONLINE_TIMEOUT_SECS,
                     last_seen: state.last_push,
                     last_push: state.last_push,
                 },

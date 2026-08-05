@@ -6,8 +6,11 @@ use crate::protocol::PushRequest;
 
 use super::connect::{connect_with_retry, send_push};
 
-pub async fn push(cfg: Config, _machine: Option<String>) -> Result<()> {
+pub async fn push(cfg: Config, machine: Option<String>) -> Result<()> {
     info!("starting push from {}", cfg.machine.name);
+    if let Some(m) = &machine {
+        info!("targeting SSH pull to machine {m}");
+    }
 
     let conn = connect_with_retry(&cfg).await?;
 
@@ -21,6 +24,7 @@ pub async fn push(cfg: Config, _machine: Option<String>) -> Result<()> {
             .as_secs() as i64,
         zen,
         projects,
+        target: machine,
     };
 
     let resp = send_push(&conn, &req).await?;

@@ -35,13 +35,11 @@ pub struct HubConnectConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ZenConfig {
     pub profile_path: PathBuf,
-    pub export_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProjectConfig {
     pub path: PathBuf,
-    pub remote: Option<String>,
     pub branch: Option<String>,
     pub machines: Option<Vec<String>>,
     pub post_pull: Option<String>,

@@ -73,10 +73,7 @@ fn test_zen_import_specific_profile() {
         },
         hub: None,
         hub_connect: None,
-        zen: Some(ZenConfig {
-            profile_path,
-            export_path: None,
-        }),
+        zen: Some(ZenConfig { profile_path }),
         projects: None,
         remote: None,
     };

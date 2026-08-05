@@ -6,7 +6,7 @@ use dsync::projects::status;
 
 fn init_git_repo(dir: &std::path::Path) {
     Command::new("git")
-        .args(["init"])
+        .args(["init", "-b", "main"])
         .current_dir(dir)
         .output()
         .unwrap();
@@ -45,9 +45,9 @@ fn test_scan_clean_repo() {
         "test-project".to_string(),
         ProjectConfig {
             path: dir.clone(),
-            remote: None,
             branch: None,
             machines: None,
+            post_pull: None,
         },
     );
 
@@ -74,9 +74,9 @@ fn test_scan_dirty_repo() {
         "test".to_string(),
         ProjectConfig {
             path: dir.clone(),
-            remote: None,
             branch: None,
             machines: None,
+            post_pull: None,
         },
     );
 
@@ -96,9 +96,9 @@ fn test_scan_nonexistent_path() {
         "gone".to_string(),
         ProjectConfig {
             path: dir.clone(),
-            remote: None,
             branch: None,
             machines: None,
+            post_pull: None,
         },
     );
 

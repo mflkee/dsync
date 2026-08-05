@@ -137,6 +137,39 @@ pub async fn send_status(conn: &Connection, req: &StatusRequest) -> Result<Statu
     Ok(serde_json::from_slice(&buf)?)
 }
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn fmt_relative(ts: i64) -> String {
+    let diff = unix_now() - ts;
+    if diff < 0 {
+        return "in the future".into();
+    }
+    let days = diff / 86400;
+    let hours = diff / 3600;
+    let mins = diff / 60;
+    if days > 0 {
+        format!("{days}d ago")
+    } else if hours > 0 {
+        format!("{hours}h ago")
+    } else if mins > 0 {
+        format!("{mins}m ago")
+    } else {
+        format!("{diff}s ago")
+    }
+}
+
+fn fmt_civil(ts: i64) -> String {
+    match chrono::DateTime::from_timestamp(ts, 0) {
+        Some(dt) => dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string(),
+        None => format!("{ts}"),
+    }
+}
+
 pub async fn status(cfg: Config) -> Result<()> {
     let conn = connect_with_retry(&cfg).await?;
     let req = StatusRequest {
@@ -147,8 +180,11 @@ pub async fn status(cfg: Config) -> Result<()> {
     println!("Sync Status:");
     for (name, status) in &resp.machines {
         println!(
-            "  {}: online={}, last_push={}",
-            name, status.online, status.last_push
+            "  {}: online={}, last_push={} ({})",
+            name,
+            status.online,
+            fmt_civil(status.last_push),
+            fmt_relative(status.last_push),
         );
     }
 

@@ -25,6 +25,7 @@ sha2 = "0.10"
 hex = "0.4"
 regex = "1"
 dirs = "5"
+chrono = { version = "0.4", features = ["clock"] }
 async-trait = "0.1"
 teloxide = { version = "0.12", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
 
