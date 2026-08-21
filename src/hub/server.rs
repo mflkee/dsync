@@ -113,7 +113,6 @@ async fn handle_push(val: serde_json::Value, state: &HubState, cfg: &Config) -> 
             .update_machine(crate::protocol::MachineState {
                 name: machine.clone(),
                 last_push: req.timestamp,
-                zen: req.zen.clone(),
                 projects: req.projects.clone(),
             })
             .await;

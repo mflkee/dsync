@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 pub struct PushRequest {
     pub machine: String,
     pub timestamp: i64,
-    pub zen: Option<ZenState>,
     pub projects: Vec<ProjectState>,
     /// Restrict hub SSH-pulls to this machine (default: all in project config)
     #[serde(default)]
@@ -28,7 +27,6 @@ pub struct PullRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PullFilter {
-    pub zen: bool,
     pub projects: bool,
     /// Only return state for this machine
     #[serde(default)]
@@ -44,14 +42,7 @@ pub struct PullResponse {
 pub struct MachineState {
     pub name: String,
     pub last_push: i64,
-    pub zen: Option<ZenState>,
     pub projects: Vec<ProjectState>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ZenState {
-    pub data: Vec<u8>,
-    pub checksum: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -15,14 +15,12 @@ pub async fn push(cfg: Config, machine: Option<String>) -> Result<()> {
     let conn = connect_with_retry(&cfg).await?;
 
     let projects = collect_projects(&cfg).await?;
-    let zen = collect_zen(&cfg).await?;
 
     let req = PushRequest {
         machine: cfg.machine.name.clone(),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64,
-        zen,
         projects,
         target: machine,
     };
@@ -36,28 +34,6 @@ pub async fn push(cfg: Config, machine: Option<String>) -> Result<()> {
     }
 
     Ok(())
-}
-
-async fn collect_zen(cfg: &Config) -> Result<Option<crate::protocol::ZenState>> {
-    use sha2::Digest;
-
-    match crate::zen::export::export(cfg) {
-        Ok(data) => {
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(&data);
-            let checksum = hex::encode(hasher.finalize());
-            info!(
-                "zen export ready ({} bytes, checksum {})",
-                data.len(),
-                &checksum[..12]
-            );
-            Ok(Some(crate::protocol::ZenState { data, checksum }))
-        }
-        Err(e) => {
-            tracing::warn!("zen export failed: {e}");
-            Ok(None)
-        }
-    }
 }
 
 async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectState>> {

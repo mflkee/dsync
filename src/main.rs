@@ -7,7 +7,6 @@ mod hub;
 mod protocol;
 mod projects;
 mod ssh;
-mod zen;
 
 use anyhow::Result;
 

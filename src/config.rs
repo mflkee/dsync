@@ -9,7 +9,6 @@ pub struct Config {
     pub machine: MachineConfig,
     pub hub: Option<HubConfig>,
     pub hub_connect: Option<HubConnectConfig>,
-    pub zen: Option<ZenConfig>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
     pub remote: Option<HashMap<String, RemoteMachine>>,
 }
@@ -30,11 +29,6 @@ pub struct HubConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct HubConnectConfig {
     pub address: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ZenConfig {
-    pub profile_path: PathBuf,
 }
 
 #[derive(Debug, Deserialize, Clone)]

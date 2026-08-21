@@ -76,17 +76,6 @@ pub async fn run(cfg: Config) -> Result<()> {
         println!("\n  (no projects configured)");
     }
 
-    if let Some(ref zen) = cfg.zen {
-        check("zen profile", || {
-            let path = crate::projects::status::expand_user_path(&zen.profile_path);
-            if path.exists() {
-                Status::Ok
-            } else {
-                Status::Warn(format!("profile_path not found: {}", path.display()))
-            }
-        });
-    }
-
     println!("\nchecking hub connectivity...");
     match try_ping_hub(&cfg).await {
         Ok(_) => {}
