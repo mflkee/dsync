@@ -28,6 +28,11 @@ pub enum Commands {
         /// Source machine name (default: all)
         machine: Option<String>,
     },
+    /// Manage trusted hub fingerprints (TOFU known_hosts)
+    Trust {
+        #[command(subcommand)]
+        action: TrustAction,
+    },
     /// Show sync status
     Status,
     /// Run diagnostics
@@ -36,6 +41,17 @@ pub enum Commands {
     Bot,
     /// Start interactive TUI
     Tui,
+}
+
+#[derive(Subcommand)]
+pub enum TrustAction {
+    /// List trusted hub fingerprints
+    List,
+    /// Forget a trusted hub fingerprint (accept the new one on next connect)
+    Rm {
+        /// Hub address, e.g. 100.89.126.211:42069
+        address: String,
+    },
 }
 
 impl Cli {

@@ -7,6 +7,7 @@ mod hub;
 mod projects;
 mod protocol;
 mod ssh;
+mod trust;
 mod tui;
 
 use std::path::PathBuf;
@@ -35,6 +36,16 @@ async fn main() -> Result<()> {
             print_lines(client::pull(cfg, machine).await?);
             Ok(())
         }
+        cli::Commands::Trust { action } => match action {
+            cli::TrustAction::List => {
+                print_lines(trust::trust_list()?);
+                Ok(())
+            }
+            cli::TrustAction::Rm { address } => {
+                print_lines(trust::trust_rm(&address)?);
+                Ok(())
+            }
+        },
         cli::Commands::Status => {
             print_lines(client::status(cfg).await?);
             Ok(())

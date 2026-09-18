@@ -33,7 +33,7 @@ pub async fn run_server(cfg: Config) -> Result<()> {
         .and_then(|h| h.data_dir.clone())
         .unwrap_or_else(|| dirs::data_dir().unwrap_or_default().join("dsync"));
 
-    let (cert, key) = load_or_generate_certs(&cfg)?;
+    let (cert, key) = load_or_generate_certs(&cfg, &data_dir)?;
     let server_config = make_server_config(cert, key)?;
     let endpoint = Endpoint::server(server_config, bind)?;
     let state = Arc::new(HubState::new(Some(data_dir)));
@@ -248,10 +248,12 @@ fn make_server_config(
 
 fn load_or_generate_certs(
     cfg: &Config,
+    data_dir: &std::path::Path,
 ) -> Result<(
     Vec<rustls::pki_types::CertificateDer<'static>>,
     rustls::pki_types::PrivateKeyDer<'static>,
 )> {
+    // 1. Явно заданные через [hub] cert/key — приоритет.
     if let Some(hub) = &cfg.hub {
         if let (Some(cert_path), Some(key_path)) = (&hub.cert, &hub.key) {
             let cert = std::fs::read(cert_path)?;
@@ -263,9 +265,36 @@ fn load_or_generate_certs(
         }
     }
 
-    info!("no certs found, generating self-signed");
+    // 2. Сертификат из data_dir (сохранён при прошлом запуске) — чтобы
+    //    fingerprint был стабильным между рестартами и клиенты с TOFU
+    //    не ломались после каждого перезапуска хаба.
+    let cert_file = data_dir.join("server_cert.pem");
+    let key_file = data_dir.join("server_key.pem");
+    if cert_file.exists() && key_file.exists() {
+        let cert = std::fs::read(&cert_file)?;
+        let key = std::fs::read(&key_file)?;
+        let certs = rustls_pemfile::certs(&mut cert.as_slice()).collect::<Result<Vec<_>, _>>()?;
+        if let Some(key) = rustls_pemfile::private_key(&mut key.as_slice())? {
+            return Ok((certs, key));
+        }
+        anyhow::bail!("server_key.pem in {data_dir:?} contains no private key");
+    }
+
+    // 3. Генерируем новый и сохраняем на диск.
+    info!(
+        "no certs found, generating self-signed (persisted in {})",
+        data_dir.display()
+    );
     let cert = rcgen::generate_simple_self_signed(vec!["dsync.local".into()])?;
-    let cert_der = cert.cert.into();
-    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
-    Ok((vec![cert_der], key_der))
+    let cert_pem = cert.cert.pem();
+    let key_pem = cert.key_pair.serialize_pem();
+    std::fs::create_dir_all(data_dir)?;
+    std::fs::write(&cert_file, cert_pem)?;
+    std::fs::write(&key_file, key_pem)?;
+
+    let cert_der = std::fs::read(&cert_file)?;
+    let key_der = std::fs::read(&key_file)?;
+    let certs = rustls_pemfile::certs(&mut cert_der.as_slice()).collect::<Result<Vec<_>, _>>()?;
+    let key = rustls_pemfile::private_key(&mut key_der.as_slice())?.unwrap();
+    Ok((certs, key))
 }

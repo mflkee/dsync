@@ -1,28 +1,50 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
 use quinn::{ClientConfig, Connection, Endpoint};
 use rustls::ClientConfig as TlsClientConfig;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::protocol::{
     PullRequest, PullResponse, PushRequest, PushResponse, StatusRequest, StatusResponse,
 };
+use crate::trust::{fingerprint, TrustStore};
 
+/// TOFU-верификатор: при первом подключении к хабу запоминает отпечаток
+/// сертификата (trust on first use), при последующих — сверяет с known_hosts.
+/// Изменение отпечатка = возможный MITM или переустановка хаба — отказ.
 #[derive(Debug)]
-struct SkipVerification;
+struct TofuVerifier {
+    /// Ожидаемый отпечаток из known_hosts (None = первый контакт).
+    expected: Option<String>,
+    /// Сюда кладётся отпечаток, который сертификат предъявил на самом деле.
+    observed: Arc<Mutex<Option<String>>>,
+}
 
-impl rustls::client::danger::ServerCertVerifier for SkipVerification {
+impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
         _intermediates: &[rustls::pki_types::CertificateDer<'_>],
         _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let fp = fingerprint(end_entity.as_ref());
+        if let Ok(mut obs) = self.observed.lock() {
+            *obs = Some(fp.clone());
+        }
+        if let Some(expected) = &self.expected {
+            if expected != &fp {
+                return Err(rustls::Error::General(format!(
+                    "hub fingerprint mismatch: server presented {fp}, known_hosts has {expected}. \
+                     Possible MITM or hub reinstall — run `dsync trust rm <addr>` to accept the new one"
+                )));
+            }
+        }
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
@@ -59,10 +81,14 @@ impl rustls::client::danger::ServerCertVerifier for SkipVerification {
     }
 }
 
-fn make_client_config() -> Result<ClientConfig> {
+fn make_client_config(
+    expected: Option<String>,
+    observed: Arc<Mutex<Option<String>>>,
+) -> Result<ClientConfig> {
+    let verifier = TofuVerifier { expected, observed };
     let crypto = TlsClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(SkipVerification))
+        .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
 
     let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?;
@@ -79,11 +105,16 @@ pub async fn connect_with_retry(cfg: &Config) -> Result<Connection> {
         .cloned()
         .unwrap_or_else(|| "127.0.0.1:42069".into());
 
+    // TOFU: ожидаемый отпечаток из known_hosts; наблюдаемый — из handshake.
+    let mut store = TrustStore::load();
+    let expected = store.get(&addr).map(str::to_string);
+    let observed: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
     let endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
 
     let mut last_connect_err = String::new();
     for attempt in 1..=4 {
-        let config = make_client_config()?;
+        let config = make_client_config(expected.clone(), observed.clone())?;
         match endpoint.connect_with(config, addr.parse()?, "dsync.local") {
             Ok(connecting) => {
                 // Жёсткий таймаут на рукопожатие: к мёртвому хабу quinn сам
@@ -93,6 +124,25 @@ pub async fn connect_with_retry(cfg: &Config) -> Result<Connection> {
                 // для медленного разогрева хаба (спящий/загрузка).
                 match tokio::time::timeout(Duration::from_secs(5), connecting).await {
                     Ok(Ok(conn)) => {
+                        // Первый контакт: запоминаем отпечаток (TOFU).
+                        if let Ok(obs) = observed.lock() {
+                            if let Some(fp) = obs.as_ref() {
+                                if store.get(&addr).is_none() {
+                                    warn!(
+                                        "first connection to hub {addr}: trusting \
+                                         fingerprint {fp} (add `dsync trust list` to verify)"
+                                    );
+                                    store.insert(&addr, fp);
+                                    if let Err(e) = store.save() {
+                                        warn!(
+                                            "can't persist known_hosts ({}): \
+                                             future connections will re-trust",
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         info!("connected to hub at {addr}");
                         return Ok(conn);
                     }
