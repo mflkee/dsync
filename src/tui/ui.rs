@@ -173,18 +173,34 @@ fn draw_machine_detail(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = vec![Line::from("")];
     match app.machines.selected() {
         None => {
-            lines.push(Line::from(Span::styled(
-                " No machines yet.",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                " Нажмите [r], чтобы опросить хаб (нужен работающий",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                " dsync hub — archlinux-server:42069).",
-                Style::default().fg(Color::DarkGray),
-            )));
+            if let Some(err) = &app.last_error {
+                lines.push(Line::from(Span::styled(
+                    " ⚠ Hub недоступен — снимок пуст.",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!("   {err}"),
+                    Style::default().fg(Color::Red),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    " Проверьте хост хаба (archlinux-server) и нажмите [r].",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    " No machines yet.",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    " Нажмите [r], чтобы опросить хаб (нужен работающий",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    " dsync hub — archlinux-server:42069).",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
         }
         Some((name, s)) => {
             let (state, col) = if s.online {

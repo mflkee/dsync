@@ -37,6 +37,8 @@ pub enum Event {
     },
     /// Строка в лог: level 0=info 1=ok 2=warn 3=err.
     Log { level: u8, text: String },
+    /// Ошибка получения снимка (хаб недоступен и т.п.) — для дашборда.
+    SnapshotError(String),
     /// Завершение фоновой задачи (push/pull).
     ActionDone { label: String, ok: bool, text: String },
 }
@@ -86,10 +88,9 @@ async fn try_snapshot(cfg: &Config, ev: &Sender<Event>) {
     let conn = match crate::client::connect::connect_with_retry(cfg).await {
         Ok(c) => c,
         Err(e) => {
-            let _ = ev.send(Event::Log {
-                level: 3,
-                text: format!("hub connect: {e}"),
-            });
+            let text = format!("hub connect: {e}");
+            let _ = ev.send(Event::Log { level: 3, text: text.clone() });
+            let _ = ev.send(Event::SnapshotError(text));
             return;
         }
     };
@@ -109,10 +110,9 @@ async fn try_snapshot(cfg: &Config, ev: &Sender<Event>) {
             });
         }
         Err(e) => {
-            let _ = ev.send(Event::Log {
-                level: 3,
-                text: format!("status: {e}"),
-            });
+            let text = format!("status: {e}");
+            let _ = ev.send(Event::Log { level: 3, text: text.clone() });
+            let _ = ev.send(Event::SnapshotError(text));
         }
     }
 }

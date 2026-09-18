@@ -92,6 +92,8 @@ pub struct App {
     pub busy: Option<String>,
     /// Последняя завершённая задача (label, ok, текст) — для статус-строки.
     pub last_action: Option<(String, bool, String)>,
+    /// Последняя ошибка получения снимка (показывается на дашборде).
+    pub last_error: Option<String>,
     /// Счётчик тиков (для анимации спиннера).
     pub spin: usize,
     /// Прокрутка лога (вкладка Log).
@@ -112,6 +114,7 @@ impl App {
             logs: VecDeque::new(),
             busy: None,
             last_action: None,
+            last_error: None,
             spin: 0,
             log_scroll: 0,
             help_scroll: 0,
@@ -149,8 +152,10 @@ impl App {
             Event::Snapshot { machines, projects } => {
                 self.machines.update(machines);
                 self.projects = projects;
+                self.last_error = None;
             }
             Event::Log { level, text } => self.log(level, text),
+            Event::SnapshotError(err) => self.last_error = Some(err),
             Event::ActionDone { label, ok, text } => {
                 self.busy = None;
                 self.last_action = Some((label, ok, text));
