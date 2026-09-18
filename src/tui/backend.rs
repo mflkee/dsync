@@ -114,6 +114,11 @@ async fn run_backend(
     // через 30с (первый тик poll уже съеден выше), и дашборд был бы пуст
     // даже при живом хабе, пока не нажмёшь [r].
     let snapshot_in_flight = Arc::new(AtomicBool::new(false));
+    // Последний успешный список машин: при падении хаба и при изменении
+    // конфига показанный список не обнуляется (раньше события слали
+    // пустой HashMap и дашборд терял машины до следующего poll).
+    let last_machines =
+        Arc::new(std::sync::Mutex::new(HashMap::<String, MachineStatus>::new()));
     spawn_snapshot(&editor, &ev, &snapshot_in_flight, &last_machines);
 
     loop {
