@@ -23,20 +23,27 @@ impl client::Handler for SshClient {
 /// заблокированные SSH-таски на каждую (проект × машина).
 const DEFAULT_SSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-pub async fn exec(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {
-    exec_timeout(host, port, user, cmd, DEFAULT_SSH_TIMEOUT).await
-}
-
-/// Как `exec`, но с явным таймаутом — для длинных команд бота
-/// (opencode run, произвольные exec-команды), которые ждут до минуты+.
-pub async fn exec_timeout(
+pub async fn exec_with_key(
     host: &str,
     port: u16,
     user: &str,
     cmd: &str,
+    key_path: &std::path::Path,
+) -> Result<String> {
+    exec_with_key_timeout(host, port, user, cmd, key_path, DEFAULT_SSH_TIMEOUT).await
+}
+
+/// Как `exec_with_key`, но с явным таймаутом — для длинных команд бота
+/// (opencode run, произвольные exec-команды), которые ждут до минуты+.
+pub async fn exec_with_key_timeout(
+    host: &str,
+    port: u16,
+    user: &str,
+    cmd: &str,
+    key_path: &std::path::Path,
     timeout: std::time::Duration,
 ) -> Result<String> {
-    tokio::time::timeout(timeout, exec_inner(host, port, user, cmd))
+    tokio::time::timeout(timeout, exec_inner(host, port, user, cmd, key_path))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -46,16 +53,19 @@ pub async fn exec_timeout(
         })?
 }
 
-async fn exec_inner(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {
+async fn exec_inner(
+    host: &str,
+    port: u16,
+    user: &str,
+    cmd: &str,
+    key_path: &std::path::Path,
+) -> Result<String> {
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let config = Arc::new(client::Config::default());
 
     let mut session = client::connect(config, addr, SshClient).await?;
 
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
-    let key_path = home.join(".ssh/id_ed25519");
-
-    let key_pair = Arc::new(russh::keys::load_secret_key(&key_path, None)?);
+    let key_pair = Arc::new(russh::keys::load_secret_key(key_path, None)?);
     let auth = session.authenticate_publickey(user, key_pair).await?;
 
     if !auth {

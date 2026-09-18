@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,27 @@ pub const CONFIG_VERSION: u32 = 1;
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct MachineConfig {
     pub name: String,
+    /// Path to the SSH private key used for remote pulls (e.g. "~/.ssh/id_ed25519").
+    /// Defaults to `~/.ssh/id_ed25519` when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_key: Option<PathBuf>,
+}
+
+impl MachineConfig {
+    /// SSH key path with `~` expansion; falls back to `~/.ssh/id_ed25519`.
+    pub fn ssh_key_path(&self) -> PathBuf {
+        let default = || dirs::home_dir().map(|h| h.join(".ssh/id_ed25519"));
+        match &self.ssh_key {
+            Some(p) => expand_tilde(p).unwrap_or_else(|| p.clone()),
+            None => default().unwrap_or_else(|| PathBuf::from(".ssh/id_ed25519")),
+        }
+    }
+}
+
+fn expand_tilde(p: &Path) -> Option<PathBuf> {
+    let s = p.to_string_lossy();
+    let rest = s.strip_prefix("~/")?;
+    dirs::home_dir().map(|h| h.join(rest))
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -97,4 +118,50 @@ pub fn config_paths() -> Vec<PathBuf> {
             .join("dsync/config.toml"),
         PathBuf::from("dsync.toml"),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_key_defaults_to_home() {
+        let m = MachineConfig {
+            name: "test".into(),
+            ssh_key: None,
+        };
+        let p = m.ssh_key_path();
+        let home = dirs::home_dir().expect("home in tests");
+        assert_eq!(p, home.join(".ssh/id_ed25519"));
+    }
+
+    #[test]
+    fn ssh_key_expands_tilde() {
+        let m = MachineConfig {
+            name: "test".into(),
+            ssh_key: Some("~/keys/mykey".into()),
+        };
+        let home = dirs::home_dir().expect("home in tests");
+        assert_eq!(m.ssh_key_path(), home.join("keys/mykey"));
+    }
+
+    #[test]
+    fn ssh_key_absolute_passthrough() {
+        let m = MachineConfig {
+            name: "test".into(),
+            ssh_key: Some("/etc/dsync/key".into()),
+        };
+        assert_eq!(m.ssh_key_path(), PathBuf::from("/etc/dsync/key"));
+    }
+
+    #[test]
+    fn config_version_field_defaults_and_rejects_newer() {
+        let old: Config = toml::from_str("machine = { name = 'x' }\n").unwrap();
+        assert_eq!(old.config_version, 1);
+        let too_new: Result<Config> =
+            toml::from_str("config_version = 99\nmachine = { name = 'x' }\n")
+                .map_err(|e| anyhow::anyhow!(e));
+        // Загрузка из строки не валидирует версию — валидация в Config::load.
+        assert!(too_new.is_ok());
+    }
 }

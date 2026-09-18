@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,9 @@ use teloxide::types::{
 use tokio::sync::Mutex;
 
 use crate::config::{Config, RemoteMachine};
+
+/// Путь к SSH-ключу, выбранный при старте бота из `machine.ssh_key`.
+static SSH_KEY: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct ChatSession {
@@ -90,6 +94,7 @@ pub async fn run(cfg: Config) -> Result<()> {
     let token =
         std::env::var("DSYNC_BOT_TOKEN").map_err(|_| anyhow::anyhow!("DSYNC_BOT_TOKEN not set"))?;
 
+    let _ = SSH_KEY.set(cfg.machine.ssh_key_path());
     let remotes: HashMap<String, RemoteMachine> = cfg.remote.clone().unwrap_or_default();
     if remotes.is_empty() {
         anyhow::bail!("no remote machines in config");
@@ -189,8 +194,16 @@ fn rm(cfg: &HashMap<String, RemoteMachine>, name: &str) -> Option<RemoteMachine>
 async fn ssh(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {
     // Длинный таймаут: /oc ждёт ответа opencode до минуты, exec-режим —
     // произвольные команды. 120с поверх shell'ного `timeout 60` в /oc.
-    crate::ssh::client::exec_timeout(host, port, user, cmd, std::time::Duration::from_secs(120))
-        .await
+    let key = SSH_KEY.get().expect("SSH_KEY set in bot::run");
+    crate::ssh::client::exec_with_key_timeout(
+        host,
+        port,
+        user,
+        cmd,
+        key,
+        std::time::Duration::from_secs(120),
+    )
+    .await
 }
 
 fn sh_escape(s: &str) -> String {

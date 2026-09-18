@@ -179,6 +179,7 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config) {
             let host = remote.host.clone();
             let port = remote.port;
             let user = remote.user.clone();
+            let ssh_key = cfg.machine.ssh_key_path();
             // Путь раскрываем в абсолютный (~/...) и берём в одинарные
             // кавычки: пробел или спецсимвол в пути/ветке иначе ломает
             // команду на удалённом shell'е.
@@ -202,7 +203,7 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config) {
 
             tokio::spawn(async move {
                 info!("SSH pulling {project_name} on {machine_name} ({host})...");
-                match crate::ssh::client::exec(&host, port, &user, &cmd).await {
+                match crate::ssh::client::exec_with_key(&host, port, &user, &cmd, &ssh_key).await {
                     Ok(_) => info!("SSH pull {machine_name}/{project_name}: OK"),
                     Err(e) => error!("SSH pull {machine_name}/{project_name} failed: {e}"),
                 }
