@@ -18,14 +18,29 @@ impl client::Handler for SshClient {
     }
 }
 
+/// Короткий таймаут по умолчанию: без него недоступная машина висела в
+/// connect+exec дольше двух минут (наблюдалось в логах хаба), копя
+/// заблокированные SSH-таски на каждую (проект × машина).
+const DEFAULT_SSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub async fn exec(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {
-    // Жёсткий таймаут: без него недоступная машина висела в connect+exec
-    // дольше двух минут (наблюдалось в логах хаба), копя заблокированные
-    // SSH-таски на каждую (проект × машина).
-    const SSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-    tokio::time::timeout(SSH_TIMEOUT, exec_inner(host, port, user, cmd))
+    exec_timeout(host, port, user, cmd, DEFAULT_SSH_TIMEOUT).await
+}
+
+/// Как `exec`, но с явным таймаутом — для длинных команд бота
+/// (opencode run, произвольные exec-команды), которые ждут до минуты+.
+pub async fn exec_timeout(
+    host: &str,
+    port: u16,
+    user: &str,
+    cmd: &str,
+    timeout: std::time::Duration,
+) -> Result<String> {
+    tokio::time::timeout(timeout, exec_inner(host, port, user, cmd))
         .await
-        .map_err(|_| anyhow::anyhow!("ssh to {user}@{host}:{port} timed out after 30s"))?
+        .map_err(|_| {
+            anyhow::anyhow!("ssh to {user}@{host}:{port} timed out after {}s", timeout.as_secs())
+        })?
 }
 
 async fn exec_inner(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {

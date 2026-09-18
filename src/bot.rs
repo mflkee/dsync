@@ -172,7 +172,16 @@ fn rm(cfg: &HashMap<String, RemoteMachine>, name: &str) -> Option<RemoteMachine>
 }
 
 async fn ssh(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {
-    crate::ssh::client::exec(host, port, user, cmd).await
+    // Длинный таймаут: /oc ждёт ответа opencode до минуты, exec-режим —
+    // произвольные команды. 120с поверх shell'ного `timeout 60` в /oc.
+    crate::ssh::client::exec_timeout(
+        host,
+        port,
+        user,
+        cmd,
+        std::time::Duration::from_secs(120),
+    )
+    .await
 }
 
 fn sh_escape(s: &str) -> String {
