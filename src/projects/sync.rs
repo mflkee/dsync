@@ -60,10 +60,7 @@ pub fn commit_and_push(name: &str, path: &Path) -> Result<bool> {
     if behind > 0 {
         let pull = run_git(path, &["pull", "--rebase", "origin", &branch]);
         if !pull.status.success() {
-            anyhow::bail!(
-                "{name}: git pull --rebase failed: {}",
-                stderr_of(&pull)
-            );
+            anyhow::bail!("{name}: git pull --rebase failed: {}", stderr_of(&pull));
         }
         info!("{name}: rebased onto origin/{branch}");
     }
@@ -97,9 +94,7 @@ fn run_git(path: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(path)
         .output()
-        .unwrap_or_else(|e| {
-            panic!("failed to run git {args:?} in {}: {e}", path.display())
-        })
+        .unwrap_or_else(|e| panic!("failed to run git {args:?} in {}: {e}", path.display()))
 }
 
 fn stderr_of(o: &Output) -> String {

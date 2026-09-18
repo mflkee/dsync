@@ -234,12 +234,19 @@ impl App {
 
     pub fn handle_event(&mut self, ev: Event) {
         match ev {
-            Event::Snapshot { machines, projects, hub_ok } => {
+            Event::Snapshot {
+                machines,
+                projects,
+                hub_ok,
+            } => {
                 self.machines.update(machines);
                 self.projects = projects;
                 self.projects.sort_by(|a, b| a.name.cmp(&b.name));
                 self.projects_sel.len = self.projects.len();
-                self.projects_sel.idx = self.projects_sel.idx.min(self.projects_sel.len.saturating_sub(1));
+                self.projects_sel.idx = self
+                    .projects_sel
+                    .idx
+                    .min(self.projects_sel.len.saturating_sub(1));
                 self.refreshing = false;
                 self.last_snapshot_ts = unix_now();
                 if hub_ok {
@@ -305,7 +312,10 @@ pub fn fmt_civil(ts: i64) -> String {
 /// Короткое локальное время «HH:MM:SS» — для статус-строки.
 pub fn fmt_clock(ts: i64) -> String {
     match chrono::DateTime::from_timestamp(ts, 0) {
-        Some(dt) => dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string(),
+        Some(dt) => dt
+            .with_timezone(&chrono::Local)
+            .format("%H:%M:%S")
+            .to_string(),
         None => "-".to_string(),
     }
 }

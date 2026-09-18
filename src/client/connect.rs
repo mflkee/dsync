@@ -7,7 +7,9 @@ use rustls::ClientConfig as TlsClientConfig;
 use tracing::info;
 
 use crate::config::Config;
-use crate::protocol::{PullRequest, PullResponse, PushRequest, PushResponse, StatusRequest, StatusResponse};
+use crate::protocol::{
+    PullRequest, PullResponse, PushRequest, PushResponse, StatusRequest, StatusResponse,
+};
 
 #[derive(Debug)]
 struct SkipVerification;
@@ -115,10 +117,7 @@ pub async fn connect_with_retry(cfg: &Config) -> Result<Connection> {
     anyhow::bail!("failed to connect to hub after 4 attempts: {last_connect_err}")
 }
 
-async fn send_recv(
-    conn: &Connection,
-    msg: &serde_json::Value,
-) -> Result<Vec<u8>> {
+async fn send_recv(conn: &Connection, msg: &serde_json::Value) -> Result<Vec<u8>> {
     let (mut send, mut recv) = conn.open_bi().await?;
     let data = serde_json::to_vec(msg)?;
     send.write_all(&data).await?;
@@ -184,7 +183,10 @@ fn fmt_relative(ts: i64) -> String {
 
 fn fmt_civil(ts: i64) -> String {
     match chrono::DateTime::from_timestamp(ts, 0) {
-        Some(dt) => dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string(),
+        Some(dt) => dt
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
         None => format!("{ts}"),
     }
 }

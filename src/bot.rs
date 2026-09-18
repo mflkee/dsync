@@ -4,10 +4,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use teloxide::dispatching::{UpdateFilterExt, HandlerExt};
+use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::macros::BotCommands;
 use teloxide::prelude::*;
-use teloxide::types::{BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId, ParseMode};
+use teloxide::types::{
+    BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId,
+    ParseMode,
+};
 use tokio::sync::Mutex;
 
 use crate::config::{Config, RemoteMachine};
@@ -33,12 +36,17 @@ enum Mode {
 type Sessions = Arc<Mutex<HashMap<ChatId, ChatSession>>>;
 
 fn sessions_path() -> PathBuf {
-    dirs::data_dir().unwrap_or_default().join("dsync").join("bot-sessions.json")
+    dirs::data_dir()
+        .unwrap_or_default()
+        .join("dsync")
+        .join("bot-sessions.json")
 }
 
 async fn load_sessions() -> HashMap<String, ChatSession> {
     let path = sessions_path();
-    if !path.exists() { return HashMap::new(); }
+    if !path.exists() {
+        return HashMap::new();
+    }
     std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -46,7 +54,8 @@ async fn load_sessions() -> HashMap<String, ChatSession> {
 }
 
 async fn save_sessions(map: &HashMap<ChatId, ChatSession>) {
-    let plain: HashMap<String, &ChatSession> = map.iter().map(|(k, v)| (k.0.to_string(), v)).collect();
+    let plain: HashMap<String, &ChatSession> =
+        map.iter().map(|(k, v)| (k.0.to_string(), v)).collect();
     if let Some(dir) = sessions_path().parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -78,8 +87,8 @@ enum Command {
 
 pub async fn run(cfg: Config) -> Result<()> {
     eprintln!("bot::run starting");
-    let token = std::env::var("DSYNC_BOT_TOKEN")
-        .map_err(|_| anyhow::anyhow!("DSYNC_BOT_TOKEN not set"))?;
+    let token =
+        std::env::var("DSYNC_BOT_TOKEN").map_err(|_| anyhow::anyhow!("DSYNC_BOT_TOKEN not set"))?;
 
     let remotes: HashMap<String, RemoteMachine> = cfg.remote.clone().unwrap_or_default();
     if remotes.is_empty() {
@@ -91,7 +100,8 @@ pub async fn run(cfg: Config) -> Result<()> {
 
     // load persisted sessions
     let initial = load_sessions().await;
-    let initial_map: HashMap<ChatId, ChatSession> = initial.into_iter()
+    let initial_map: HashMap<ChatId, ChatSession> = initial
+        .into_iter()
         .filter_map(|(k, v)| {
             let id: i64 = k.parse().ok()?;
             Some((ChatId(id), v))
@@ -129,7 +139,7 @@ pub async fn run(cfg: Config) -> Result<()> {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
             let map = save_handle.lock().await;
-            save_sessions(&*map).await;
+            save_sessions(&map).await;
         }
     });
 
@@ -148,7 +158,12 @@ pub async fn run(cfg: Config) -> Result<()> {
 fn machine_keyboard(remotes: &HashMap<String, RemoteMachine>) -> InlineKeyboardMarkup {
     let rows: Vec<Vec<InlineKeyboardButton>> = remotes
         .keys()
-        .map(|n| vec![InlineKeyboardButton::callback(n.clone(), format!("machine:{n}"))])
+        .map(|n| {
+            vec![InlineKeyboardButton::callback(
+                n.clone(),
+                format!("machine:{n}"),
+            )]
+        })
         .collect();
     InlineKeyboardMarkup::new(rows)
 }
@@ -174,14 +189,8 @@ fn rm(cfg: &HashMap<String, RemoteMachine>, name: &str) -> Option<RemoteMachine>
 async fn ssh(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {
     // Длинный таймаут: /oc ждёт ответа opencode до минуты, exec-режим —
     // произвольные команды. 120с поверх shell'ного `timeout 60` в /oc.
-    crate::ssh::client::exec_timeout(
-        host,
-        port,
-        user,
-        cmd,
-        std::time::Duration::from_secs(120),
-    )
-    .await
+    crate::ssh::client::exec_timeout(host, port, user, cmd, std::time::Duration::from_secs(120))
+        .await
 }
 
 fn sh_escape(s: &str) -> String {
@@ -194,10 +203,15 @@ fn strip_ansi(s: &str) -> String {
     let mut esc = false;
     for c in s.chars() {
         if esc {
-            if c == 'm' || c.is_ascii_alphabetic() { esc = false; }
+            if c == 'm' || c.is_ascii_alphabetic() {
+                esc = false;
+            }
             continue;
         }
-        if c == '\x1b' { esc = true; continue; }
+        if c == '\x1b' {
+            esc = true;
+            continue;
+        }
         out.push(c);
     }
     out
@@ -212,13 +226,18 @@ async fn handle_command(
     remotes: Arc<HashMap<String, RemoteMachine>>,
     sessions: Sessions,
 ) -> Result<()> {
-    eprintln!("handle_command: text={:?} chat={}", msg.text(), msg.chat.id.0);
+    eprintln!(
+        "handle_command: text={:?} chat={}",
+        msg.text(),
+        msg.chat.id.0
+    );
     let mut map = sessions.lock().await;
     let s = map.entry(msg.chat.id).or_default();
 
     match cmd {
         Command::Help => {
-            bot.send_message(msg.chat.id,
+            bot.send_message(
+                msg.chat.id,
                 "dsync bot — машины через Telegram\n\n\
                 /machine — выбрать машину\n/machine <имя> — напрямую\n\
                 /list — список машин\n\
@@ -226,7 +245,9 @@ async fn handle_command(
                 /models — список моделей\n/model <имя> — выбрать модель\n\
                 /shell — интерактивный терминал (tmux, кнопки)\n\
                 /stop — выйти из режима\n\
-                /help — помощь").await?;
+                /help — помощь",
+            )
+            .await?;
         }
         Command::List => {
             let mut text = String::from("машины:\n");
@@ -239,62 +260,91 @@ async fn handle_command(
         Command::Machine(name) => {
             if name.trim().is_empty() {
                 bot.send_message(msg.chat.id, "выбери машину:")
-                    .reply_markup(machine_keyboard(&remotes)).await?;
+                    .reply_markup(machine_keyboard(&remotes))
+                    .await?;
             } else if remotes.contains_key(name.trim()) {
                 s.machine = Some(name.trim().to_string());
                 bot.send_message(msg.chat.id, format!("✓ {name}")).await?;
             } else {
-                bot.send_message(msg.chat.id, format!("«{name}» не найдена")).await?;
+                bot.send_message(msg.chat.id, format!("«{name}» не найдена"))
+                    .await?;
             }
         }
         Command::Models => {
             let m = match &s.machine {
                 Some(m) => m.clone(),
-                None => { bot.send_message(msg.chat.id, "сначала /machine").await?; return Ok(()); }
+                None => {
+                    bot.send_message(msg.chat.id, "сначала /machine").await?;
+                    return Ok(());
+                }
             };
             let r = match rm(&remotes, &m) {
                 Some(r) => r,
-                None => { bot.send_message(msg.chat.id, "машина не найдена").await?; return Ok(()); }
+                None => {
+                    bot.send_message(msg.chat.id, "машина не найдена").await?;
+                    return Ok(());
+                }
             };
             let out = ssh(&r.host, r.port, &r.user, "opencode models 2>&1").await?;
             let lines: Vec<&str> = out.lines().filter(|l| l.starts_with("opencode/")).collect();
             let mut rows = Vec::new();
             for line in &lines {
                 let name = line.trim();
-                rows.push(vec![InlineKeyboardButton::callback(name.to_string(), format!("model:{name}"))]);
+                rows.push(vec![InlineKeyboardButton::callback(
+                    name.to_string(),
+                    format!("model:{name}"),
+                )]);
             }
             let kb = InlineKeyboardMarkup::new(rows);
             bot.send_message(msg.chat.id, format!("модели opencode ({}):", lines.len()))
-                .reply_markup(kb).await?;
+                .reply_markup(kb)
+                .await?;
         }
         Command::Model(name) => {
             if name.trim().is_empty() {
-                bot.send_message(msg.chat.id, "/model anthropic/claude-opus-4-8").await?;
+                bot.send_message(msg.chat.id, "/model anthropic/claude-opus-4-8")
+                    .await?;
             } else {
                 s.model = Some(name.trim().to_string());
-                bot.send_message(msg.chat.id, format!("✓ модель: {}", name.trim())).await?;
+                bot.send_message(msg.chat.id, format!("✓ модель: {}", name.trim()))
+                    .await?;
             }
         }
         Command::Oc => {
-            if s.machine.is_none() { bot.send_message(msg.chat.id, "сначала /machine").await?; return Ok(()); }
+            if s.machine.is_none() {
+                bot.send_message(msg.chat.id, "сначала /machine").await?;
+                return Ok(());
+            }
             s.mode = Mode::Oc;
-            bot.send_message(msg.chat.id, "✓ opencode режим\nпиши промт → ответ текстом\n/stop — выход").await?;
+            bot.send_message(
+                msg.chat.id,
+                "✓ opencode режим\nпиши промт → ответ текстом\n/stop — выход",
+            )
+            .await?;
         }
         Command::Shell => {
             let m = match &s.machine {
                 Some(m) => m.clone(),
-                None => { bot.send_message(msg.chat.id, "сначала /machine").await?; return Ok(()); }
+                None => {
+                    bot.send_message(msg.chat.id, "сначала /machine").await?;
+                    return Ok(());
+                }
             };
             let r = match rm(&remotes, &m) {
                 Some(r) => r,
-                None => { bot.send_message(msg.chat.id, "машина не найдена").await?; return Ok(()); }
+                None => {
+                    bot.send_message(msg.chat.id, "машина не найдена").await?;
+                    return Ok(());
+                }
             };
             let session = format!("dsync-bot-{}", msg.chat.id.0);
             let _ = ssh(&r.host, r.port, &r.user,
                 &format!("TERM=xterm-256color tmux new-session -d -x 100 -y 30 -s {session} 2>&1 || true")).await;
             s.mode = Mode::Shell;
-            let ctrl = bot.send_message(msg.chat.id, "✓ shell режим (кнопки внизу)")
-                .reply_markup(shell_keyboard()).await?;
+            let ctrl = bot
+                .send_message(msg.chat.id, "✓ shell режим (кнопки внизу)")
+                .reply_markup(shell_keyboard())
+                .await?;
             s.ctrl_msg = Some(ctrl.id);
         }
         Command::Stop => {
@@ -304,10 +354,18 @@ async fn handle_command(
                 if let (Some(m), Some(ctrl)) = (&s.machine, s.ctrl_msg) {
                     if let Some(r) = rm(&remotes, m) {
                         let session = format!("dsync-bot-{}", msg.chat.id.0);
-                        let _ = ssh(&r.host, r.port, &r.user,
-                            &format!("tmux kill-session -t {session} 2>/dev/null || true")).await;
+                        let _ = ssh(
+                            &r.host,
+                            r.port,
+                            &r.user,
+                            &format!("tmux kill-session -t {session} 2>/dev/null || true"),
+                        )
+                        .await;
                     }
-                    let _ = bot.edit_message_reply_markup(msg.chat.id, ctrl).reply_markup(InlineKeyboardMarkup::default()).await;
+                    let _ = bot
+                        .edit_message_reply_markup(msg.chat.id, ctrl)
+                        .reply_markup(InlineKeyboardMarkup::default())
+                        .await;
                 }
             }
             s.ctrl_msg = None;
@@ -336,35 +394,69 @@ async fn handle_callback(
     };
 
     if let Some(name) = data.strip_prefix("machine:") {
-        sessions.lock().await.entry(msg.chat.id).or_default().machine = Some(name.to_string());
-        bot.edit_message_text(msg.chat.id, msg.id, format!("✓ {name}")).await?;
+        sessions
+            .lock()
+            .await
+            .entry(msg.chat.id)
+            .or_default()
+            .machine = Some(name.to_string());
+        bot.edit_message_text(msg.chat.id, msg.id, format!("✓ {name}"))
+            .await?;
     } else if let Some(name) = data.strip_prefix("model:") {
         sessions.lock().await.entry(msg.chat.id).or_default().model = Some(name.to_string());
-        bot.edit_message_text(msg.chat.id, msg.id, format!("✓ модель: {name}")).await?;
+        bot.edit_message_text(msg.chat.id, msg.id, format!("✓ модель: {name}"))
+            .await?;
     } else if let Some(key) = data.strip_prefix("key:") {
         let chat_id = msg.chat.id;
-        let m = sessions.lock().await.get(&chat_id).and_then(|s| s.machine.clone());
+        let m = sessions
+            .lock()
+            .await
+            .get(&chat_id)
+            .and_then(|s| s.machine.clone());
         let r = m.as_ref().and_then(|m| rm(&remotes, m));
         let ctrl_id = sessions.lock().await.get(&chat_id).and_then(|s| s.ctrl_msg);
         if let (Some(_machine), Some(remote)) = (m, r) {
             let session = format!("dsync-bot-{chat_id}");
-            let _ = ssh(&remote.host, remote.port, &remote.user,
-                &format!("tmux send-keys -t {session} {key}")).await;
-            let out = ssh(&remote.host, remote.port, &remote.user,
-                &format!("sleep 0.3 && tmux capture-pane -t {session} -p -S -50")).await.unwrap_or_default();
+            let _ = ssh(
+                &remote.host,
+                remote.port,
+                &remote.user,
+                &format!("tmux send-keys -t {session} {key}"),
+            )
+            .await;
+            let out = ssh(
+                &remote.host,
+                remote.port,
+                &remote.user,
+                &format!("sleep 0.3 && tmux capture-pane -t {session} -p -S -50"),
+            )
+            .await
+            .unwrap_or_default();
             if let Some(ctrl) = ctrl_id {
                 let cleaned = out.trim();
-                let reply = if cleaned.is_empty() { "⏳".to_string() }
-                    else if cleaned.len() > 3500 { format!("```\n{}...\n```", &cleaned[..3500]) }
-                    else { format!("```\n{cleaned}\n```") };
-                let _ = bot.edit_message_text(chat_id, ctrl, reply)
+                let reply = if cleaned.is_empty() {
+                    "⏳".to_string()
+                } else if cleaned.len() > 3500 {
+                    format!("```\n{}...\n```", &cleaned[..3500])
+                } else {
+                    format!("```\n{cleaned}\n```")
+                };
+                let _ = bot
+                    .edit_message_text(chat_id, ctrl, reply)
                     .parse_mode(ParseMode::MarkdownV2)
-                    .reply_markup(shell_keyboard()).await;
+                    .reply_markup(shell_keyboard())
+                    .await;
             }
         }
     } else if data == "mode:stop" {
-        let _ = handle_command(bot.clone(), msg.clone(), Command::Stop,
-            remotes.clone(), sessions.clone()).await;
+        let _ = handle_command(
+            bot.clone(),
+            msg.clone(),
+            Command::Stop,
+            remotes.clone(),
+            sessions.clone(),
+        )
+        .await;
     }
 
     bot.answer_callback_query(q.id).await?;
@@ -390,54 +482,86 @@ async fn handle_text(
         let s = map.get(&msg.chat.id);
         match s {
             Some(s) => (s.machine.clone(), s.mode, s.model.clone()),
-            None => { bot.send_message(msg.chat.id, "сначала /machine").await?; return Ok(()); }
+            None => {
+                bot.send_message(msg.chat.id, "сначала /machine").await?;
+                return Ok(());
+            }
         }
     };
     let machine = match machine {
         Some(m) => m,
-        None => { bot.send_message(msg.chat.id, "сначала /machine").await?; return Ok(()); }
+        None => {
+            bot.send_message(msg.chat.id, "сначала /machine").await?;
+            return Ok(());
+        }
     };
     let r = match rm(&remotes, &machine) {
         Some(r) => r,
-        None => { bot.send_message(msg.chat.id, "машина не найдена").await?; return Ok(()); }
+        None => {
+            bot.send_message(msg.chat.id, "машина не найдена").await?;
+            return Ok(());
+        }
     };
 
     match mode {
         Mode::Oc => {
-            let model_flag = model.as_ref()
+            let model_flag = model
+                .as_ref()
                 .map(|m| format!(" -m {}", sh_escape(m)))
                 .unwrap_or_default();
-            let sent = bot.send_message(msg.chat.id, "⏳ opencode думает...").await?;
+            let sent = bot
+                .send_message(msg.chat.id, "⏳ opencode думает...")
+                .await?;
             match tokio::time::timeout(
                 std::time::Duration::from_secs(90),
-                ssh(&r.host, r.port, &r.user,
-                    &format!("timeout 60 opencode run{model_flag} {} 2>&1", sh_escape(text))),
-            ).await
+                ssh(
+                    &r.host,
+                    r.port,
+                    &r.user,
+                    &format!(
+                        "timeout 60 opencode run{model_flag} {} 2>&1",
+                        sh_escape(text)
+                    ),
+                ),
+            )
+            .await
             {
                 Ok(Ok(out)) => {
                     eprintln!("oc: ssh ok, len={}", out.len());
-                    let cleaned: String = out.lines()
+                    let cleaned: String = out
+                        .lines()
                         .filter(|l| !l.trim().starts_with('>'))
-                        .map(|l| strip_ansi(l))
+                        .map(strip_ansi)
                         .collect::<Vec<_>>()
                         .join("\n")
                         .trim()
                         .to_string();
-                    let reply = if cleaned.is_empty() { "(пустой ответ)".to_string() }
-                        else if cleaned.len() > 4000 {
-                            cleaned.chars().take(4000).collect::<String>()
-                        } else { cleaned };
-                    eprintln!("oc: editing msg {} with reply len={}", sent.id.0, reply.len());
+                    let reply = if cleaned.is_empty() {
+                        "(пустой ответ)".to_string()
+                    } else if cleaned.len() > 4000 {
+                        cleaned.chars().take(4000).collect::<String>()
+                    } else {
+                        cleaned
+                    };
+                    eprintln!(
+                        "oc: editing msg {} with reply len={}",
+                        sent.id.0,
+                        reply.len()
+                    );
                     bot.edit_message_text(msg.chat.id, sent.id, reply).await?;
                     eprintln!("oc: edit ok");
                 }
                 Ok(Err(e)) => {
                     eprintln!("oc: ssh error: {e}");
-                    bot.edit_message_text(msg.chat.id, sent.id, format!("✗ {e}")).await.ok();
+                    bot.edit_message_text(msg.chat.id, sent.id, format!("✗ {e}"))
+                        .await
+                        .ok();
                 }
                 Err(_) => {
                     eprintln!("oc: tokio timeout");
-                    bot.edit_message_text(msg.chat.id, sent.id, "✗ таймаут (90с)".to_string()).await.ok();
+                    bot.edit_message_text(msg.chat.id, sent.id, "✗ таймаут (90с)".to_string())
+                        .await
+                        .ok();
                 }
             }
         }
@@ -447,25 +571,40 @@ async fn handle_text(
             let cmd = format!(
                 "tmux send-keys -t {session} {escaped} Enter && sleep 0.5 && tmux capture-pane -t {session} -p -S -50"
             );
-            let ctrl_id = sessions.lock().await.get(&msg.chat.id).and_then(|s| s.ctrl_msg);
+            let ctrl_id = sessions
+                .lock()
+                .await
+                .get(&msg.chat.id)
+                .and_then(|s| s.ctrl_msg);
             let result = ssh(&r.host, r.port, &r.user, &cmd).await;
             let reply = match &result {
                 Ok(out) => {
                     let cleaned = out.trim();
-                    if cleaned.is_empty() { "(пусто)".to_string() }
-                    else if cleaned.len() > 3000 {
+                    if cleaned.is_empty() {
+                        "(пусто)".to_string()
+                    } else if cleaned.len() > 3000 {
                         cleaned.chars().take(3000).collect::<String>()
-                    } else { cleaned.to_string() }
+                    } else {
+                        cleaned.to_string()
+                    }
                 }
                 Err(e) => format!("✗ {e}"),
             };
             if let Some(ctrl) = ctrl_id {
                 bot.edit_message_text(msg.chat.id, ctrl, reply)
-                    .reply_markup(shell_keyboard()).await?;
+                    .reply_markup(shell_keyboard())
+                    .await?;
             } else {
-                let sent = bot.send_message(msg.chat.id, reply)
-                    .reply_markup(shell_keyboard()).await?;
-                sessions.lock().await.entry(msg.chat.id).or_default().ctrl_msg = Some(sent.id);
+                let sent = bot
+                    .send_message(msg.chat.id, reply)
+                    .reply_markup(shell_keyboard())
+                    .await?;
+                sessions
+                    .lock()
+                    .await
+                    .entry(msg.chat.id)
+                    .or_default()
+                    .ctrl_msg = Some(sent.id);
             }
         }
         Mode::Exec => {
@@ -473,16 +612,21 @@ async fn handle_text(
             match ssh(&r.host, r.port, &r.user, text).await {
                 Ok(out) => {
                     let cleaned = out.trim();
-                    let reply = if cleaned.is_empty() { "✓ (пусто)".to_string() }
-                        else if cleaned.len() > 3500 {
-                            format!("```\n{}...\n```", &cleaned[..3500])
-                        } else { format!("```\n{cleaned}\n```") };
+                    let reply = if cleaned.is_empty() {
+                        "✓ (пусто)".to_string()
+                    } else if cleaned.len() > 3500 {
+                        format!("```\n{}...\n```", &cleaned[..3500])
+                    } else {
+                        format!("```\n{cleaned}\n```")
+                    };
                     bot.edit_message_text(msg.chat.id, sent.id, reply)
-                        .parse_mode(ParseMode::MarkdownV2).await?;
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
                 }
                 Err(e) => {
                     bot.edit_message_text(msg.chat.id, sent.id, format!("✗\n```\n{e}\n```"))
-                        .parse_mode(ParseMode::MarkdownV2).await?;
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?;
                 }
             }
         }

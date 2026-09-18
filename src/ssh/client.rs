@@ -39,7 +39,10 @@ pub async fn exec_timeout(
     tokio::time::timeout(timeout, exec_inner(host, port, user, cmd))
         .await
         .map_err(|_| {
-            anyhow::anyhow!("ssh to {user}@{host}:{port} timed out after {}s", timeout.as_secs())
+            anyhow::anyhow!(
+                "ssh to {user}@{host}:{port} timed out after {}s",
+                timeout.as_secs()
+            )
         })?
 }
 

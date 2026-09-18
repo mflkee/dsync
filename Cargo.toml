@@ -2,6 +2,13 @@
 name = "dsync"
 version = "0.1.0"
 edition = "2021"
+description = "Multi-machine dotfiles & project sync across your fleet — git-driven, hub-coordinated, no public SSH needed"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/mflkee/dsync"
+keywords = ["dotfiles", "sync", "chezmoi", "fleet", "devops"]
+categories = ["command-line-utilities", "development-tools"]
+rust-version = "1.80"
 
 [dependencies]
 quinn = "0.11"

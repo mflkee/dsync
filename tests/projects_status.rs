@@ -54,7 +54,7 @@ fn test_scan_clean_repo() {
     let states = status::scan(&projects).unwrap();
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].name, "test-project");
-    assert_eq!(states[0].dirty, false);
+    assert!(!states[0].dirty);
     assert_eq!(states[0].branch, "main");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -81,7 +81,7 @@ fn test_scan_dirty_repo() {
     );
 
     let states = status::scan(&projects).unwrap();
-    assert_eq!(states[0].dirty, true);
+    assert!(states[0].dirty);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -104,6 +104,6 @@ fn test_scan_nonexistent_path() {
 
     let states = status::scan(&projects).unwrap();
     assert_eq!(states[0].branch, "");
-    assert_eq!(states[0].dirty, false);
+    assert!(!states[0].dirty);
     assert_eq!(states[0].commit_hash, "");
 }

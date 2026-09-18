@@ -1,15 +1,12 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-
-
-# Added by cargo
-
+# Rust / Cargo
 /target
+Cargo.lock.orig
+
+# Editors / OS
+*.swp
+.DS_Store
+.idea/
+.vscode/
+
+# Local config
+.env

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 
-use super::cfg::{ConfigEditor, CfgSummary};
+use super::cfg::{CfgSummary, ConfigEditor};
 use crate::config::Config;
 use crate::protocol::MachineStatus;
 
@@ -67,7 +67,11 @@ pub enum Event {
     /// Снимок запущен (опрос хаба начался) — для индикатора «⟳ refresh…».
     Refreshing,
     /// Завершение фоновой задачи (push/pull).
-    ActionDone { label: String, ok: bool, text: String },
+    ActionDone {
+        label: String,
+        ok: bool,
+        text: String,
+    },
     /// Результаты доктора.
     Doctor(Vec<CheckItem>),
     /// Конфиг изменился — перечитай снимок.
@@ -117,8 +121,9 @@ async fn run_backend(
     // Последний успешный список машин: при падении хаба и при изменении
     // конфига показанный список не обнуляется (раньше события слали
     // пустой HashMap и дашборд терял машины до следующего poll).
-    let last_machines =
-        Arc::new(std::sync::Mutex::new(HashMap::<String, MachineStatus>::new()));
+    let last_machines = Arc::new(std::sync::Mutex::new(
+        HashMap::<String, MachineStatus>::new(),
+    ));
     spawn_snapshot(&editor, &ev, &snapshot_in_flight, &last_machines);
 
     loop {
@@ -256,12 +261,19 @@ async fn try_snapshot(
         Ok(c) => c,
         Err(e) => {
             let text = format!("hub connect: {e}");
-            let _ = ev.send(Event::Log { level: 3, text: text.clone() });
+            let _ = ev.send(Event::Log {
+                level: 3,
+                text: text.clone(),
+            });
             let _ = ev.send(Event::SnapshotError(text));
             // Хаб лёг — показываем последний известный список машин
             // (не обнуляем дашборд) + свежие локальные проекты.
             let machines = last.lock().unwrap_or_else(|p| p.into_inner()).clone();
-            let _ = ev.send(Event::Snapshot { machines, projects, hub_ok: false });
+            let _ = ev.send(Event::Snapshot {
+                machines,
+                projects,
+                hub_ok: false,
+            });
             return;
         }
     };
@@ -280,10 +292,17 @@ async fn try_snapshot(
         }
         Err(e) => {
             let text = format!("status: {e}");
-            let _ = ev.send(Event::Log { level: 3, text: text.clone() });
+            let _ = ev.send(Event::Log {
+                level: 3,
+                text: text.clone(),
+            });
             let _ = ev.send(Event::SnapshotError(text));
             let machines = last.lock().unwrap_or_else(|p| p.into_inner()).clone();
-            let _ = ev.send(Event::Snapshot { machines, projects, hub_ok: false });
+            let _ = ev.send(Event::Snapshot {
+                machines,
+                projects,
+                hub_ok: false,
+            });
         }
     }
 }
@@ -334,7 +353,11 @@ async fn run_doctor(cfg: Config, info: CfgSummary, ev: Sender<Event>) {
     // Путь к конфигу
     items.push(CheckItem {
         label: "config path".into(),
-        level: if std::path::Path::new(&info.config_path).exists() { 0 } else { 1 },
+        level: if std::path::Path::new(&info.config_path).exists() {
+            0
+        } else {
+            1
+        },
         detail: info.config_path.clone(),
     });
 
@@ -389,7 +412,11 @@ async fn run_doctor(cfg: Config, info: CfgSummary, ev: Sender<Event>) {
     items.push(CheckItem {
         label: "netbird route".into(),
         level: if has_route { 0 } else { 1 },
-        detail: if has_route { "100.89.x.x reachable".into() } else { "no route to 100.89.x.x".into() },
+        detail: if has_route {
+            "100.89.x.x reachable".into()
+        } else {
+            "no route to 100.89.x.x".into()
+        },
     });
 
     // projects
@@ -398,26 +425,46 @@ async fn run_doctor(cfg: Config, info: CfgSummary, ev: Sender<Event>) {
             let path = crate::projects::status::expand_user_path(&p.path);
             let detail = path.display().to_string();
             if !path.exists() {
-                items.push(CheckItem { label: format!("project {name}"), level: 1, detail });
+                items.push(CheckItem {
+                    label: format!("project {name}"),
+                    level: 1,
+                    detail,
+                });
             } else if !path.join(".git").exists() {
-                items.push(CheckItem { label: format!("project {name}"), level: 1, detail: format!("{detail} (not a git repo)") });
+                items.push(CheckItem {
+                    label: format!("project {name}"),
+                    level: 1,
+                    detail: format!("{detail} (not a git repo)"),
+                });
             } else {
-                items.push(CheckItem { label: format!("project {name}"), level: 0, detail });
+                items.push(CheckItem {
+                    label: format!("project {name}"),
+                    level: 0,
+                    detail,
+                });
             }
         }
     }
 
     // hub connectivity (быстро — 4 попытки ~30с; делаем в фоне, шлём по готовности)
-    items.push(CheckItem { label: "hub ping".into(), level: 0, detail: "testing…".into() });
+    items.push(CheckItem {
+        label: "hub ping".into(),
+        level: 0,
+        detail: "testing…".into(),
+    });
     let _ = ev.send(Event::Doctor(items.clone()));
 
     // Тяжёлая проверка — отдельно
     match crate::client::connect::connect_with_retry(&cfg).await {
         Ok(conn) => {
-            let req = crate::protocol::StatusRequest { machine: cfg.machine.name.clone() };
+            let req = crate::protocol::StatusRequest {
+                machine: cfg.machine.name.clone(),
+            };
             match crate::client::connect::send_status(&conn, &req).await {
                 Ok(resp) => {
-                    let detail = resp.machines.iter()
+                    let detail = resp
+                        .machines
+                        .iter()
                         .map(|(n, s)| format!("{n} online={}", s.online))
                         .collect::<Vec<_>>()
                         .join(", ");

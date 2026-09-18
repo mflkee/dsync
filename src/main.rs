@@ -4,8 +4,8 @@ mod client;
 mod config;
 mod doctor;
 mod hub;
-mod protocol;
 mod projects;
+mod protocol;
 mod ssh;
 mod tui;
 
@@ -26,9 +26,18 @@ async fn main() -> Result<()> {
 
     match args.command {
         cli::Commands::Daemon => hub::run_server(cfg).await,
-        cli::Commands::Push { machine } => Ok(print_lines(client::push(cfg, machine).await?)),
-        cli::Commands::Pull { machine } => Ok(print_lines(client::pull(cfg, machine).await?)),
-        cli::Commands::Status => Ok(print_lines(client::status(cfg).await?)),
+        cli::Commands::Push { machine } => {
+            print_lines(client::push(cfg, machine).await?);
+            Ok(())
+        }
+        cli::Commands::Pull { machine } => {
+            print_lines(client::pull(cfg, machine).await?);
+            Ok(())
+        }
+        cli::Commands::Status => {
+            print_lines(client::status(cfg).await?);
+            Ok(())
+        }
         cli::Commands::Doctor => doctor::run(cfg).await,
         cli::Commands::Bot => bot::run(cfg).await,
         cli::Commands::Tui => tui::run(cfg),

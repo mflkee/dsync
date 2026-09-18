@@ -47,8 +47,8 @@ pub struct ConfigEditor {
 
 impl ConfigEditor {
     pub fn load() -> Result<Self> {
-        let live_path = config::find_config_path()
-            .ok_or_else(|| anyhow::anyhow!("config not found"))?;
+        let live_path =
+            config::find_config_path().ok_or_else(|| anyhow::anyhow!("config not found"))?;
         let chezmoi_managed = is_chezmoi_managed(&live_path);
         let cfg = Config::load()?;
         Ok(Self {
@@ -120,7 +120,9 @@ impl ConfigEditor {
         }
         let p = ProjectConfig {
             path: PathBuf::from(path.trim()),
-            branch: branch.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            branch: branch
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             machines: Some(machines.to_vec()).filter(|v| !v.is_empty()),
             post_pull: post_pull
                 .map(|s| s.trim().to_string())
@@ -203,7 +205,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dsync-cfg-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
-        let content = "[machine]\nname = \"testbox\"\n\n[hub_connect]\naddress = \"127.0.0.1:42069\"\n";
+        let content =
+            "[machine]\nname = \"testbox\"\n\n[hub_connect]\naddress = \"127.0.0.1:42069\"\n";
         std::fs::write(&path, content).unwrap();
 
         let cfg: Config = toml::from_str(content).unwrap();
@@ -214,23 +217,31 @@ mod tests {
         };
 
         // Добавить проект и машину.
-        ed.add_project("proj-a", "/tmp/proj-a", Some("main"), &["desktop".to_string()], Some("echo done"))
+        ed.add_project(
+            "proj-a",
+            "/tmp/proj-a",
+            Some("main"),
+            &["desktop".to_string()],
+            Some("echo done"),
+        )
+        .unwrap();
+        ed.add_remote("machine-1", "100.89.0.1", 22, "user")
             .unwrap();
-        ed.add_remote("machine-1", "100.89.0.1", 22, "user").unwrap();
 
-        let on_disk: Config =
-            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let on_disk: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(on_disk.projects.as_ref().unwrap().contains_key("proj-a"));
         let proj = &on_disk.projects.as_ref().unwrap()["proj-a"];
         assert_eq!(proj.path.to_string_lossy(), "/tmp/proj-a");
         assert_eq!(proj.machines.as_ref().unwrap(), &["desktop".to_string()]);
         assert_eq!(proj.post_pull.as_deref(), Some("echo done"));
-        assert_eq!(on_disk.remote.as_ref().unwrap()["machine-1"].host, "100.89.0.1");
+        assert_eq!(
+            on_disk.remote.as_ref().unwrap()["machine-1"].host,
+            "100.89.0.1"
+        );
 
         // Удалить проект — секция исчезает, remote остаётся.
         ed.remove_project("proj-a").unwrap();
-        let on_disk: Config =
-            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let on_disk: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(on_disk.projects.is_none());
         assert!(on_disk.remote.as_ref().unwrap().contains_key("machine-1"));
 

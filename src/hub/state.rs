@@ -1,19 +1,19 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use tokio::sync::RwLock;
 
 use crate::protocol::MachineState;
 
-fn expand(p: &PathBuf) -> PathBuf {
+fn expand(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
     if let Some(rest) = s.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest);
         }
     }
-    p.clone()
+    p.to_path_buf()
 }
 
 const ONLINE_TIMEOUT_SECS: i64 = 35 * 60;
@@ -38,10 +38,7 @@ impl HubState {
             .and_then(|d| Self::load_machines(d).ok())
             .unwrap_or_default();
 
-        tracing::info!(
-            "hub state: {} machines loaded from disk",
-            machines.len()
-        );
+        tracing::info!("hub state: {} machines loaded from disk", machines.len());
 
         Self {
             machines: RwLock::new(machines),
@@ -113,7 +110,7 @@ impl HubState {
         }
     }
 
-    fn load_machines(dir: &PathBuf) -> Result<HashMap<String, MachineState>> {
+    fn load_machines(dir: &Path) -> Result<HashMap<String, MachineState>> {
         let path = dir.join("machines.json");
         if !path.exists() {
             return Ok(HashMap::new());

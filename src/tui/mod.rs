@@ -148,10 +148,8 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
                     app.projects_sel.idx = app.projects_sel.len - 1;
                 }
             }
-            app::Tab::Machines => {
-                if app.remotes_sel.len > 0 {
-                    app.remotes_sel.idx = app.remotes_sel.len - 1;
-                }
+            app::Tab::Machines if app.remotes_sel.len > 0 => {
+                app.remotes_sel.idx = app.remotes_sel.len - 1;
             }
             _ => {}
         },
@@ -180,13 +178,7 @@ fn scroll_down(app: &mut App) {
 // --- ФОРМЫ ---
 
 impl Form {
-    pub fn project(
-        name: &str,
-        path: &str,
-        branch: &str,
-        machines: &str,
-        post_pull: &str,
-    ) -> Self {
+    pub fn project(name: &str, path: &str, branch: &str, machines: &str, post_pull: &str) -> Self {
         Self {
             title: " Add project ",
             fields: vec![
@@ -237,11 +229,7 @@ impl FormField {
 fn open_add_project_form(app: &mut App) {
     // Префилл из конфига (name/path/branch/machines/post_pull),
     // а не из скана git-статуса (там этих полей нет).
-    let cfg_proj = app
-        .cfg
-        .projects
-        .get(app.projects_sel.idx)
-        .cloned();
+    let cfg_proj = app.cfg.projects.get(app.projects_sel.idx).cloned();
     let (name, path, branch, mut machines, post) = match cfg_proj {
         Some(p) => (
             p.name,
@@ -317,7 +305,9 @@ fn handle_form_key(app: &mut App, key: crossterm::event::KeyEvent) {
 fn submit_form(app: &mut App, form: &Form) {
     if let Some(action) = &form.action {
         match action {
-            ConfirmAction::RemoveProject(name) => app.send(Cmd::RemoveProject { name: name.clone() }),
+            ConfirmAction::RemoveProject(name) => {
+                app.send(Cmd::RemoveProject { name: name.clone() })
+            }
             ConfirmAction::RemoveRemote(name) => app.send(Cmd::RemoveRemote { name: name.clone() }),
         }
         return;

@@ -135,7 +135,11 @@ async fn handle_push(val: serde_json::Value, state: &HubState, cfg: &Config) -> 
 
         trigger_remote_pulls(&req, cfg).await;
 
-        serde_json::to_value(PushResponse { ok: true, error: None }).unwrap_or_default()
+        serde_json::to_value(PushResponse {
+            ok: true,
+            error: None,
+        })
+        .unwrap_or_default()
     } else {
         serde_json::to_value(PushResponse {
             ok: false,
@@ -231,13 +235,12 @@ fn make_server_config(
     cert_chain: Vec<rustls::pki_types::CertificateDer<'static>>,
     priv_key: rustls::pki_types::PrivateKeyDer<'static>,
 ) -> Result<ServerConfig> {
-    let mut config = ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(
+    let mut config =
+        ServerConfig::with_crypto(Arc::new(quinn::crypto::rustls::QuicServerConfig::try_from(
             rustls::ServerConfig::builder()
                 .with_no_client_auth()
                 .with_single_cert(cert_chain, priv_key)?,
-        )?,
-    ));
+        )?));
     config.transport = Arc::new(quinn::TransportConfig::default());
     Ok(config)
 }
@@ -252,8 +255,8 @@ fn load_or_generate_certs(
         if let (Some(cert_path), Some(key_path)) = (&hub.cert, &hub.key) {
             let cert = std::fs::read(cert_path)?;
             let key = std::fs::read(key_path)?;
-            let certs = rustls_pemfile::certs(&mut cert.as_slice())
-                .collect::<Result<Vec<_>, _>>()?;
+            let certs =
+                rustls_pemfile::certs(&mut cert.as_slice()).collect::<Result<Vec<_>, _>>()?;
             let key = rustls_pemfile::private_key(&mut key.as_slice())?.unwrap();
             return Ok((certs, key));
         }
@@ -262,8 +265,6 @@ fn load_or_generate_certs(
     info!("no certs found, generating self-signed");
     let cert = rcgen::generate_simple_self_signed(vec!["dsync.local".into()])?;
     let cert_der = cert.cert.into();
-    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
-        cert.key_pair.serialize_der().into(),
-    );
+    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
     Ok((vec![cert_der], key_der))
 }

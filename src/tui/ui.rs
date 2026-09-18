@@ -85,14 +85,18 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let c = SPINNER[app.spin % SPINNER.len()];
         status.push_str(&format!("  ⏳ {c} {label}…"));
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
 
     let block = Block::bordered().title(Span::styled(
         " dsync ",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     ));
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(status, busy_style))).block(block),
@@ -154,8 +158,8 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
 // --- DASHBOARD ---
 
 fn draw_dashboard(frame: &mut Frame, app: &mut App, area: Rect) {
-    let [left, right] = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .areas(area);
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
 
     let rows: Vec<ListItem> = app
         .machines
@@ -171,7 +175,9 @@ fn draw_dashboard(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(mark, Style::default().fg(col).add_modifier(Modifier::BOLD)),
                 Span::styled(
                     format!(" {}", name),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!("   push: {}", fmt_ago(s.last_push)),
@@ -186,11 +192,17 @@ fn draw_dashboard(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let block = Block::bordered().title(Span::styled(
         format!(" Machines ({}) ", app.machines.list.len()),
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     ));
     let list = List::new(rows)
         .block(block)
-        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("▸ ");
     frame.render_stateful_widget(list, left, &mut app.machines_state());
 
@@ -236,13 +248,17 @@ fn draw_machine_detail(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 " Config ",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(vec![
                 Span::styled(" machine  : ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     app.cfg.machine.as_str(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
             lines.push(Line::from(vec![
@@ -288,7 +304,9 @@ fn draw_machine_detail(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" Machine  : ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     name.as_str(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
             lines.push(Line::from(vec![
@@ -323,7 +341,9 @@ fn draw_machine_detail(frame: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::bordered().title(Span::styled(
         " Machine detail ",
-        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
     ));
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -346,9 +366,14 @@ fn draw_projects(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(mark, Style::default().fg(col).add_modifier(Modifier::BOLD)),
                 Span::styled(
                     format!(" {}", p.name),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("  [{}]", p.branch), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("  [{}]", p.branch),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::styled(
                     format!("  {}", status),
                     Style::default().fg(if p.dirty { Color::Yellow } else { Color::Green }),
@@ -375,7 +400,9 @@ fn draw_projects(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let block = Block::bordered().title(Span::styled(
         format!(" Projects ({}) ", app.projects.len()),
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     ));
     let list = if app.projects.is_empty() {
         List::new(vec![ListItem::new(Line::from(Span::styled(
@@ -386,7 +413,11 @@ fn draw_projects(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         List::new(rows)
             .block(block)
-            .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
             .highlight_symbol("▸ ")
     };
     frame.render_stateful_widget(list, area, &mut app.projects_state());
@@ -403,7 +434,9 @@ fn draw_machines(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(" machine  : ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 app.cfg.machine.as_str(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled("   hub: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
@@ -446,7 +479,9 @@ fn draw_machines(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let block = Block::bordered().title(Span::styled(
         " Config ",
-        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
     ));
     frame.render_widget(Paragraph::new(sum).block(block), summary_area);
 
@@ -458,7 +493,9 @@ fn draw_machines(frame: &mut Frame, app: &mut App, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!(" {}", r.name),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!("  {}@{}:{}", r.user, r.host, r.port),
@@ -468,8 +505,13 @@ fn draw_machines(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     let block = Block::bordered().title(Span::styled(
-        format!(" Remote machines ({}) — [n] add  [d] delete ", app.cfg.remotes.len()),
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        format!(
+            " Remote machines ({}) — [n] add  [d] delete ",
+            app.cfg.remotes.len()
+        ),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     ));
     let list = if rows.is_empty() {
         List::new(vec![ListItem::new(Line::from(Span::styled(
@@ -480,10 +522,18 @@ fn draw_machines(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         List::new(rows)
             .block(block)
-            .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
             .highlight_symbol("▸ ")
     };
-    frame.render_stateful_widget(list, list_area, &mut app.remotes_state(app.cfg.remotes.len()));
+    frame.render_stateful_widget(
+        list,
+        list_area,
+        &mut app.remotes_state(app.cfg.remotes.len()),
+    );
 }
 
 // --- DOCTOR ---
@@ -492,7 +542,9 @@ fn draw_doctor(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.doctor.is_empty() {
         let block = Block::bordered().title(Span::styled(
             " Doctor ",
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ));
         let text = vec![
             Line::from(""),
@@ -528,7 +580,10 @@ fn draw_doctor(frame: &mut Frame, app: &mut App, area: Rect) {
                 _ => ("∼", Color::DarkGray),
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!(" {sym} {} ", c.label), Style::default().fg(col).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" {sym} {} ", c.label),
+                    Style::default().fg(col).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(c.detail.clone(), Style::default().fg(Color::White)),
             ]))
         })
@@ -543,7 +598,9 @@ fn draw_doctor(frame: &mut Frame, app: &mut App, area: Rect) {
                 String::new()
             }
         ),
-        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
     ));
     frame.render_widget(List::new(rows).block(block), area);
 }
@@ -566,7 +623,10 @@ fn draw_log(frame: &mut Frame, app: &mut App, area: Rect) {
                 2 => Color::Yellow,
                 _ => Color::Red,
             };
-            ListItem::new(Line::from(Span::styled(&l.text, Style::default().fg(color))))
+            ListItem::new(Line::from(Span::styled(
+                &l.text,
+                Style::default().fg(color),
+            )))
         })
         .collect();
     let block = Block::bordered().title(format!(
@@ -601,7 +661,9 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::from(""),
         Line::from(Span::styled(
             " GLOBAL",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("   [Tab]/[Shift-Tab]  — switch tab"),
         Line::from("   [q]/[Esc]          — quit"),
@@ -613,23 +675,31 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::from(""),
         Line::from(Span::styled(
             " DASHBOARD",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("   [↑/↓]  or [k/j]    — select machine (● online / ○ offline)"),
         Line::from("   Right panel: details; with hub down — local config summary."),
         Line::from(""),
         Line::from(Span::styled(
             " PROJECTS",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("   [↑/↓]              — select project"),
-        Line::from("   [n]                — add project to config (name/path/branch/machines/post_pull)"),
+        Line::from(
+            "   [n]                — add project to config (name/path/branch/machines/post_pull)",
+        ),
         Line::from("   [d]                — delete selected project from config"),
         Line::from("   Rows: ◈ dirty / · clean, branch, ahead/behind origin, commit"),
         Line::from(""),
         Line::from(Span::styled(
             " MACHINES (config)",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("   [↑/↓]              — select remote machine"),
         Line::from("   [n]                — add machine ([remote.<name>]: host/port/user)"),
@@ -637,19 +707,25 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::from(""),
         Line::from(Span::styled(
             " DOCTOR",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("   [r]                — run checks: config, ssh key, netbird, git, hub ping"),
         Line::from(""),
         Line::from(Span::styled(
             " LOG",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("   [Enter]            — clear log"),
         Line::from(""),
         Line::from(Span::styled(
             " Architecture",
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("   UI-поток (ratatui) синхронный; сеть/файлы — в фоне"),
         Line::from("   (src/tui/backend.rs) с собственным tokio runtime."),
@@ -696,16 +772,20 @@ fn draw_form(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(
                     format!("{}: ", f.label),
                     if active {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     },
                 ),
                 Span::styled(
                     f.value.clone(),
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(if active { Color::DarkGray } else { Color::Reset }),
+                    Style::default().fg(Color::White).bg(if active {
+                        Color::DarkGray
+                    } else {
+                        Color::Reset
+                    }),
                 ),
             ]));
         }
@@ -718,7 +798,9 @@ fn draw_form(frame: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::bordered().title(Span::styled(
         form.title,
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     ));
     let par = if is_confirm {
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true })
