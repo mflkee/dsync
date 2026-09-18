@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- TLS certificate verification on the client side (TOFU) — in progress; currently
-  self-signed certs with fingerprint pinning are recommended for untrusted networks.
+- TLS certificate verification on the client side (TOFU): first connection
+  remembers the hub fingerprint, later ones verify it; `dsync trust list|rm`
+  manages stored fingerprints. Hub persists its self-signed cert in the data dir
+  so the fingerprint is stable across restarts.
 
 ## [0.1.0] — 2026-09-18
 

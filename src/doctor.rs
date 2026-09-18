@@ -32,10 +32,22 @@ pub async fn run(cfg: Config) -> Result<()> {
         Status::Ok
     });
 
+    check("hub trust (TOFU)", || {
+        let addr = match &cfg.hub_connect {
+            Some(h) => &h.address,
+            None => return Status::Skip("no hub_connect in config"),
+        };
+        let store = crate::trust::TrustStore::load();
+        match store.get(addr) {
+            Some(_) => Status::Ok,
+            None => {
+                Status::Warn("not trusted yet — first connect will trust the hub (TOFU)".into())
+            }
+        }
+    });
+
     check("ssh key", || {
-        let key = dirs::home_dir()
-            .map(|h| h.join(".ssh/id_ed25519"))
-            .unwrap_or_default();
+        let key = cfg.machine.ssh_key_path();
         if key.exists() {
             Status::Ok
         } else {
