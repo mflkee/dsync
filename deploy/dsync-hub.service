@@ -6,11 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/mflkee/.cargo/bin/dsync daemon
+ExecStart=%h/.local/bin/dsync-hub hub
 Restart=on-failure
 RestartSec=5
-User=mflkee
-Group=mflkee
+User=%i
+Group=%i
 
 # Security
 NoNewPrivileges=true

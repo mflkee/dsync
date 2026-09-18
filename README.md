@@ -1,124 +1,125 @@
 # dsync
 
-Decentralized dotfiles synchronization over NetBird.
+**Multi-machine dotfiles & project sync across your fleet — git-driven, hub-coordinated, no public SSH needed.**
 
-`dsync` keeps your [chezmoi](https://www.chezmoi.io/) dotfiles in sync across
-personal machines without exposing SSH to the public internet. It uses
-[NetBird](https://netbird.io/) peer names/FQDNs to discover machines and pushes
-changes over SSH inside the private mesh network.
+`dsync` keeps the same git repos (dotfiles, configs, projects) in sync across all
+your machines. It runs inside your private network (NetBird, Tailscale, WireGuard,
+a VPN, or a VPS) and never exposes SSH to the public internet.
 
-## Features
-
-- `dsync status` — show NetBird status, peers, and configured sync targets.
-- `dsync sync` — commit local dotfile changes, push to GitHub, and pull/apply
-  them on all configured remote machines.
-- `dsync sync notebook desktop` — sync only specific machines.
-- `dsync sync --only notebook --only desktop` — alternative way to select machines.
-- `dsync sync --dry-run` — preview what `sync` would do without making changes.
-- `dsync sync --jobs 8` — sync up to 8 remote machines in parallel (default: 4).
-- `dsync push` — push current state to remote machines.
-- `dsync push notebook` — push only to a specific machine.
-- `dsync push --dry-run` — preview what `push` would do.
-- `dsync pull` — pull latest dotfiles from GitHub and run `chezmoi apply`.
-- `dsync pull --dry-run` — preview what `pull` would do.
-- `dsync setup` — copy SSH keys to all configured machines.
-- `dsync add <name> <host>` / `dsync remove <name>` — manage machine list.
-- `dsync timer --enable` — run `dsync pull` every 30 minutes via systemd timer.
-- `dsync timer --enable --mode sync` — run `dsync sync` every 30 minutes.
-- `dsync help` — show a friendly help page with examples.
-- `dsync project status` — show status of configured projects.
-- `dsync project sync` — commit, push, and pull projects on remote machines.
-- `dsync project clone` — clone projects on remote machines.
-
-## Project sync
-
-Besides dotfiles, `dsync` can keep arbitrary GitHub projects in sync across
-your machines. Add a `[projects]` section to the config:
-
-```toml
-[projects]
-myapp = { path = "~/projects/myapp", remote = "git@github.com:mflkee/myapp.git", machines = ["notebook", "desktop"] }
-dsync = { path = "~/projects/dsync", remote = "git@github.com:mflkee/dsync.git" }
+```
+┌──────────────┐   QUIC    ┌──────────────┐        ┌──────────────┐
+│  desktop     │ ────────▶ │   hub        │ ──────▶ │  notebook    │
+│  (client)    │           │ (coordinator)│  SSH    │  (client)    │
+└──────────────┘           └──────┬───────┘        └──────────────┘
+         ▲                        │                    ▲
+         └── git push/pull ───────┴── git pull + post_pull hooks
 ```
 
-`machines` is optional; if omitted, the project is synced to all machines in
-`[machines]`.
+## Why dsync?
 
-- `dsync project status` — show local git status for each project.
-- `dsync project sync myapp` — sync a single project.
-- `dsync project sync` — sync all projects.
-- `dsync project clone myapp` — clone the project on remote machines.
+- **Fleet-wide, not single-host.** chezmoi/yadm/dotbot sync *one* machine.
+  `dsync` *pushes a change once* and the hub triggers `git pull` + `post_pull`
+  on every other machine in your fleet.
+- **No public SSH, no cloud agent.** All traffic stays inside your private mesh.
+- **Just git underneath.** Each project is a normal git repo (GitHub, Gitea,
+  cgit, or a bare repo on the hub). Content transport is battle-tested git;
+  `dsync` adds the orchestration.
+- **Zero learning curve for dotfiles.** `dsync init` sets everything up for you
+  — it can even install and drive [chezmoi](https://www.chezmoi.io/) under the
+  hood, so you never have to learn a second tool.
+- **Guard rails on top of plain git pull:** shell-quoted remote commands, hard
+  SSH timeouts so dead machines can't hang the hub, atomic state storage.
 
-## Install
+## Quickstart
 
-Requires `uv`, `git`, `openssh`, `chezmoi`, and `netbird`.
+```sh
+# Install (crates.io): soon
+cargo install dsync            # or: cargo install --git https://github.com/mflkee/dsync
 
-```bash
-# 1. Install uv if you don't have it yet
-command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+# Walk through setup: machine name, hub address, machines, projects, scheduler
+dsync init
 
-# 2. Clone and install dsync
-export PATH="$HOME/.local/bin:$PATH"
-git clone https://github.com/mflkee/dsync.git "$HOME/.local/share/dsync"
-uv tool install --editable "$HOME/.local/share/dsync"
+# Push your state to the hub — the hub then pulls + applies on all other machines
+dsync push
 
-# 3. Make sure ~/.local/bin is in PATH
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshenv
+# See what happened anywhere
+dsync status
+dsync doctor
+dsync tui
 ```
 
-## Configure
+## Commands
 
-Edit `~/.config/dsync/config.toml`:
+| Command | Description |
+|---------|-------------|
+| `dsync init` | Interactive setup wizard (machine, hub, remotes, projects, scheduler) |
+| `dsync push [machine]` | Commit local changes, push to git origin, notify hub |
+| `dsync pull [machine]` | Fetch fleet state from the hub |
+| `dsync status` | Show online/offline machines and their sync state |
+| `dsync doctor` | Diagnose config, SSH keys, network, hub reachability |
+| `dsync tui` | Full TUI: dashboard, projects, machines, doctor, log, config editor |
+| `dsync hub` | Run the hub daemon (QUIC server + SSH-pull coordinator) |
+| `dsync watch` | Background sync loop (poll+push+pull on an interval) |
+| `dsync bot` | Telegram bot: exec / shell / opencode commands on fleet machines |
+| `dsync dotfiles ...` | chezmoi wrapper: `add`, `apply`, `diff`, `status`, `edit` |
+
+## Config
+
+`dsync` looks for `dsync.toml` (repo-local), `~/.config/dsync/dsync/config.toml`,
+or `/etc/dsync/config.toml` — in that order.
 
 ```toml
-[machines]
-notebook = { host = "archlinux-notebook-XXXXXX.netbird.cloud", user = "mflkee" }
-desktop  = { host = "archlinux-desktop.netbird.cloud", user = "mflkee" }
-server   = { host = "archlinux-mkair.netbird.cloud", user = "mflkee" }
+config_version = 1
 
-[git]
-source = "~/dotfiles"
+[machine]
+name = "desktop"
+
+[hub_connect]
+address = "100.89.126.211:42069"   # hub inside your private network
+
+[projects.dotfiles]
+path = "~/dotfiles"
 branch = "main"
-# Optional: the URL used to clone the repo on new machines.
-# Defaults to the local repo's origin remote.
-# remote_url = "https://github.com/username/dotfiles.git"
+machines = ["desktop", "notebook", "server"]
+post_pull = "chezmoi apply --force"
 
-# Optional: aliases for `dsync discover` to map NetBird hostnames to short names.
-# [discover.aliases]
-# archlinux-notebook = "notebook"
-# archlinux-desktop = "desktop"
-# mkair-server-tmn = "server-tmn"
+[projects.dsync]
+path = "~/projects/dsync"
+branch = "main"
+machines = ["desktop", "notebook", "server"]
+post_pull = "cargo build --release && cp target/release/dsync ~/.local/bin/dsync"
 
-# Optional: prefixes stripped from NetBird hostnames before alias lookup.
-# [discover]
-# prefixes = ["archlinux-", "mkair-"]
+[remote.desktop]
+host = "192.168.1.10"
+port = 22
+user = "me"
 
-# Optional: logging settings.
-# [logging]
-# file = "~/.local/share/dsync/dsync.log"
-# level = "INFO"
-
-# Optional: projects to sync across machines.
-# [projects]
-# myapp = { path = "~/projects/myapp", remote = "git@github.com:mflkee/myapp.git", machines = ["notebook", "desktop"] }
+# When running the hub on this machine:
+[hub]
+bind = "0.0.0.0:42069"
+data_dir = "~/.local/share/dsync-hub"
 ```
 
-Each `host` must be a NetBird FQDN resolvable inside the mesh. Use the value
-reported by `netbird status --json` under `fqdn`.
+Each project's git `origin` is where content actually lives (your GitHub/Gitea
+repo, or a bare repo on the hub). The hub only coordinates: it records each
+machine's state and triggers SSH pulls with `post_pull` hooks.
 
-## First run
+## Running the hub
 
-1. Ensure all target machines are online in NetBird.
-2. Run `dsync setup` to copy your SSH key.
-3. Run `dsync sync`.
-
-## Optional: automatic sync
-
-```bash
-dsync timer --enable
-systemctl --user status dsync.timer
+```sh
+dsync hub          # foreground
+# or as a service: systemd user unit (Linux), LaunchAgent (macOS),
+# Task Scheduler (Windows), or plain `dsync watch`-driven loop
 ```
+
+The hub needs SSH access to every machine (an `ed25519` key is generated by
+`dsync init` if missing; install the public key on each target).
+
+## Requirements
+
+- Rust 1.80+ to build; git + an SSH server on target machines at runtime.
+- Works on Linux, macOS, Windows.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

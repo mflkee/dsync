@@ -9,8 +9,15 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Start hub daemon (server mode)
-    Daemon,
+    /// Start the hub daemon (QUIC server + SSH-pull coordinator)
+    #[command(alias = "daemon")]
+    Hub,
+    /// Background sync loop: poll hub, push + pull every N seconds
+    Watch {
+        /// Poll interval in seconds (default: 900, i.e. 15 minutes)
+        #[arg(long, default_value_t = 900)]
+        interval: u64,
+    },
     /// Push local state to hub
     Push {
         /// Target machine name (default: all)

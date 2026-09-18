@@ -25,7 +25,8 @@ async fn main() -> Result<()> {
     let cfg = config::Config::load()?;
 
     match args.command {
-        cli::Commands::Daemon => hub::run_server(cfg).await,
+        cli::Commands::Hub => hub::run_server(cfg).await,
+        cli::Commands::Watch { interval } => client::watch(cfg, interval).await,
         cli::Commands::Push { machine } => {
             print_lines(client::push(cfg, machine).await?);
             Ok(())
