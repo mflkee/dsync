@@ -110,14 +110,11 @@ async fn run_backend(
     // Локальные проекты показываем мгновенно, не дожидаясь ответа хаба.
     local_snapshot(&editor.cfg, &ev).await;
 
-    // Снимок хаба — фоновая задача, чтобы команды (push/pull/doctor)
-    // не ждали ~30с ретраев connect при упавшем хабе.
+    // И сразу же опрашиваем хаб: иначе первый снимок машин пришёл бы только
+    // через 30с (первый тик poll уже съеден выше), и дашборд был бы пуст
+    // даже при живом хабе, пока не нажмёшь [r].
     let snapshot_in_flight = Arc::new(AtomicBool::new(false));
-    // Последний успешный список машин: при падении хаба и при изменении
-    // конфига показанный список не обнуляется (раньше события слали
-    // пустой HashMap и дашборд терял машины до следующего poll).
-    let last_machines =
-        Arc::new(std::sync::Mutex::new(HashMap::<String, MachineStatus>::new()));
+    spawn_snapshot(&editor, &ev, &snapshot_in_flight, &last_machines);
 
     loop {
         tokio::select! {
