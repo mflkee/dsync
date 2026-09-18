@@ -4,6 +4,7 @@ mod client;
 mod config;
 mod doctor;
 mod hub;
+mod init;
 mod projects;
 mod protocol;
 mod ssh;
@@ -23,6 +24,22 @@ async fn main() -> Result<()> {
     let tui_mode = matches!(&args.command, cli::Commands::Tui);
     init_tracing(tui_mode);
 
+    match args.command {
+        // init и trust не требуют существующего конфига.
+        cli::Commands::Init => return init::run(),
+        cli::Commands::Trust { action } => match action {
+            cli::TrustAction::List => {
+                print_lines(trust::trust_list()?);
+                return Ok(());
+            }
+            cli::TrustAction::Rm { address } => {
+                print_lines(trust::trust_rm(&address)?);
+                return Ok(());
+            }
+        },
+        _ => {}
+    }
+
     let cfg = config::Config::load()?;
 
     match args.command {
@@ -36,16 +53,6 @@ async fn main() -> Result<()> {
             print_lines(client::pull(cfg, machine).await?);
             Ok(())
         }
-        cli::Commands::Trust { action } => match action {
-            cli::TrustAction::List => {
-                print_lines(trust::trust_list()?);
-                Ok(())
-            }
-            cli::TrustAction::Rm { address } => {
-                print_lines(trust::trust_rm(&address)?);
-                Ok(())
-            }
-        },
         cli::Commands::Status => {
             print_lines(client::status(cfg).await?);
             Ok(())
@@ -53,6 +60,7 @@ async fn main() -> Result<()> {
         cli::Commands::Doctor => doctor::run(cfg).await,
         cli::Commands::Bot => bot::run(cfg).await,
         cli::Commands::Tui => tui::run(cfg),
+        cli::Commands::Init | cli::Commands::Trust { .. } => unreachable!(),
     }
 }
 

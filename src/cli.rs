@@ -9,6 +9,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Interactive first-run setup wizard
+    Init,
     /// Start the hub daemon (QUIC server + SSH-pull coordinator)
     #[command(alias = "daemon")]
     Hub,
