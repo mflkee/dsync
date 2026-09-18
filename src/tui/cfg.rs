@@ -193,3 +193,80 @@ fn is_chezmoi_managed(path: &Path) -> bool {
         .map(|s| s.success())
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_remove_project_and_remote_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("dsync-cfg-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let content = "[machine]\nname = \"testbox\"\n\n[hub_connect]\naddress = \"127.0.0.1:42069\"\n";
+        std::fs::write(&path, content).unwrap();
+
+        let cfg: Config = toml::from_str(content).unwrap();
+        let mut ed = ConfigEditor {
+            live_path: path.clone(),
+            chezmoi_managed: false,
+            cfg,
+        };
+
+        // Добавить проект и машину.
+        ed.add_project("proj-a", "/tmp/proj-a", Some("main"), &["desktop".to_string()], Some("echo done"))
+            .unwrap();
+        ed.add_remote("machine-1", "100.89.0.1", 22, "user").unwrap();
+
+        let on_disk: Config =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(on_disk.projects.as_ref().unwrap().contains_key("proj-a"));
+        let proj = &on_disk.projects.as_ref().unwrap()["proj-a"];
+        assert_eq!(proj.path.to_string_lossy(), "/tmp/proj-a");
+        assert_eq!(proj.machines.as_ref().unwrap(), &["desktop".to_string()]);
+        assert_eq!(proj.post_pull.as_deref(), Some("echo done"));
+        assert_eq!(on_disk.remote.as_ref().unwrap()["machine-1"].host, "100.89.0.1");
+
+        // Удалить проект — секция исчезает, remote остаётся.
+        ed.remove_project("proj-a").unwrap();
+        let on_disk: Config =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(on_disk.projects.is_none());
+        assert!(on_disk.remote.as_ref().unwrap().contains_key("machine-1"));
+
+        // Валидация: пустой name/порт 0 отклоняются.
+        assert!(ed.add_project("", "/tmp/x", None, &[], None).is_err());
+        assert!(ed.add_remote("m2", "1.2.3.4", 0, "u").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn summary_reflects_config() {
+        let mut cfg: Config = toml::from_str(
+            "[machine]\nname = \"box\"\n\n[projects.one]\npath = \"/tmp/one\"\n\n[remote.r1]\nhost = \"h\"\nport = 22\nuser = \"u\"\n",
+        )
+        .unwrap();
+        let mut projects = cfg.projects.take().unwrap();
+        projects.insert(
+            "two".to_string(),
+            ProjectConfig {
+                path: PathBuf::from("/tmp/two"),
+                branch: None,
+                machines: None,
+                post_pull: None,
+            },
+        );
+        cfg.projects = Some(projects);
+        let ed = ConfigEditor {
+            live_path: PathBuf::from("/nope/config.toml"),
+            chezmoi_managed: false,
+            cfg,
+        };
+        let s = ed.summary();
+        assert_eq!(s.machine, "box");
+        assert_eq!(s.projects.len(), 2);
+        assert_eq!(s.remotes.len(), 1);
+        assert_eq!(s.remotes[0].name, "r1");
+    }
+}
