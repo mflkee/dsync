@@ -128,6 +128,13 @@ async fn send_recv(
     Ok(buf)
 }
 
+/// Вежливо закрыть соединение после выполненного запроса. Без этого хаб
+/// держит связь до idle-таймаута и пишет в лог «connection error… timed out»
+/// на каждый оставленный клиентом «висяк».
+pub fn close_conn(conn: &Connection) {
+    conn.close(0u32.into(), b"done");
+}
+
 pub async fn send_push(conn: &Connection, req: &PushRequest) -> Result<PushResponse> {
     let mut msg = serde_json::to_value(req)?;
     msg["type"] = serde_json::json!("push");
@@ -188,6 +195,7 @@ pub async fn status(cfg: Config) -> Result<Vec<String>> {
         machine: cfg.machine.name.clone(),
     };
     let resp = send_status(&conn, &req).await?;
+    close_conn(&conn);
 
     let mut out = vec!["Sync Status:".to_string()];
     for (name, status) in &resp.machines {

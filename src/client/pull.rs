@@ -4,7 +4,7 @@ use tracing::info;
 use crate::config::Config;
 use crate::protocol::{PullFilter, PullRequest};
 
-use super::connect::{connect_with_retry, send_pull};
+use super::connect::{close_conn, connect_with_retry, send_pull};
 
 pub async fn pull(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     info!("starting pull for {}", cfg.machine.name);
@@ -26,6 +26,7 @@ pub async fn pull(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     };
 
     let resp = send_pull(&conn, &req).await?;
+    close_conn(&conn);
     info!("received state for {} machines", resp.machines.len());
 
     let mut out = Vec::new();

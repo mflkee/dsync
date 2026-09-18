@@ -270,6 +270,7 @@ async fn try_snapshot(
     };
     match crate::client::connect::send_status(&conn, &req).await {
         Ok(resp) => {
+            crate::client::connect::close_conn(&conn);
             *last.lock().unwrap_or_else(|p| p.into_inner()) = resp.machines.clone();
             let _ = ev.send(Event::Snapshot {
                 machines: resp.machines,

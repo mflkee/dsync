@@ -4,7 +4,7 @@ use tracing::info;
 use crate::config::Config;
 use crate::protocol::PushRequest;
 
-use super::connect::{connect_with_retry, send_push};
+use super::connect::{close_conn, connect_with_retry, send_push};
 
 pub async fn push(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     info!("starting push from {}", cfg.machine.name);
@@ -26,6 +26,7 @@ pub async fn push(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     };
 
     let resp = send_push(&conn, &req).await?;
+    close_conn(&conn);
     let mut out = Vec::new();
     if resp.ok {
         info!("push successful");
