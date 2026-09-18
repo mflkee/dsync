@@ -1,29 +1,41 @@
 //! Состояние приложения и обработка событий (по образцу esp32-tui/src/app.rs).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use crossbeam_channel::Receiver;
 
 use crate::protocol::{MachineStatus, ProjectState};
 
-use super::backend::{Cmd, CmdSender, Event};
+use super::backend::{CheckItem, Cmd, CmdSender, Event};
+use super::cfg::CfgSummary;
 
 /// Вкладки интерфейса.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Dashboard,
     Projects,
+    Machines,
+    Doctor,
     Log,
     Help,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Dashboard, Tab::Projects, Tab::Log, Tab::Help];
+    pub const ALL: [Tab; 6] = [
+        Tab::Dashboard,
+        Tab::Projects,
+        Tab::Machines,
+        Tab::Doctor,
+        Tab::Log,
+        Tab::Help,
+    ];
 
     pub fn title(&self) -> &'static str {
         match self {
             Tab::Dashboard => "Dashboard",
             Tab::Projects => "Projects",
+            Tab::Machines => "Machines",
+            Tab::Doctor => "Doctor",
             Tab::Log => "Log",
             Tab::Help => "Help",
         }
@@ -44,24 +56,22 @@ impl Tab {
 #[derive(Debug, Clone)]
 pub struct LogLine {
     pub text: String,
-    pub level: u8, // 0=info 1=ok 2=warn 3=err
+    pub level: u8,
 }
 
-/// Список машин (name, status) с курсором.
+/// Список машин (name, status) с курсором — для дашборда.
 #[derive(Debug, Default)]
-pub struct Machines {
+pub struct MachineList {
     pub list: Vec<(String, MachineStatus)>,
     pub selected: usize,
 }
 
-impl Machines {
-    pub fn update(&mut self, machines: HashMap<String, MachineStatus>) {
+impl MachineList {
+    pub fn update(&mut self, machines: std::collections::HashMap<String, MachineStatus>) {
         let mut list: Vec<(String, MachineStatus)> = machines.into_iter().collect();
         list.sort_by(|a, b| a.0.cmp(&b.0));
         self.list = list;
-        if self.selected >= self.list.len() && !self.list.is_empty() {
-            self.selected = self.list.len() - 1;
-        }
+        self.clamp();
     }
 
     pub fn sel_next(&mut self) {
@@ -79,45 +89,117 @@ impl Machines {
     pub fn selected(&self) -> Option<&(String, MachineStatus)> {
         self.list.get(self.selected)
     }
+
+    fn clamp(&mut self) {
+        if self.selected >= self.list.len() && !self.list.is_empty() {
+            self.selected = self.list.len() - 1;
+        }
+    }
+}
+
+/// Универсальный «выбранный индекс» — используется Projects, Machines (remote), Doctor.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SelIndex {
+    pub idx: usize,
+    pub len: usize,
+}
+
+impl SelIndex {
+    pub fn new(len: usize) -> Self {
+        Self { idx: 0, len }
+    }
+    pub fn sel_next(&mut self) {
+        if self.len > 0 {
+            self.idx = (self.idx + 1).min(self.len - 1);
+        }
+    }
+    pub fn sel_prev(&mut self) {
+        if self.len > 0 {
+            self.idx = self.idx.saturating_sub(1);
+        }
+    }
 }
 
 /// Полное состояние TUI.
 pub struct App {
     pub tab: Tab,
     pub should_quit: bool,
-    pub machines: Machines,
+    pub machines: MachineList,
     pub projects: Vec<ProjectState>,
     pub logs: VecDeque<LogLine>,
-    /// Активная фоновая задача (показывается спиннером в шапке).
+    /// Активная фоновая задача (спиннер в шапке).
     pub busy: Option<String>,
-    /// Последняя завершённая задача (label, ok, текст) — для статус-строки.
+    /// Последняя завершённая задача.
     pub last_action: Option<(String, bool, String)>,
-    /// Последняя ошибка получения снимка (показывается на дашборде).
+    /// Последняя ошибка связи с хабом.
     pub last_error: Option<String>,
-    /// Счётчик тиков (для анимации спиннера).
+    /// Счётчик тиков спиннера.
     pub spin: usize,
-    /// Прокрутка лога (вкладка Log).
+
+    // -- Selection indices per tab --
+    pub projects_sel: SelIndex,
+    pub remotes_sel: SelIndex,
+    pub doctor_scroll: usize,
     pub log_scroll: usize,
-    /// Прокрутка справки (вкладка Help).
     pub help_scroll: usize,
+
+    // -- Config summary (из backend) --
+    pub cfg: CfgSummary,
+    // -- Doctor results --
+    pub doctor: Vec<CheckItem>,
+
+    // -- Forms --
+    pub form: Option<Form>,
+
     pub events: Receiver<Event>,
     cmd_tx: CmdSender,
 }
 
+/// Модальная форма добавления или подтверждения.
+#[derive(Debug, Clone)]
+pub struct Form {
+    pub title: &'static str,
+    pub fields: Vec<FormField>,
+    pub cursor: usize,
+    /// Some — это форма подтверждения (Enter = выполнить действие).
+    pub action: Option<ConfirmAction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormField {
+    pub label: &'static str,
+    pub value: String,
+}
+
+/// Действие подтверждения удаления.
+#[derive(Debug, Clone)]
+pub enum ConfirmAction {
+    RemoveProject(String),
+    RemoveRemote(String),
+}
+
 impl App {
-    pub fn new(events: Receiver<Event>, cmd_tx: CmdSender) -> Self {
+    pub fn new(events: Receiver<Event>, cmd_tx: CmdSender, cfg: CfgSummary) -> Self {
+        let projects_sel = SelIndex::new(cfg.projects.len());
+        let remotes_sel = SelIndex::new(cfg.remotes.len());
         Self {
             tab: Tab::Dashboard,
             should_quit: false,
-            machines: Machines::default(),
+            machines: MachineList::default(),
             projects: Vec::new(),
             logs: VecDeque::new(),
             busy: None,
             last_action: None,
             last_error: None,
             spin: 0,
+            projects_sel,
+            remotes_sel,
+            doctor_scroll: 0,
             log_scroll: 0,
             help_scroll: 0,
+            cfg,
+            doctor: Vec::new(),
+            form: None,
             events,
             cmd_tx,
         }
@@ -130,16 +212,10 @@ impl App {
         }
     }
 
-    /// Отправить команду в backend (push/pull/poll). Канал bounded (16),
-    /// трафик редкий — try_send почти всегда проходит. try_send вместо
-    /// blocking_send: UI-цикл живёт на рабочем потоке tokio ([tokio::main]),
-    /// а blocking_send внутри делает block_on -> panic "Cannot block the
-    /// current thread from within a runtime".
     pub fn send(&self, cmd: Cmd) {
         let _ = self.cmd_tx.try_send(cmd);
     }
 
-    /// Запустить push/pull: пока busy — повторные запуски игнорируем.
     pub fn run_action(&mut self, label: &str, cmd: Cmd) {
         if self.busy.is_some() {
             self.log(2, format!("{label}: another task is running"));
@@ -152,24 +228,37 @@ impl App {
 
     pub fn handle_event(&mut self, ev: Event) {
         match ev {
-            Event::Snapshot { machines, projects } => {
+            Event::Snapshot { machines, projects, hub_ok } => {
                 self.machines.update(machines);
                 self.projects = projects;
-                self.last_error = None;
+                self.projects.sort_by(|a, b| a.name.cmp(&b.name));
+                self.projects_sel.len = self.projects.len();
+                self.projects_sel.idx = self.projects_sel.idx.min(self.projects_sel.len.saturating_sub(1));
+                if hub_ok {
+                    self.last_error = None;
+                }
             }
             Event::Log { level, text } => self.log(level, text),
             Event::SnapshotError(err) => self.last_error = Some(err),
             Event::ActionDone { label, ok, text } => {
                 self.busy = None;
                 self.last_action = Some((label, ok, text));
-                // После push/pull состояние могло измениться — берём свежий снимок.
                 self.send(Cmd::Poll);
+            }
+            Event::Doctor(items) => {
+                self.doctor = items;
+                self.doctor_scroll = 0;
+            }
+            Event::ConfigChanged { summary } => {
+                self.cfg = summary;
+                self.projects_sel.len = self.cfg.projects.len();
+                self.remotes_sel.len = self.cfg.remotes.len();
             }
         }
     }
 }
 
-/// Относительное время «N d/h/m/s ago» — для статус-строк.
+/// Относительное время «N d/h/m/s ago».
 pub fn fmt_ago(ts: i64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
