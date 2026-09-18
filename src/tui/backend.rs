@@ -14,7 +14,8 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use crate::config::Config;
 use crate::protocol::{MachineStatus, ProjectState};
 
-/// Команды из UI в backend (tokio mpsc: UI шлёт через `blocking_send`).
+/// Команды из UI в backend (tokio mpsc: UI шлёт через `try_send` —
+/// `blocking_send` паникует на рабочем потоке tokio).
 #[derive(Debug, Clone)]
 pub enum Cmd {
     /// Обновить снимок статуса прямо сейчас.

@@ -131,9 +131,12 @@ impl App {
     }
 
     /// Отправить команду в backend (push/pull/poll). Канал bounded (16),
-    /// трафик редкий — blocking_send не блокирует практически никогда.
+    /// трафик редкий — try_send почти всегда проходит. try_send вместо
+    /// blocking_send: UI-цикл живёт на рабочем потоке tokio ([tokio::main]),
+    /// а blocking_send внутри делает block_on -> panic "Cannot block the
+    /// current thread from within a runtime".
     pub fn send(&self, cmd: Cmd) {
-        let _ = self.cmd_tx.blocking_send(cmd);
+        let _ = self.cmd_tx.try_send(cmd);
     }
 
     /// Запустить push/pull: пока busy — повторные запуски игнорируем.
