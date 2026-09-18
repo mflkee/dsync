@@ -14,7 +14,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use crate::config::Config;
 use crate::protocol::{MachineStatus, ProjectState};
 
-/// Команды из UI в backend.
+/// Команды из UI в backend (tokio mpsc: UI шлёт через `blocking_send`).
 #[derive(Debug, Clone)]
 pub enum Cmd {
     /// Обновить снимок статуса прямо сейчас.
@@ -23,9 +23,9 @@ pub enum Cmd {
     Push { target: Option<String> },
     /// Забрать состояние из хаба (SSH-pull проектов по всем машинам).
     Pull { target: Option<String> },
-    /// Остановить backend.
-    Quit,
 }
+
+pub type CmdSender = tokio::sync::mpsc::Sender<Cmd>;
 
 /// События из backend в UI.
 #[derive(Debug)]
@@ -42,9 +42,9 @@ pub enum Event {
 }
 
 /// Запускает backend-поток, возвращает (приёмник событий, отправитель команд).
-pub fn spawn(cfg: Config) -> (Receiver<Event>, Sender<Cmd>) {
+pub fn spawn(cfg: Config) -> (Receiver<Event>, CmdSender) {
     let (ev_tx, ev_rx) = bounded(256);
-    let (cmd_tx, cmd_rx) = bounded(16);
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(16);
 
     thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -58,7 +58,7 @@ pub fn spawn(cfg: Config) -> (Receiver<Event>, Sender<Cmd>) {
     (ev_rx, cmd_tx)
 }
 
-async fn run_backend(cfg: Config, cmd_rx: Receiver<Cmd>, ev: Sender<Event>) {
+async fn run_backend(cfg: Config, mut cmd_rx: tokio::sync::mpsc::Receiver<Cmd>, ev: Sender<Event>) {
     // Периодический status-poll: каждые 30 секунд держим экран свежим.
     let mut poll = tokio::time::interval(Duration::from_secs(30));
     poll.tick().await; // первый тик сразу — статус появляется мгновенно
@@ -74,7 +74,8 @@ async fn run_backend(cfg: Config, cmd_rx: Receiver<Cmd>, ev: Sender<Event>) {
                 Some(Cmd::Pull { target }) => {
                     run_action(&cfg, &ev, "pull", crate::client::pull(cfg.clone(), target)).await;
                 }
-                Some(Cmd::Quit) | None => break,
+                // Канал закрыт — UI-поток завершился (App упал). Выходим.
+                None => break,
             }
         }
     }

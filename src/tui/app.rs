@@ -2,11 +2,11 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 
 use crate::protocol::{MachineStatus, ProjectState};
 
-use super::backend::{Cmd, Event};
+use super::backend::{Cmd, CmdSender, Event};
 
 /// Вкладки интерфейса.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +90,8 @@ pub struct App {
     pub logs: VecDeque<LogLine>,
     /// Активная фоновая задача (показывается спиннером в шапке).
     pub busy: Option<String>,
+    /// Последняя завершённая задача (label, ok, текст) — для статус-строки.
+    pub last_action: Option<(String, bool, String)>,
     /// Счётчик тиков (для анимации спиннера).
     pub spin: usize,
     /// Прокрутка лога (вкладка Log).
@@ -97,11 +99,11 @@ pub struct App {
     /// Прокрутка справки (вкладка Help).
     pub help_scroll: usize,
     pub events: Receiver<Event>,
-    cmd_tx: Sender<Cmd>,
+    cmd_tx: CmdSender,
 }
 
 impl App {
-    pub fn new(events: Receiver<Event>, cmd_tx: Sender<Cmd>) -> Self {
+    pub fn new(events: Receiver<Event>, cmd_tx: CmdSender) -> Self {
         Self {
             tab: Tab::Dashboard,
             should_quit: false,
@@ -109,6 +111,7 @@ impl App {
             projects: Vec::new(),
             logs: VecDeque::new(),
             busy: None,
+            last_action: None,
             spin: 0,
             log_scroll: 0,
             help_scroll: 0,
@@ -124,9 +127,10 @@ impl App {
         }
     }
 
-    /// Отправить команду в backend (push/pull/poll).
+    /// Отправить команду в backend (push/pull/poll). Канал bounded (16),
+    /// трафик редкий — blocking_send не блокирует практически никогда.
     pub fn send(&self, cmd: Cmd) {
-        let _ = self.cmd_tx.send(cmd);
+        let _ = self.cmd_tx.blocking_send(cmd);
     }
 
     /// Запустить push/pull: пока busy — повторные запуски игнорируем.
@@ -147,8 +151,9 @@ impl App {
                 self.projects = projects;
             }
             Event::Log { level, text } => self.log(level, text),
-            Event::ActionDone { .. } => {
+            Event::ActionDone { label, ok, text } => {
                 self.busy = None;
+                self.last_action = Some((label, ok, text));
                 // После push/pull состояние могло измениться — берём свежий снимок.
                 self.send(Cmd::Poll);
             }

@@ -61,6 +61,10 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         app.machines.list.len(),
         app.projects.len(),
     );
+    if let Some((label, ok, text)) = &app.last_action {
+        let mark = if *ok { "✓" } else { "✗" };
+        status.push_str(&format!("  |  last: {} {} {}", label, mark, text));
+    }
 
     // Индикатор фоновой задачи с анимированным спиннером.
     let busy_style = if let Some(label) = &app.busy {
@@ -134,16 +138,12 @@ fn draw_dashboard(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 ("○", Color::Red)
             };
-            let name_style = if s.name == "you" {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
             ListItem::new(Line::from(vec![
                 Span::styled(mark, Style::default().fg(col).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" {}", name), name_style),
+                Span::styled(
+                    format!(" {}", name),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(
                     format!("   push: {}", fmt_ago(s.last_push)),
                     Style::default().fg(Color::DarkGray),
@@ -194,7 +194,10 @@ fn draw_machine_detail(frame: &mut Frame, app: &App, area: Rect) {
             };
             lines.push(Line::from(vec![
                 Span::styled(" Machine  : ", Style::default().fg(Color::DarkGray)),
-                Span::styled(name.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    name.as_str(),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
             ]));
             lines.push(Line::from(vec![
                 Span::styled(" Status   : ", Style::default().fg(Color::DarkGray)),
@@ -258,7 +261,10 @@ fn draw_projects(frame: &mut Frame, app: &App, area: Rect) {
                     format!("  ↑{} ↓{}", p.ahead, p.behind),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled(format!("  {}  {}", short, fmt_ago(p.last_commit_time)), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  {}  {}", short, fmt_ago(p.last_commit_time)),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]))
         })
         .collect();
