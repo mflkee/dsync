@@ -6,7 +6,7 @@ use crate::protocol::PushRequest;
 
 use super::connect::{connect_with_retry, send_push};
 
-pub async fn push(cfg: Config, machine: Option<String>) -> Result<()> {
+pub async fn push(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     info!("starting push from {}", cfg.machine.name);
     if let Some(m) = &machine {
         info!("targeting SSH pull to machine {m}");
@@ -26,14 +26,15 @@ pub async fn push(cfg: Config, machine: Option<String>) -> Result<()> {
     };
 
     let resp = send_push(&conn, &req).await?;
+    let mut out = Vec::new();
     if resp.ok {
         info!("push successful");
-        println!("✓ pushed to hub");
+        out.push("✓ pushed to hub".to_string());
     } else {
         anyhow::bail!("push failed: {}", resp.error.unwrap_or_default());
     }
 
-    Ok(())
+    Ok(out)
 }
 
 async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectState>> {

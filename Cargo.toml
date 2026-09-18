@@ -25,3 +25,8 @@ chrono = { version = "0.4", features = ["clock"] }
 async-trait = "0.1"
 teloxide = { version = "0.12", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
 
+# TUI (dsync tui)
+ratatui = "0.30.1"
+crossterm = "0.29"
+crossbeam-channel = "0.5"
+

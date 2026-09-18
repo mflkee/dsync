@@ -170,23 +170,23 @@ fn fmt_civil(ts: i64) -> String {
     }
 }
 
-pub async fn status(cfg: Config) -> Result<()> {
+pub async fn status(cfg: Config) -> Result<Vec<String>> {
     let conn = connect_with_retry(&cfg).await?;
     let req = StatusRequest {
         machine: cfg.machine.name.clone(),
     };
     let resp = send_status(&conn, &req).await?;
 
-    println!("Sync Status:");
+    let mut out = vec!["Sync Status:".to_string()];
     for (name, status) in &resp.machines {
-        println!(
+        out.push(format!(
             "  {}: online={}, last_push={} ({})",
             name,
             status.online,
             fmt_civil(status.last_push),
             fmt_relative(status.last_push),
-        );
+        ));
     }
 
-    Ok(())
+    Ok(out)
 }

@@ -27,6 +27,8 @@ pub enum Commands {
     Doctor,
     /// Start Telegram bot
     Bot,
+    /// Start interactive TUI
+    Tui,
 }
 
 impl Cli {

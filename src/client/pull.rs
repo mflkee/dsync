@@ -6,7 +6,7 @@ use crate::protocol::{PullFilter, PullRequest};
 
 use super::connect::{connect_with_retry, send_pull};
 
-pub async fn pull(cfg: Config, machine: Option<String>) -> Result<()> {
+pub async fn pull(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     info!("starting pull for {}", cfg.machine.name);
     if let Some(m) = &machine {
         info!("pulling state for machine {m} only");
@@ -28,9 +28,10 @@ pub async fn pull(cfg: Config, machine: Option<String>) -> Result<()> {
     let resp = send_pull(&conn, &req).await?;
     info!("received state for {} machines", resp.machines.len());
 
+    let mut out = Vec::new();
     for (name, state) in &resp.machines {
-        println!("  {name}: {} projects", state.projects.len());
+        out.push(format!("  {name}: {} projects", state.projects.len()));
     }
 
-    Ok(())
+    Ok(out)
 }
