@@ -2,6 +2,10 @@
 
 **Multi-machine dotfiles & project sync across your fleet — git-driven, hub-coordinated, no public SSH needed.**
 
+[![CI](https://github.com/mflkee/dsync/actions/workflows/ci.yml/badge.svg)](https://github.com/mflkee/dsync/actions/workflows/ci.yml)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Crates.io](https://img.shields.io/badge/crates.io-soon-orange.svg)](https://crates.io)
+
 `dsync` keeps the same git repos (dotfiles, configs, projects) in sync across all
 your machines. It runs inside your private network (NetBird, Tailscale, WireGuard,
 a VPN, or a VPS) and never exposes SSH to the public internet.
