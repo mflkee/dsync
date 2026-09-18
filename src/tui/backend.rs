@@ -113,12 +113,17 @@ async fn run_backend(
     // Снимок хаба — фоновая задача, чтобы команды (push/pull/doctor)
     // не ждали ~30с ретраев connect при упавшем хабе.
     let snapshot_in_flight = Arc::new(AtomicBool::new(false));
+    // Последний успешный список машин: при падении хаба и при изменении
+    // конфига показанный список не обнуляется (раньше события слали
+    // пустой HashMap и дашборд терял машины до следующего poll).
+    let last_machines =
+        Arc::new(std::sync::Mutex::new(HashMap::<String, MachineStatus>::new()));
 
     loop {
         tokio::select! {
-            _ = poll.tick() => spawn_snapshot(&editor, &ev, &snapshot_in_flight),
+            _ = poll.tick() => spawn_snapshot(&editor, &ev, &snapshot_in_flight, &last_machines),
             cmd = cmd_rx.recv() => match cmd {
-                Some(Cmd::Poll) => spawn_snapshot(&editor, &ev, &snapshot_in_flight),
+                Some(Cmd::Poll) => spawn_snapshot(&editor, &ev, &snapshot_in_flight, &last_machines),
                 Some(Cmd::Push { target }) => {
                     let cfg = editor.cfg.clone();
                     let ev2 = ev.clone();
@@ -147,12 +152,13 @@ async fn run_backend(
                         Ok(()) => {
                             let _ = ev.send(Event::Log { level: 1, text: format!("project {name:?} added") });
                             let _ = ev.send(Event::ConfigChanged { summary: editor.summary() });
-                            // пересканируем проекты
+                            // пересканируем проекты; список машин не трогаем
                             let cfg2 = editor.cfg.clone();
                             let projects = cfg2.projects.as_ref()
                                 .map(|p| crate::projects::status::scan(p).unwrap_or_default())
                                 .unwrap_or_default();
-                            let _ = ev.send(Event::Snapshot { machines: HashMap::new(), projects, hub_ok: false });
+                            let machines = last_machines.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                            let _ = ev.send(Event::Snapshot { machines, projects, hub_ok: false });
                         }
                         Err(e) => { let _ = ev.send(Event::Log { level: 3, text: format!("add project: {e}") }); }
                     }
@@ -166,7 +172,8 @@ async fn run_backend(
                             let projects = cfg2.projects.as_ref()
                                 .map(|p| crate::projects::status::scan(p).unwrap_or_default())
                                 .unwrap_or_default();
-                            let _ = ev.send(Event::Snapshot { machines: HashMap::new(), projects, hub_ok: false });
+                            let machines = last_machines.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                            let _ = ev.send(Event::Snapshot { machines, projects, hub_ok: false });
                         }
                         Err(e) => { let _ = ev.send(Event::Log { level: 3, text: format!("remove project: {e}") }); }
                     }
@@ -196,13 +203,19 @@ async fn run_backend(
 }
 
 /// Фоновая задача снимка хаба (одновременно не больше одной).
-fn spawn_snapshot(editor: &ConfigEditor, ev: &Sender<Event>, in_flight: &Arc<AtomicBool>) {
+fn spawn_snapshot(
+    editor: &ConfigEditor,
+    ev: &Sender<Event>,
+    in_flight: &Arc<AtomicBool>,
+    last: &Arc<std::sync::Mutex<HashMap<String, MachineStatus>>>,
+) {
     if !in_flight.swap(true, Ordering::SeqCst) {
         let cfg = editor.cfg.clone();
         let ev2 = ev.clone();
         let flag = in_flight.clone();
+        let last2 = last.clone();
         tokio::spawn(async move {
-            try_snapshot(cfg, ev2).await;
+            try_snapshot(cfg, ev2, last2).await;
             flag.store(false, Ordering::SeqCst);
         });
     }
@@ -228,7 +241,11 @@ fn scan_projects(cfg: &Config) -> Vec<crate::protocol::ProjectState> {
 /// Запрашивает статус у хаба + сканирует локальные проекты.
 /// Проекты сканируются всегда (даже если хаб лёг) — дашборд показывает
 /// конфиг-сводку и список проектов вне зависимости от хаба.
-async fn try_snapshot(cfg: Config, ev: Sender<Event>) {
+async fn try_snapshot(
+    cfg: Config,
+    ev: Sender<Event>,
+    last: Arc<std::sync::Mutex<HashMap<String, MachineStatus>>>,
+) {
     let _ = ev.send(Event::Refreshing);
     // Сканируем проекты локально (git статус) — быстро, блокирует ~50-200мс.
     let projects = scan_projects(&cfg);
@@ -239,12 +256,10 @@ async fn try_snapshot(cfg: Config, ev: Sender<Event>) {
             let text = format!("hub connect: {e}");
             let _ = ev.send(Event::Log { level: 3, text: text.clone() });
             let _ = ev.send(Event::SnapshotError(text));
-            // Даже при ошибке шлём проекты (hub_ok = false).
-            let _ = ev.send(Event::Snapshot {
-                machines: HashMap::new(),
-                projects,
-                hub_ok: false,
-            });
+            // Хаб лёг — показываем последний известный список машин
+            // (не обнуляем дашборд) + свежие локальные проекты.
+            let machines = last.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let _ = ev.send(Event::Snapshot { machines, projects, hub_ok: false });
             return;
         }
     };
@@ -253,6 +268,7 @@ async fn try_snapshot(cfg: Config, ev: Sender<Event>) {
     };
     match crate::client::connect::send_status(&conn, &req).await {
         Ok(resp) => {
+            *last.lock().unwrap_or_else(|p| p.into_inner()) = resp.machines.clone();
             let _ = ev.send(Event::Snapshot {
                 machines: resp.machines,
                 projects,
@@ -263,11 +279,8 @@ async fn try_snapshot(cfg: Config, ev: Sender<Event>) {
             let text = format!("status: {e}");
             let _ = ev.send(Event::Log { level: 3, text: text.clone() });
             let _ = ev.send(Event::SnapshotError(text));
-            let _ = ev.send(Event::Snapshot {
-                machines: HashMap::new(),
-                projects,
-                hub_ok: false,
-            });
+            let machines = last.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let _ = ev.send(Event::Snapshot { machines, projects, hub_ok: false });
         }
     }
 }

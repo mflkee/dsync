@@ -19,6 +19,16 @@ impl client::Handler for SshClient {
 }
 
 pub async fn exec(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {
+    // Жёсткий таймаут: без него недоступная машина висела в connect+exec
+    // дольше двух минут (наблюдалось в логах хаба), копя заблокированные
+    // SSH-таски на каждую (проект × машина).
+    const SSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    tokio::time::timeout(SSH_TIMEOUT, exec_inner(host, port, user, cmd))
+        .await
+        .map_err(|_| anyhow::anyhow!("ssh to {user}@{host}:{port} timed out after 30s"))?
+}
+
+async fn exec_inner(host: &str, port: u16, user: &str, cmd: &str) -> Result<String> {
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let config = Arc::new(client::Config::default());
 

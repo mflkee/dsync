@@ -11,8 +11,20 @@ use crate::protocol::{PullRequest, PullResponse, PushRequest, PushResponse};
 
 use super::state::HubState;
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 pub async fn run_server(cfg: Config) -> Result<()> {
-    let bind: SocketAddr = cfg.hub.as_ref().map(|h| &h.bind).unwrap().parse()?;
+    let bind: SocketAddr = cfg
+        .hub
+        .as_ref()
+        .map(|h| &h.bind)
+        .ok_or_else(|| anyhow::anyhow!("no [hub] section in config — can't run daemon"))?
+        .parse()?;
     info!("starting dsync hub on {bind}");
 
     let data_dir = cfg
@@ -112,7 +124,10 @@ async fn handle_push(val: serde_json::Value, state: &HubState, cfg: &Config) -> 
         state
             .update_machine(crate::protocol::MachineState {
                 name: machine.clone(),
-                last_push: req.timestamp,
+                // Время ставит хаб своими часами: req.timestamp — это часы
+                // клиента, и при их уходе вперёд/назад машина навсегда
+                // выпадает из online (online = last_push <= 35 мин назад).
+                last_push: unix_now(),
                 projects: req.projects.clone(),
             })
             .await;
@@ -160,11 +175,19 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config) {
             let host = remote.host.clone();
             let port = remote.port;
             let user = remote.user.clone();
-            let path = project_cfg.path.display().to_string();
+            // Путь раскрываем в абсолютный (~/...) и берём в одинарные
+            // кавычки: пробел или спецсимвол в пути/ветке иначе ломает
+            // команду на удалённом shell'е.
+            let path = crate::projects::status::expand_user_path(&project_cfg.path);
+            let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
             let branch = project_cfg.branch.as_deref().unwrap_or("main").to_string();
             let project_name = project.name.clone();
             let machine_name = machine_name.clone();
-            let mut cmd = format!("cd {path} && git stash push && git pull --rebase origin {branch}");
+            let mut cmd = format!(
+                "cd {} && git stash push && git pull --rebase origin {}",
+                q(&path.display().to_string()),
+                q(&branch),
+            );
             if let Some(post) = &project_cfg.post_pull {
                 let post = post.trim();
                 if !post.is_empty() {

@@ -99,8 +99,17 @@ impl HubState {
             tracing::error!("failed to create data dir {dir:?}: {e}");
             return;
         }
-        if let Err(e) = tokio::fs::write(dir.join("machines.json"), data).await {
+        // Атомарная запись: tmp + rename, чтобы краш между truncate и write
+        // не оставил битый machines.json (тогда load молча вернул бы пустой
+        // список машин и вся история синка пропала бы).
+        let tmp = dir.join("machines.json.tmp");
+        let final_path = dir.join("machines.json");
+        if let Err(e) = tokio::fs::write(&tmp, data).await {
             tracing::error!("failed to save state: {e}");
+            return;
+        }
+        if let Err(e) = tokio::fs::rename(&tmp, &final_path).await {
+            tracing::error!("failed to rename state file: {e}");
         }
     }
 

@@ -56,7 +56,7 @@ pub fn commit_and_push(name: &str, path: &Path) -> Result<bool> {
         warn!("{name}: git fetch failed: {}", stderr_of(&fetch));
     }
 
-    let (ahead, behind) = diverged(path, &branch);
+    let (_, behind) = diverged(path, &branch);
     if behind > 0 {
         let pull = run_git(path, &["pull", "--rebase", "origin", &branch]);
         if !pull.status.success() {
@@ -69,15 +69,13 @@ pub fn commit_and_push(name: &str, path: &Path) -> Result<bool> {
     }
 
     let (ahead_now, _) = diverged(path, &branch);
-    let total_ahead = ahead_now + behind.saturating_sub(behind).max(0);
-    let total_ahead = if ahead > 0 && behind == 0 { ahead } else { total_ahead };
 
-    if total_ahead > 0 {
+    if ahead_now > 0 {
         let push = run_git(path, &["push", "origin", &branch]);
         if !push.status.success() {
             anyhow::bail!("{name}: git push failed: {}", stderr_of(&push));
         }
-        info!("{name}: pushed {total_ahead} commits to origin/{branch}");
+        info!("{name}: pushed {ahead_now} commits to origin/{branch}");
         return Ok(true);
     }
 

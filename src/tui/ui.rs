@@ -268,6 +268,17 @@ fn draw_machine_detail(frame: &mut Frame, app: &App, area: Rect) {
             ]));
         }
         Some((name, s)) => {
+            if let Some(err) = &app.last_error {
+                lines.push(Line::from(Span::styled(
+                    " ⚠ Hub недоступен — показан прошлый снимок.",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!("   {err}"),
+                    Style::default().fg(Color::Red),
+                )));
+                lines.push(Line::from(""));
+            }
             let (state, col) = if s.online {
                 ("ONLINE", Color::Green)
             } else {
