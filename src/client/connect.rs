@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use quinn::{ClientConfig, Connection, Endpoint};
@@ -82,16 +83,27 @@ pub async fn connect_with_retry(cfg: &Config) -> Result<Connection> {
     for attempt in 1..=4 {
         let config = make_client_config()?;
         match endpoint.connect_with(config, addr.parse()?, "dsync.local") {
-            Ok(connecting) => match connecting.await {
-                Ok(conn) => {
-                    info!("connected to hub at {addr}");
-                    return Ok(conn);
+            Ok(connecting) => {
+                // Жёсткий таймаут на рукопожатие: к мёртвому хабу quinn сам
+                // висит 20-30+ с на ретраях PTO, и весь цикл из 4 попыток
+                // растягивался бы на минуты (TUI при этом висел на
+                // «⟳ refresh…» без ошибки). 5с на попытку достаточно даже
+                // для медленного разогрева хаба (спящий/загрузка).
+                match tokio::time::timeout(Duration::from_secs(5), connecting).await {
+                    Ok(Ok(conn)) => {
+                        info!("connected to hub at {addr}");
+                        return Ok(conn);
+                    }
+                    Ok(Err(e)) => {
+                        last_connect_err = format!("{e}");
+                        info!("connect attempt {attempt}/4 failed: {e}");
+                    }
+                    Err(_) => {
+                        last_connect_err = "handshake timed out after 5s".into();
+                        info!("connect attempt {attempt}/4 failed: timed out after 5s");
+                    }
                 }
-                Err(e) => {
-                    last_connect_err = format!("{e}");
-                    info!("connect attempt {attempt}/4 failed: {e}");
-                }
-            },
+            }
             Err(e) => {
                 last_connect_err = format!("{e}");
                 info!("connect attempt {attempt}/4 failed: {e}");
