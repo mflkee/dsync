@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
-use crate::tui::app::{fmt_ago, fmt_civil, App, Tab};
+use crate::tui::app::{fmt_ago, fmt_civil, fmt_clock, App, Tab};
 
 /// Высота шапки: строка вкладок + 2 строки статуса.
 pub const HEADER_ROWS: u16 = 3;
@@ -69,6 +69,12 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some((label, ok, text)) = &app.last_action {
         let mark = if *ok { "✓" } else { "✗" };
         status.push_str(&format!("  |  last: {label} {mark} {text}"));
+    }
+    // Индикатор опроса хаба + время последнего снимка.
+    if app.refreshing {
+        status.push_str("  |  ⟳ refresh…");
+    } else if app.last_snapshot_ts > 0 {
+        status.push_str(&format!("  |  ⟳ {}", fmt_clock(app.last_snapshot_ts)));
     }
     if app.form.is_some() {
         status.push_str("  |  [form]");
@@ -195,6 +201,13 @@ fn draw_machine_detail(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = vec![Line::from("")];
     match app.machines.selected() {
         None => {
+            if app.refreshing {
+                lines.push(Line::from(Span::styled(
+                    " ⟳ Опроса хаба… (ожидание ответа)",
+                    Style::default().fg(Color::Yellow),
+                )));
+                lines.push(Line::from(""));
+            }
             if let Some(err) = &app.last_error {
                 lines.push(Line::from(Span::styled(
                     " ⚠ Hub недоступен — снимок машин пуст.",

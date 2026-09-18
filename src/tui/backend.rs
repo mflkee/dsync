@@ -64,6 +64,8 @@ pub enum Event {
     Log { level: u8, text: String },
     /// Ошибка получения снимка (хаб недоступен и т.п.) — для дашборда.
     SnapshotError(String),
+    /// Снимок запущен (опрос хаба начался) — для индикатора «⟳ refresh…».
+    Refreshing,
     /// Завершение фоновой задачи (push/pull).
     ActionDone { label: String, ok: bool, text: String },
     /// Результаты доктора.
@@ -227,6 +229,7 @@ fn scan_projects(cfg: &Config) -> Vec<crate::protocol::ProjectState> {
 /// Проекты сканируются всегда (даже если хаб лёг) — дашборд показывает
 /// конфиг-сводку и список проектов вне зависимости от хаба.
 async fn try_snapshot(cfg: Config, ev: Sender<Event>) {
+    let _ = ev.send(Event::Refreshing);
     // Сканируем проекты локально (git статус) — быстро, блокирует ~50-200мс.
     let projects = scan_projects(&cfg);
 

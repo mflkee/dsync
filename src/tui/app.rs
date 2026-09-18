@@ -133,6 +133,10 @@ pub struct App {
     pub last_action: Option<(String, bool, String)>,
     /// Последняя ошибка связи с хабом.
     pub last_error: Option<String>,
+    /// Идёт ли опрос хаба (индикатор «⟳ refresh…»).
+    pub refreshing: bool,
+    /// Время последнего снимка (unix ts, 0 = ещё не было).
+    pub last_snapshot_ts: i64,
     /// Счётчик тиков спиннера.
     pub spin: usize,
 
@@ -191,6 +195,8 @@ impl App {
             busy: None,
             last_action: None,
             last_error: None,
+            refreshing: false,
+            last_snapshot_ts: 0,
             spin: 0,
             projects_sel,
             remotes_sel,
@@ -234,12 +240,18 @@ impl App {
                 self.projects.sort_by(|a, b| a.name.cmp(&b.name));
                 self.projects_sel.len = self.projects.len();
                 self.projects_sel.idx = self.projects_sel.idx.min(self.projects_sel.len.saturating_sub(1));
+                self.refreshing = false;
+                self.last_snapshot_ts = unix_now();
                 if hub_ok {
                     self.last_error = None;
                 }
             }
             Event::Log { level, text } => self.log(level, text),
-            Event::SnapshotError(err) => self.last_error = Some(err),
+            Event::SnapshotError(err) => {
+                self.refreshing = false;
+                self.last_error = Some(err);
+            }
+            Event::Refreshing => self.refreshing = true,
             Event::ActionDone { label, ok, text } => {
                 self.busy = None;
                 self.last_action = Some((label, ok, text));
@@ -288,4 +300,19 @@ pub fn fmt_civil(ts: i64) -> String {
             .to_string(),
         None => format!("{ts}"),
     }
+}
+
+/// Короткое локальное время «HH:MM:SS» — для статус-строки.
+pub fn fmt_clock(ts: i64) -> String {
+    match chrono::DateTime::from_timestamp(ts, 0) {
+        Some(dt) => dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string(),
+        None => "-".to_string(),
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
