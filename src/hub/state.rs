@@ -166,7 +166,15 @@ impl HubState {
             return Ok(HashMap::new());
         }
         let data = std::fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&data)?)
+        match serde_json::from_str::<HashMap<String, MachineState>>(&data) {
+            Ok(map) => Ok(map),
+            Err(_) => {
+                // Старый формат файла (до hub-auth): плоский массив машин —
+                // грузим и перекладываем в карту, чтобы старые файлы не терялись.
+                let list = serde_json::from_str::<Vec<MachineState>>(&data)?;
+                Ok(list.into_iter().map(|m| (m.name.clone(), m)).collect())
+            }
+        }
     }
 }
 
@@ -215,35 +223,25 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let dir = std::env::temp_dir().join(format!(
-                "dsync-state-test-{}",
-                std::process::id()
-            ));
+            let dir = std::env::temp_dir().join(format!("dsync-state-test-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let state = HubState::new(Some(dir.clone()), 30);
             state.update_machine(machine("desktop", 100)).await;
             state
-                .record_pull(
-                    "desktop",
-                    "dotfiles",
-                    &PullOutcome::success(1),
-                )
+                .record_pull("desktop", "dotfiles", &PullOutcome::success(1))
                 .await;
 
             // Пересоздаём из того же data_dir — pulls должны прочитаться.
             let state2 = HubState::new(Some(dir.clone()), 30);
             let m = state2.all_machines().await;
-            assert_eq!(m["desktop"].pulls["dotfiles"].ok, true);
+            assert!(m["desktop"].pulls["dotfiles"].ok);
             let _ = std::fs::remove_dir_all(&dir);
         });
     }
 
     #[test]
     fn old_machines_json_without_pulls_loads() {
-        let dir = std::env::temp_dir().join(format!(
-            "dsync-state-old-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("dsync-state-old-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -295,7 +293,9 @@ mod tests {
         rt.block_on(async {
             let state = HubState::new(None, 1); // 1 день
             let now = unix_now();
-            state.update_machine(machine("old", now - (2 * 86400))).await;
+            state
+                .update_machine(machine("old", now - (2 * 86400)))
+                .await;
             state.update_machine(machine("ok", now - 3600)).await;
             state.prune_stale().await;
             let m = state.all_machines().await;
@@ -313,7 +313,9 @@ mod tests {
         rt.block_on(async {
             let state = HubState::new(None, 0);
             let now = unix_now();
-            state.update_machine(machine("ancient", now - (365 * 86400))).await;
+            state
+                .update_machine(machine("ancient", now - (365 * 86400)))
+                .await;
             assert!(!state.prune_stale().await);
             assert!(state.all_machines().await.contains_key("ancient"));
         });

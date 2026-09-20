@@ -53,9 +53,7 @@ impl SshHostTrustStore {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.hosts
-            .iter()
-            .map(|(h, f)| (h.as_str(), f.as_str()))
+        self.hosts.iter().map(|(h, f)| (h.as_str(), f.as_str()))
     }
 }
 
@@ -144,7 +142,7 @@ mod tests {
         s.insert("10.0.0.6:22".to_string(), "sha256:def".to_string());
         s.save(&path).unwrap();
 
-        let back = SshHostTrustStore::load(&path);
+        let mut back = SshHostTrustStore::load(&path);
         assert_eq!(back.get("10.0.0.5:22"), Some("sha256:abc"));
         assert_eq!(back.get("10.0.0.6:22"), Some("sha256:def"));
         assert!(back.remove("10.0.0.5:22"));

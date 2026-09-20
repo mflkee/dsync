@@ -189,21 +189,21 @@ pub async fn send_push(conn: &Connection, req: &PushRequest) -> Result<PushRespo
     let mut msg = serde_json::to_value(req)?;
     msg["type"] = serde_json::json!("push");
     let buf = send_recv(conn, &msg).await?;
-    Ok(crate::protocol::parse_response(&buf)?)
+    crate::protocol::parse_response(&buf)
 }
 
 pub async fn send_pull(conn: &Connection, req: &PullRequest) -> Result<PullResponse> {
     let mut msg = serde_json::to_value(req)?;
     msg["type"] = serde_json::json!("pull");
     let buf = send_recv(conn, &msg).await?;
-    Ok(crate::protocol::parse_response(&buf)?)
+    crate::protocol::parse_response(&buf)
 }
 
 pub async fn send_status(conn: &Connection, req: &StatusRequest) -> Result<StatusResponse> {
     let mut msg = serde_json::to_value(req)?;
     msg["type"] = serde_json::json!("status");
     let buf = send_recv(conn, &msg).await?;
-    Ok(crate::protocol::parse_response(&buf)?)
+    crate::protocol::parse_response(&buf)
 }
 
 /// Hub auth token from `[hub_connect]`, empty when unset (hub will reject).
@@ -313,8 +313,14 @@ mod tests {
     #[test]
     fn machine_lines_show_ok_and_failed_pulls() {
         let mut pulls = std::collections::HashMap::new();
-        pulls.insert("dotfiles".to_string(), outcome(true, None, 1, 1_700_000_000));
-        pulls.insert("notes".to_string(), outcome(false, Some("ssh timed out"), 3, 1_700_000_100));
+        pulls.insert(
+            "dotfiles".to_string(),
+            outcome(true, None, 1, 1_700_000_000),
+        );
+        pulls.insert(
+            "notes".to_string(),
+            outcome(false, Some("ssh timed out"), 3, 1_700_000_100),
+        );
         let status = MachineStatus {
             online: true,
             last_seen: 1_700_000_000,
@@ -323,8 +329,12 @@ mod tests {
         };
         let lines = machine_status_lines("desktop", &status);
         assert!(lines[0].contains("desktop: online=true"));
-        assert!(lines.iter().any(|l| l.contains("dotfiles: pull ok, 1 attempt(s)")));
-        assert!(lines.iter().any(|l| l.contains("notes: pull FAILED (ssh timed out), 3 attempt(s)")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("dotfiles: pull ok, 1 attempt(s)")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("notes: pull FAILED (ssh timed out), 3 attempt(s)")));
     }
 
     #[test]

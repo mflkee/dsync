@@ -135,7 +135,10 @@ pub fn run() -> Result<()> {
                     .allow_empty(true)
                     .interact_text()?,
             };
-            Some(HubConnectConfig { address: addr, token })
+            Some(HubConnectConfig {
+                address: addr,
+                token,
+            })
         }
     };
 
@@ -215,10 +218,7 @@ fn generate_fleet_tokens(
     }
     members.sort();
     members.dedup();
-    members
-        .into_iter()
-        .map(|m| (m, generate_token()))
-        .collect()
+    members.into_iter().map(|m| (m, generate_token())).collect()
 }
 
 /// Случайный 32-hex токен (uuid v4, без дефисов).
@@ -609,7 +609,9 @@ mod tests {
             cert: None,
             key: None,
             data_dir: None,
-            tokens: [("desktop".to_string(), "tok-a".to_string())].into_iter().collect(),
+            tokens: [("desktop".to_string(), "tok-a".to_string())]
+                .into_iter()
+                .collect(),
             max_message_size: 1024,
             max_concurrency: 2,
             retention_days: 7,

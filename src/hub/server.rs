@@ -84,22 +84,15 @@ async fn serve_loop(
     max_message_size: u64,
     semaphore: Arc<Semaphore>,
 ) {
-    loop {
-        match endpoint.accept().await {
-            Some(incoming) => {
-                let state = state.clone();
-                let cfg = cfg.clone();
-                let sem = semaphore.clone();
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        handle_connection(incoming, state, cfg, max_message_size, sem).await
-                    {
-                        error!("connection error: {e}");
-                    }
-                });
+    while let Some(incoming) = endpoint.accept().await {
+        let state = state.clone();
+        let cfg = cfg.clone();
+        let sem = semaphore.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_connection(incoming, state, cfg, max_message_size, sem).await {
+                error!("connection error: {e}");
             }
-            None => break,
-        }
+        });
     }
 }
 
@@ -131,7 +124,8 @@ async fn handle_connection(
                         break;
                     }
                     Err(_) => {
-                        let err = error_envelope("hub busy — retry later (max_concurrency reached)");
+                        let err =
+                            error_envelope("hub busy — retry later (max_concurrency reached)");
                         let _ = send.write_all(&serde_json::to_vec(&err)?).await;
                         continue;
                     }
@@ -164,10 +158,8 @@ async fn handle_connection(
                                 }
                             }
                             "push" | "pull" | "status" => {
-                                let machine = val
-                                    .get("machine")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("?");
+                                let machine =
+                                    val.get("machine").and_then(|v| v.as_str()).unwrap_or("?");
                                 warn!("authentication failed for machine '{machine}'");
                                 error_envelope(format!(
                                     "authentication failed for machine '{machine}': check \
@@ -321,12 +313,7 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                     let ssh_key = ssh_key.clone();
                     async move {
                         match crate::ssh::client::exec_with_key_verifying(
-                            &host,
-                            port,
-                            &user,
-                            &cmd,
-                            &ssh_key,
-                            store_path,
+                            &host, port, &user, &cmd, &ssh_key, store_path,
                         )
                         .await
                         {
@@ -336,7 +323,9 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                     }
                 })
                 .await;
-                state.record_pull(&machine_name, &project_name, &outcome).await;
+                state
+                    .record_pull(&machine_name, &project_name, &outcome)
+                    .await;
                 match &outcome {
                     PullOutcome { ok: true, .. } => {
                         info!("SSH pull {machine_name}/{project_name}: OK")
@@ -475,7 +464,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::Arc;
 
-    use crate::config::{HubConfig, HubConnectConfig, MachineConfig, RemoteMachine, ProjectConfig};
+    use crate::config::{HubConfig, MachineConfig, ProjectConfig, RemoteMachine};
 
     /// Принимающий всё verifier — тестовый аналог TOFU-клиента.
     #[derive(Debug)]
@@ -489,7 +478,8 @@ mod tests {
             _server_name: &rustls::pki_types::ServerName<'_>,
             _ocsp_response: &[u8],
             _now: rustls::pki_types::UnixTime,
-        ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error>
+        {
             Ok(rustls::client::danger::ServerCertVerified::assertion())
         }
 
@@ -656,7 +646,10 @@ mod tests {
 
         let r = send_push(&conn, "intruder", "secret-a").await;
         assert!(r.is_err(), "unknown machine must be rejected");
-        assert!(state.all_machines().await.is_empty(), "no state changes on rejection");
+        assert!(
+            state.all_machines().await.is_empty(),
+            "no state changes on rejection"
+        );
 
         // Валидный push — принят, состояние записано.
         let resp = send_push(&conn, "desktop", "secret-a").await.unwrap();
@@ -680,10 +673,7 @@ mod tests {
         let val: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(val["type"], "error");
         assert!(
-            val["error"]
-                .as_str()
-                .unwrap()
-                .contains("max_message_size"),
+            val["error"].as_str().unwrap().contains("max_message_size"),
             "explicit size error"
         );
 
@@ -696,8 +686,7 @@ mod tests {
     #[tokio::test]
     async fn concurrency_cap_yields_explicit_busy_error() {
         let max = 1;
-        let (addr, _state, semaphore) =
-            spawn_test_hub(&[("desktop", "t")], 1 << 20, max).await;
+        let (addr, _state, semaphore) = spawn_test_hub(&[("desktop", "t")], 1 << 20, max).await;
         let conn = connect(addr).await;
 
         // Захватываем единственный permit сервера вручную — второй запрос

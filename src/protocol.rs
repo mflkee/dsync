@@ -155,15 +155,11 @@ mod tests {
     #[test]
     fn requests_default_token_and_pulls_absent() {
         // Старые клиенты/конфиги без token и pulls парсятся.
-        let push: PushRequest = serde_json::from_str(
-            r#"{"machine":"desktop","timestamp":1,"projects":[]}"#,
-        )
-        .unwrap();
+        let push: PushRequest =
+            serde_json::from_str(r#"{"machine":"desktop","timestamp":1,"projects":[]}"#).unwrap();
         assert_eq!(push.token, "");
-        let st: MachineState = serde_json::from_str(
-            r#"{"name":"desktop","last_push":1,"projects":[]}"#,
-        )
-        .unwrap();
+        let st: MachineState =
+            serde_json::from_str(r#"{"name":"desktop","last_push":1,"projects":[]}"#).unwrap();
         assert!(st.pulls.is_empty());
     }
 
@@ -176,7 +172,8 @@ mod tests {
         assert_eq!(back.attempts, 2);
 
         let fail = PullOutcome::failure("ssh timed out".into(), 3);
-        let back: PullOutcome = serde_json::from_str(&serde_json::to_string(&fail).unwrap()).unwrap();
+        let back: PullOutcome =
+            serde_json::from_str(&serde_json::to_string(&fail).unwrap()).unwrap();
         assert!(!back.ok);
         assert_eq!(back.error.as_deref(), Some("ssh timed out"));
         assert_eq!(back.attempts, 3);

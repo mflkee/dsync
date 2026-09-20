@@ -27,23 +27,6 @@ pub struct SshClient {
     verification: Option<Arc<std::sync::Mutex<SshVerification>>>,
 }
 
-impl SshClient {
-    pub fn plain() -> Self {
-        Self { verification: None }
-    }
-
-    pub fn verifying(host: &str, port: u16, store_path: PathBuf) -> Self {
-        Self {
-            verification: Some(Arc::new(std::sync::Mutex::new(SshVerification {
-                host_key: format!("{host}:{port}"),
-                store_path,
-                expected: None,
-                observed: None,
-            }))),
-        }
-    }
-}
-
 #[async_trait::async_trait]
 impl client::Handler for SshClient {
     type Error = anyhow::Error;
@@ -81,18 +64,9 @@ impl client::Handler for SshClient {
 /// заблокированные SSH-таски на каждую (проект × машина).
 const DEFAULT_SSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-pub async fn exec_with_key(
-    host: &str,
-    port: u16,
-    user: &str,
-    cmd: &str,
-    key_path: &std::path::Path,
-) -> Result<String> {
-    exec_with_key_timeout(host, port, user, cmd, key_path, DEFAULT_SSH_TIMEOUT).await
-}
-
-/// Как `exec_with_key`, но с явным таймаутом — для длинных команд бота
-/// (opencode run, произвольные exec-команды), которые ждут до минуты+.
+/// Exec-команда без проверки host-ключа с явным таймаутом — для длинных
+/// команд бота (opencode run, произвольные exec-команды), которые ждут до
+/// минуты+.
 pub async fn exec_with_key_timeout(
     host: &str,
     port: u16,
@@ -104,7 +78,7 @@ pub async fn exec_with_key_timeout(
     exec_inner(host, port, user, cmd, key_path, timeout, None).await
 }
 
-/// Хаб-пулл: выполняет команду с TOFU-проверкой host-ключа (`SshClient::verifying`).
+/// Хаб-пулл: выполняет команду с TOFU-проверкой host-ключа.
 pub async fn exec_with_key_verifying(
     host: &str,
     port: u16,
@@ -141,16 +115,7 @@ pub async fn exec_with_key_verifying_timeout(
         expected: None,
         observed: None,
     }));
-    exec_inner(
-        host,
-        port,
-        user,
-        cmd,
-        key_path,
-        timeout,
-        Some(verification),
-    )
-    .await
+    exec_inner(host, port, user, cmd, key_path, timeout, Some(verification)).await
 }
 
 /// Лёгкий пробник доверия host-ключа для `dsync doctor`: делает только
@@ -237,10 +202,7 @@ async fn exec_inner(
             if store.get(&v.host_key).is_none() {
                 store.insert(v.host_key.clone(), observed.clone());
                 if let Err(e) = store.save(&v.store_path) {
-                    tracing::warn!(
-                        "failed to persist ssh host key for {}: {e:#}",
-                        v.host_key
-                    );
+                    tracing::warn!("failed to persist ssh host key for {}: {e:#}", v.host_key);
                 }
             }
         }
@@ -278,14 +240,12 @@ async fn exec_inner(
         Ok(String::from_utf8_lossy(&output).to_string())
     };
 
-    tokio::time::timeout(timeout, run)
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "ssh to {user}@{host}:{port} timed out after {}s",
-                timeout.as_secs()
-            )
-        })?
+    tokio::time::timeout(timeout, run).await.map_err(|_| {
+        anyhow::anyhow!(
+            "ssh to {user}@{host}:{port} timed out after {}s",
+            timeout.as_secs()
+        )
+    })?
 }
 
 /// Превращает ошибку коннекта в действие, когда виноват несовпавший host-key:
@@ -320,7 +280,7 @@ mod tests {
     #[test]
     fn plain_handler_accepts_any_key() {
         // Без verification хендлер не проверяет host-key вовсе.
-        assert!(SshClient::plain().verification.is_none());
+        assert!(SshClient { verification: None }.verification.is_none());
     }
 
     #[test]
