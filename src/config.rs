@@ -161,7 +161,14 @@ pub struct SecretHub {
 }
 
 /// Путь к sidecar-файлу токенов — рядом с главным конфигом.
+/// Возможно переопределение через `DSYNC_TOKENS_PATH` (используется тестами
+/// и позволяет разместить секреты вне конфиг-каталога).
 pub fn tokens_path() -> PathBuf {
+    if let Ok(p) = std::env::var("DSYNC_TOKENS_PATH") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
     directories::ProjectDirs::from("com", "mflkee", "dsync")
         .map(|d| d.config_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("~/.config/dsync"))

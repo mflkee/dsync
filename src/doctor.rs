@@ -33,13 +33,15 @@ pub async fn run(cfg: Config) -> Result<()> {
     });
 
     check("hub token", || {
-        let token = match &cfg.hub_connect {
-            Some(h) => &h.token,
-            None => return Status::Skip("no hub_connect in config"),
-        };
+        if cfg.hub_connect.is_none() {
+            return Status::Skip("no hub_connect in config");
+        }
+        // Резолв через sidecar tokens.toml: секреты не живут в главном конфиге
+        // (chezmoi-managed), см. config::read_secret_tokens.
+        let token = crate::client::connect::hub_token(&cfg);
         if token.is_empty() {
             return Status::Warn(
-                "hub_connect.token is empty — hub will reject requests; set it from the hub's [hub] tokens"
+                "hub token is empty — hub will reject requests; set it in the config or in the sidecar ~/.config/dsync/dsync/tokens.toml ([hub_connect] token)"
                     .into(),
             );
         }

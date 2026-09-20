@@ -91,6 +91,10 @@ mod tests {
     use super::*;
     use crate::config::{HubConnectConfig, MachineConfig};
 
+    /// env-переопределение sidecar-пути — общий мьютекс, чтобы тесты не
+    /// гонялись за переменную окружения параллельно.
+    static TOKENS_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn cfg_with_token(token: &str) -> Config {
         Config {
             config_version: 1,
@@ -119,8 +123,29 @@ mod tests {
 
     #[test]
     fn missing_token_serializes_as_empty_string() {
+        // Пин sidecar на несуществующий путь: реальный tokens.toml тестовой
+        // машины не должен влиять на тест.
+        let _g = TOKENS_ENV.lock().unwrap();
+        std::env::set_var("DSYNC_TOKENS_PATH", "/nonexistent/dsync-test-tokens.toml");
         let req = build_push_request(&cfg_with_token(""), None, Vec::new()).unwrap();
         let val = serde_json::to_value(&req).unwrap();
         assert_eq!(val["token"], "");
+        std::env::remove_var("DSYNC_TOKENS_PATH");
+    }
+
+    #[test]
+    fn empty_config_token_falls_back_to_sidecar() {
+        // Конфиг без токена, но с sidecar-файлом: на проводе — токен sidecar.
+        let _g = TOKENS_ENV.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("dsync-sidecar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tokens.toml");
+        std::fs::write(&path, "[hub_connect]\ntoken = \"sidecar-tok\"\n").unwrap();
+        std::env::set_var("DSYNC_TOKENS_PATH", &path);
+        let req = build_push_request(&cfg_with_token(""), None, Vec::new()).unwrap();
+        let val = serde_json::to_value(&req).unwrap();
+        assert_eq!(val["token"], "sidecar-tok");
+        std::env::remove_var("DSYNC_TOKENS_PATH");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
