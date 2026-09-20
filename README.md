@@ -112,6 +112,7 @@ max_message_size = 8388608        # 8 MiB request cap
 max_concurrency = 32              # in-flight pulls/tasks bound
 retention_days = 30               # prune machines not seen for N days (0 = never)
 pull_retries = 2                  # extra SSH-pull attempts after the first (backoff 5s·2ⁿ, cap 60s)
+pull_timeout_secs = 300           # exec window for `git pull && post_pull` (builds!) — connect stays 30s
 ```
 
 Each project's git `origin` is where content actually lives (your GitHub/Gitea

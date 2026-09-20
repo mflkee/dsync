@@ -107,6 +107,7 @@ pub fn run() -> Result<()> {
             max_concurrency: crate::config::default_max_concurrency(),
             retention_days: crate::config::default_retention_days(),
             pull_retries: crate::config::default_pull_retries(),
+            pull_timeout_secs: crate::config::default_pull_timeout_secs(),
         })
     } else {
         None
@@ -616,6 +617,7 @@ mod tests {
             max_concurrency: 2,
             retention_days: 7,
             pull_retries: 1,
+            pull_timeout_secs: crate::config::default_pull_timeout_secs(),
         };
         let cfg = Config {
             config_version: 1,

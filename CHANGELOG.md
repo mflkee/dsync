@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pull_retries` (backoff `5s·2ⁿ`, cap 60 s) and record a `PullOutcome`
   (ok/error/attempts/finished) per machine×project; `dsync status` and the TUI
   show pull result lines.
+  Split timeouts: connect stays at 30 s (unreachable hosts fail fast), exec
+  (`git pull && post_pull`, sometimes a `cargo build`) gets `pull_timeout_secs`
+  (default 300). State saves are serialized with a unique temp file — no more
+  concurrent-rename ENOENT when several pulls finish at once.
 - **State retention** (`hub-state-retention`): machines not seen for
   `retention_days` (default 30) are pruned with atomic save; machines with
   `last_push == 0` are never evicted.

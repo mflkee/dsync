@@ -277,6 +277,13 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
         .as_ref()
         .map(|h| h.pull_retries)
         .unwrap_or(crate::config::default_pull_retries());
+    // Exec пула живёт дольше connect (post_pull — иногда cargo build), поэтому
+    // таймауты раздельные: connect 30 c, exec — [hub] pull_timeout_secs.
+    let pull_timeout = cfg
+        .hub
+        .as_ref()
+        .map(|h| h.pull_timeout_secs)
+        .unwrap_or_else(crate::config::default_pull_timeout_secs);
     let store_path = crate::ssh::trust::SshHostTrustStore::path(&cfg.hub_data_dir());
     let ssh_key = cfg.machine.ssh_key_path();
 
@@ -338,8 +345,15 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                     let cmd = cmd.clone();
                     let ssh_key = ssh_key.clone();
                     async move {
-                        match crate::ssh::client::exec_with_key_verifying(
-                            &host, port, &user, &cmd, &ssh_key, store_path,
+                        match crate::ssh::client::exec_with_key_verifying_split(
+                            &host,
+                            port,
+                            &user,
+                            &cmd,
+                            &ssh_key,
+                            store_path,
+                            crate::ssh::client::DEFAULT_SSH_TIMEOUT,
+                            std::time::Duration::from_secs(pull_timeout),
                         )
                         .await
                         {
@@ -615,6 +629,7 @@ mod tests {
                 max_concurrency,
                 retention_days: 30,
                 pull_retries: 2,
+                pull_timeout_secs: crate::config::default_pull_timeout_secs(),
             }),
             hub_connect: None,
             projects: Some(

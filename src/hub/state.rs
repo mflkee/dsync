@@ -30,6 +30,9 @@ pub struct HubState {
     data_dir: Option<PathBuf>,
     /// Machines not seen for this many days are pruned (0 = never prune).
     retention_days: u64,
+    /// Сериализует одновременные `save()`: несколько пулл-тасок финишируют
+    /// разом и писали в один tmp-файл (rename второго ловил ENOENT).
+    save_lock: tokio::sync::Mutex<()>,
 }
 
 impl HubState {
@@ -46,6 +49,7 @@ impl HubState {
             machines: RwLock::new(machines),
             data_dir,
             retention_days,
+            save_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -130,6 +134,7 @@ impl HubState {
     }
 
     async fn save(&self) {
+        let _guard = self.save_lock.lock().await;
         let dir = match &self.data_dir {
             Some(d) => d.clone(),
             None => return,
@@ -148,8 +153,17 @@ impl HubState {
         }
         // Атомарная запись: tmp + rename, чтобы краш между truncate и write
         // не оставил битый machines.json (тогда load молча вернул бы пустой
-        // список машин и вся история синка пропала бы).
-        let tmp = dir.join("machines.json.tmp");
+        // список машин и вся история синка пропала бы). Имя tmp уникально —
+        // на случай сохранений, не покрытых мьютексом (save() может вызваться
+        // извне с самостоятельной сериализацией данных).
+        let tmp = dir.join(format!(
+            "machines.json.tmp-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         let final_path = dir.join("machines.json");
         if let Err(e) = tokio::fs::write(&tmp, data).await {
             tracing::error!("failed to save state: {e}");
@@ -235,6 +249,43 @@ mod tests {
             let state2 = HubState::new(Some(dir.clone()), 30);
             let m = state2.all_machines().await;
             assert!(m["desktop"].pulls["dotfiles"].ok);
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn concurrent_record_pull_saves_do_not_race() {
+        // Несколько пулл-тасок финишируют разом: все record_pull сохраняют
+        // в один machines.json, и без сериализации save()/уникального tmp
+        // rename конкурентных сохранений ловил ENOENT.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = std::env::temp_dir().join(format!("dsync-state-race-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let state = std::sync::Arc::new(HubState::new(Some(dir.clone()), 30));
+            state.update_machine(machine("desktop", 100)).await;
+
+            let mut tasks = Vec::new();
+            for i in 0..10 {
+                let state = state.clone();
+                tasks.push(tokio::spawn(async move {
+                    state
+                        .record_pull("desktop", &format!("p{i}"), &PullOutcome::success(1))
+                        .await;
+                }));
+            }
+            for t in tasks {
+                t.await.unwrap();
+            }
+
+            // Файл валиден и содержит все outcomes.
+            let data = std::fs::read_to_string(dir.join("machines.json")).unwrap();
+            let back: HashMap<String, MachineState> = serde_json::from_str(&data).unwrap();
+            assert_eq!(back["desktop"].pulls.len(), 10);
             let _ = std::fs::remove_dir_all(&dir);
         });
     }

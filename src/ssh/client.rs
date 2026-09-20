@@ -59,10 +59,10 @@ impl client::Handler for SshClient {
     }
 }
 
-/// Короткий таймаут по умолчанию: без него недоступная машина висела в
-/// connect+exec дольше двух минут (наблюдалось в логах хаба), копя
+/// Короткий таймаут connect по умолчанию: без него недоступная машина висела
+/// в connect+exec дольше двух минут (наблюдалось в логах хаба), копя
 /// заблокированные SSH-таски на каждую (проект × машина).
-const DEFAULT_SSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub const DEFAULT_SSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Exec-команда без проверки host-ключа с явным таймаутом — для длинных
 /// команд бота (opencode run, произвольные exec-команды), которые ждут до
@@ -75,31 +75,13 @@ pub async fn exec_with_key_timeout(
     key_path: &std::path::Path,
     timeout: std::time::Duration,
 ) -> Result<String> {
-    exec_inner(host, port, user, cmd, key_path, timeout, None).await
+    exec_inner(host, port, user, cmd, key_path, timeout, timeout, None).await
 }
 
-/// Хаб-пулл: выполняет команду с TOFU-проверкой host-ключа.
-pub async fn exec_with_key_verifying(
-    host: &str,
-    port: u16,
-    user: &str,
-    cmd: &str,
-    key_path: &std::path::Path,
-    store_path: PathBuf,
-) -> Result<String> {
-    exec_with_key_verifying_timeout(
-        host,
-        port,
-        user,
-        cmd,
-        key_path,
-        store_path,
-        DEFAULT_SSH_TIMEOUT,
-    )
-    .await
-}
-
-/// Хаб-пулл с проверкой host-ключа и явным таймаутом.
+/// Хаб-пулл с проверкой host-ключа и одним таймаутом на connect+exec
+/// (удобная обёртка; для пулов используйте `exec_with_key_verifying_split`,
+/// где exec живёт дольше connect).
+#[allow(dead_code)]
 pub async fn exec_with_key_verifying_timeout(
     host: &str,
     port: u16,
@@ -109,13 +91,45 @@ pub async fn exec_with_key_verifying_timeout(
     store_path: PathBuf,
     timeout: std::time::Duration,
 ) -> Result<String> {
+    exec_with_key_verifying_split(
+        host, port, user, cmd, key_path, store_path, timeout, timeout,
+    )
+    .await
+}
+
+/// Хаб-пулл с проверкой host-ключа и РАЗДЕЛЬНЫМИ таймаутами: connect держит
+/// короткий (30 c) — недостижимая машина не должна копить висящие таски,
+/// а exec — длинный (`[hub] pull_timeout_secs`, по умолчанию 300 c), потому
+/// что команда пула включает `post_pull` вроде `cargo build --release`
+/// (1–3 минуты), и 30 c его просто резали бы по таймауту на ретраи.
+#[allow(clippy::too_many_arguments)]
+pub async fn exec_with_key_verifying_split(
+    host: &str,
+    port: u16,
+    user: &str,
+    cmd: &str,
+    key_path: &std::path::Path,
+    store_path: PathBuf,
+    connect_timeout: std::time::Duration,
+    exec_timeout: std::time::Duration,
+) -> Result<String> {
     let verification = Arc::new(std::sync::Mutex::new(SshVerification {
         host_key: format!("{host}:{port}"),
         store_path,
         expected: None,
         observed: None,
     }));
-    exec_inner(host, port, user, cmd, key_path, timeout, Some(verification)).await
+    exec_inner(
+        host,
+        port,
+        user,
+        cmd,
+        key_path,
+        connect_timeout,
+        exec_timeout,
+        Some(verification),
+    )
+    .await
 }
 
 /// Лёгкий пробник доверия host-ключа для `dsync doctor`: делает только
@@ -173,13 +187,15 @@ pub async fn probe_host_trust(host: &str, port: u16, store_path: PathBuf) -> Ssh
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exec_inner(
     host: &str,
     port: u16,
     user: &str,
     cmd: &str,
     key_path: &std::path::Path,
-    timeout: std::time::Duration,
+    connect_timeout: std::time::Duration,
+    exec_timeout: std::time::Duration,
     verification: Option<Arc<std::sync::Mutex<SshVerification>>>,
 ) -> Result<String> {
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
@@ -193,11 +209,11 @@ async fn exec_inner(
     // пул-таски на каждую (проект × машина). Старый код оборачивал в таймаут
     // весь exec, включая connect — сохраняем это поведение.
     let mut session =
-        match tokio::time::timeout(timeout, client::connect(config, addr, handler)).await {
+        match tokio::time::timeout(connect_timeout, client::connect(config, addr, handler)).await {
             Err(_) => {
                 return Err(anyhow::anyhow!(
-                    "ssh to {user}@{host}:{port} timed out after {}s",
-                    timeout.as_secs()
+                    "connect to {user}@{host}:{port} timed out after {}s",
+                    connect_timeout.as_secs()
                 ))
             }
             Ok(Err(e)) => return Err(enrich_connect_error(&verification, e)),
@@ -251,10 +267,10 @@ async fn exec_inner(
         Ok(String::from_utf8_lossy(&output).to_string())
     };
 
-    tokio::time::timeout(timeout, run).await.map_err(|_| {
+    tokio::time::timeout(exec_timeout, run).await.map_err(|_| {
         anyhow::anyhow!(
-            "ssh to {user}@{host}:{port} timed out after {}s",
-            timeout.as_secs()
+            "{user}@{host}:{port} exec timed out after {}s",
+            exec_timeout.as_secs()
         )
     })?
 }

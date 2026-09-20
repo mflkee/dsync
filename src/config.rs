@@ -100,6 +100,12 @@ pub struct HubConfig {
     /// Additional SSH-pull attempts after the first failure (bounded retry).
     #[serde(default = "default_pull_retries")]
     pub pull_retries: u32,
+    /// SSH exec timeout for pulls (seconds). The pull runs `git stash && git
+    /// pull && post_pull`, and post_pull can be a long build (`cargo build`),
+    /// so the exec window must be generous — connect stage keeps the short
+    /// DEFAULT_SSH_TIMEOUT (30s), only the exec stage uses this.
+    #[serde(default = "default_pull_timeout_secs")]
+    pub pull_timeout_secs: u64,
 }
 
 pub(crate) fn default_max_message_size() -> u64 {
@@ -116,6 +122,10 @@ pub(crate) fn default_retention_days() -> u64 {
 
 pub(crate) fn default_pull_retries() -> u32 {
     2
+}
+
+pub(crate) fn default_pull_timeout_secs() -> u64 {
+    300
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
