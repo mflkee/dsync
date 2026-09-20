@@ -2,6 +2,9 @@
 /target
 Cargo.lock.orig
 
+# Legacy Python v1 build artifacts
+/build
+
 # Editors / OS
 *.swp
 .DS_Store
@@ -10,3 +13,11 @@ Cargo.lock.orig
 
 # Local config
 .env
+
+# Legacy Python v1 tooling
+.venv/
+.python-version
+uv.lock
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

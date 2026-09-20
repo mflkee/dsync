@@ -176,10 +176,7 @@ fn apply_source_edit(cfg: &Config, src: &Path) -> Result<Option<String>> {
         .args(["apply", "--force", &live.to_string_lossy()])
         .output()?;
     if !out.status.success() {
-        return Err(anyhow::anyhow!(
-            "chezmoi apply failed: {}",
-            stderr_of(&out)
-        ));
+        return Err(anyhow::anyhow!("chezmoi apply failed: {}", stderr_of(&out)));
     }
     info!("applied {} -> {}", src.display(), live.display());
     Ok(Some(format!("applied {}", file_label(&live))))
@@ -255,7 +252,7 @@ fn is_excluded(cfg: &Config, path: &Path) -> bool {
         home_join(".config/kitty/themes"),
         home_join(".config/dsync"), // конфиг dsync рождается из шаблона
         home_join(".local/share/applications"), // генерируется install-скриптами
-        home_join("Pictures"), // картинки — не конфиги
+        home_join("Pictures"),      // картинки — не конфиги
     ];
     if let Some(cap) = &cfg.capture {
         if let Some(list) = &cap.exclude {
@@ -378,7 +375,7 @@ impl CaptureState {
 /// Находит chezmoi: иначе в GUI-окружениях PATH может не содержать /usr/sbin.
 fn chezmoi_path() -> &'static str {
     static PATH: OnceLock<&'static str> = OnceLock::new();
-    *PATH.get_or_init(|| {
+    PATH.get_or_init(|| {
         for cand in [
             "/usr/sbin/chezmoi",
             "/usr/bin/chezmoi",
@@ -439,8 +436,8 @@ fn to_abs(p: &Path) -> PathBuf {
     let Some(s) = p.to_str() else {
         return p.to_owned();
     };
-    if s.starts_with("~/") {
-        home_join(&s[2..])
+    if let Some(rest) = s.strip_prefix("~/") {
+        home_join(rest)
     } else if s.starts_with('/') {
         p.to_owned()
     } else {

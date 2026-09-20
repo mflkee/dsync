@@ -80,13 +80,18 @@ pub fn commit_and_push(name: &str, path: &Path) -> Result<bool> {
 }
 
 fn git_output(path: &Path, args: &[&str]) -> Option<String> {
-    git_cmd(path).args(args).output().ok()
+    git_cmd(path)
+        .args(args)
+        .output()
+        .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
 }
 
 fn run_git(path: &Path, args: &[&str]) -> Output {
-    git_cmd(path).args(args).output()
+    git_cmd(path)
+        .args(args)
+        .output()
         .unwrap_or_else(|e| panic!("failed to run git {args:?} in {}: {e}", path.display()))
 }
 
