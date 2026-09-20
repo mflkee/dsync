@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,9 +34,9 @@ pub async fn run_server(cfg: Config) -> Result<()> {
     if hub_cfg.tokens.is_empty() {
         anyhow::bail!(
             "hub refuses to start: [hub] tokens is missing/empty.\n\
-             Configure per-machine tokens: rerun `dsync init` with the hub role, or add\n\n\
-             \x20 [hub]\n\
-             \x20 tokens = {{ \"<machine>\": \"<token>\" }}\n\n\
+             Configure per-machine tokens: rerun `dsync init` with the hub role, or set:\n\n\
+             [hub]\n\
+             tokens = {{ \"<machine>\": \"<token>\" }}\n\n\
              and put the matching [hub_connect] token on each client."
         );
     }
@@ -45,10 +44,7 @@ pub async fn run_server(cfg: Config) -> Result<()> {
     let bind: SocketAddr = hub_cfg.bind.parse()?;
     info!("starting dsync hub on {bind}");
 
-    let data_dir = hub_cfg
-        .data_dir
-        .clone()
-        .unwrap_or_else(|| dirs::data_dir().unwrap_or_default().join("dsync"));
+    let data_dir = cfg.hub_data_dir();
 
     let (cert, key) = load_or_generate_certs(&cfg, &data_dir)?;
     let server_config = make_server_config(cert, key)?;
@@ -237,7 +233,11 @@ fn authorized(val: &serde_json::Value, hub: Option<&crate::config::HubConfig>) -
     }
 }
 
-async fn handle_push(val: serde_json::Value, state: &HubState, cfg: &Config) -> serde_json::Value {
+async fn handle_push(
+    val: serde_json::Value,
+    state: &Arc<HubState>,
+    cfg: &Config,
+) -> serde_json::Value {
     if let Ok(req) = serde_json::from_value::<PushRequest>(val) {
         let machine = req.machine.clone();
         state
@@ -265,7 +265,7 @@ async fn handle_push(val: serde_json::Value, state: &HubState, cfg: &Config) -> 
     }
 }
 
-async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &HubState) {
+async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubState>) {
     let (Some(projects_cfg), Some(remote_cfg)) = (&cfg.projects, &cfg.remote) else {
         return;
     };
@@ -274,6 +274,8 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &HubState)
         .as_ref()
         .map(|h| h.pull_retries)
         .unwrap_or(crate::config::default_pull_retries());
+    let store_path = crate::ssh::trust::SshHostTrustStore::path(&cfg.hub_data_dir());
+    let ssh_key = cfg.machine.ssh_key_path();
 
     for project in &req.projects {
         let Some(project_cfg) = projects_cfg.get(&project.name) else {
@@ -300,7 +302,6 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &HubState)
             let host = remote.host.clone();
             let port = remote.port;
             let user = remote.user.clone();
-            let ssh_key = cfg.machine.ssh_key_path();
             // Путь раскрываем в абсолютный (~/...) и берём в одинарные
             // кавычки: пробел или спецсимвол в пути/ветке иначе ломает
             // команду на удалённом shell'е.
@@ -323,22 +324,23 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &HubState)
             }
 
             let state = state.clone();
+            let store_path = store_path.clone();
+            let ssh_key = ssh_key.clone();
             tokio::spawn(async move {
                 info!("SSH pulling {project_name} on {machine_name} ({host})...");
                 let outcome = {
                     let mut attempts: u32 = 0;
-                    let mut last_err = String::new();
                     let mut backoff = Duration::from_secs(5);
                     loop {
                         attempts += 1;
-                        match crate::ssh::client::exec_with_key(
-                            &host, port, &user, &cmd, &ssh_key,
+                        match crate::ssh::client::exec_with_key_verifying(
+                            &host, port, &user, &cmd, &ssh_key, store_path.clone(),
                         )
                         .await
                         {
                             Ok(_) => break PullOutcome::success(attempts),
                             Err(e) => {
-                                last_err = format!("{e:#}");
+                                let last_err = format!("{e:#}");
                                 info!(
                                     "SSH pull {machine_name}/{project_name} attempt \
                                      {attempts} failed: {last_err}"
@@ -590,7 +592,7 @@ mod tests {
         tokens: &[(&str, &str)],
         max_message_size: u64,
         max_concurrency: u32,
-    ) -> (SocketAddr, Arc<HubState>) {
+    ) -> (SocketAddr, Arc<HubState>, Arc<Semaphore>) {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let server_cfg = test_server_config();
         let endpoint = Endpoint::server(server_cfg, "127.0.0.1:0".parse().unwrap()).unwrap();
@@ -598,8 +600,14 @@ mod tests {
         let state = Arc::new(HubState::new(None, 30));
         let cfg = Arc::new(test_config(tokens, max_message_size, max_concurrency));
         let semaphore = Arc::new(Semaphore::new(max_concurrency as usize));
-        tokio::spawn(serve_loop(endpoint, state.clone(), cfg, max_message_size, semaphore));
-        (addr, state)
+        tokio::spawn(serve_loop(
+            endpoint,
+            state.clone(),
+            cfg,
+            max_message_size,
+            semaphore.clone(),
+        ));
+        (addr, state, semaphore)
     }
 
     async fn connect(addr: SocketAddr) -> quinn::Connection {
@@ -628,7 +636,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_accepts_valid_push_and_rejects_others() {
-        let (addr, state) = spawn_test_hub(&[("desktop", "secret-a")], 1 << 20, 4).await;
+        let (addr, state, _sem) = spawn_test_hub(&[("desktop", "secret-a")], 1 << 20, 4).await;
         let conn = connect(addr).await;
 
         // Неизвестная машина — отказ, состояние не тронуто.
@@ -653,7 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_request_rejected_and_small_accepted() {
-        let (addr, state) = spawn_test_hub(&[("desktop", "t")], 1024, 4).await;
+        let (addr, state, _sem) = spawn_test_hub(&[("desktop", "t")], 1024, 4).await;
         let conn = connect(addr).await;
 
         // Невалидный JSON, но большой — должен упасть по размеру раньше разбора.
@@ -681,15 +689,15 @@ mod tests {
     #[tokio::test]
     async fn concurrency_cap_yields_explicit_busy_error() {
         let max = 1;
-        let (addr, _state) = spawn_test_hub(&[("desktop", "t")], 1 << 20, max).await;
+        let (addr, _state, semaphore) =
+            spawn_test_hub(&[("desktop", "t")], 1 << 20, max).await;
         let conn = connect(addr).await;
 
-        // Захватываем единственный permit вручную — второй запрос должен дать
-        // «hub busy» через 5с таймаут ожидания, а не молча пропасть.
-        let semaphore = Arc::new(Semaphore::new(max as usize));
-        let _held = semaphore.clone().acquire_owned().await.unwrap();
+        // Захватываем единственный permit сервера вручную — второй запрос
+        // должен получить «hub busy» через 5с таймаут ожидания, а не молча
+        // пропасть (и не дождаться обработки).
+        let _held = semaphore.acquire_owned().await.unwrap();
 
-        // Подключаем второй канал и шлём запрос: он ждёт permit 5с → busy error.
         let (mut send, mut recv) = conn.open_bi().await.unwrap();
         let req = PushRequest {
             machine: "desktop".into(),
@@ -700,10 +708,9 @@ mod tests {
         };
         let mut msg = serde_json::to_value(&req).unwrap();
         msg["type"] = serde_json::json!("push");
-        let mut data = serde_json::to_vec(&msg).unwrap();
-        data.extend_from_slice(b"."); // добиваем до валидного JSON при чтении на хабе
-        drop(data);
-        send.write_all(&serde_json::to_vec(&msg).unwrap()).await.unwrap();
+        send.write_all(&serde_json::to_vec(&msg).unwrap())
+            .await
+            .unwrap();
         send.finish().unwrap();
         let buf = recv.read_to_end(usize::MAX).await.unwrap();
         let val: serde_json::Value = serde_json::from_slice(&buf).unwrap();

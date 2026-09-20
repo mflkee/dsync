@@ -187,6 +187,18 @@ fn draw_dashboard(frame: &mut Frame, app: &mut App, area: Rect) {
                     format!("  seen: {}", fmt_ago(s.last_seen)),
                     Style::default().fg(Color::DarkGray),
                 ),
+                Span::styled(
+                    {
+                        let ok = s.pulls.values().filter(|o| o.ok).count();
+                        let total = s.pulls.len();
+                        if total == 0 {
+                            String::new()
+                        } else {
+                            format!("  pulls: {ok}✓/{}✗", total - ok)
+                        }
+                    },
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]))
         })
         .collect();
@@ -327,6 +339,34 @@ fn draw_machine_detail(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::White),
                 ),
             ]));
+            if !s.pulls.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    " SSH pulls:",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                let mut pulls: Vec<_> = s.pulls.iter().collect();
+                pulls.sort_by_key(|(p, _)| (*p).clone());
+                for (project, o) in pulls {
+                    let (mark, col) = if o.ok {
+                        ("✓", Color::Green)
+                    } else {
+                        ("✗", Color::Red)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("   {mark} {project}"),
+                            Style::default().fg(col).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("  {} attempt(s)  {}", o.attempts, fmt_ago(o.finished_at)),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+            }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 format!(" [P] push — {name}   [L] pull — {name}"),

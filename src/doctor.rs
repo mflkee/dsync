@@ -32,6 +32,20 @@ pub async fn run(cfg: Config) -> Result<()> {
         Status::Ok
     });
 
+    check("hub token", || {
+        let token = match &cfg.hub_connect {
+            Some(h) => &h.token,
+            None => return Status::Skip("no hub_connect in config"),
+        };
+        if token.is_empty() {
+            return Status::Warn(
+                "hub_connect.token is empty — hub will reject requests; set it from the hub's [hub] tokens"
+                    .into(),
+            );
+        }
+        Status::Ok
+    });
+
     check("hub trust (TOFU)", || {
         let addr = match &cfg.hub_connect {
             Some(h) => &h.address,
@@ -94,6 +108,38 @@ pub async fn run(cfg: Config) -> Result<()> {
         Err(e) => println!("  hub: {e}"),
     }
 
+    // SSH host-key trust: TOFU-якорь хаба, по одной машине флота.
+    if let Some(ref remotes) = cfg.remote {
+        println!("\nssh host trust:");
+        let store_path = crate::ssh::trust::SshHostTrustStore::path(&cfg.hub_data_dir());
+        for (name, r) in remotes {
+            let hostport = format!("{}:{}", r.host, r.port);
+            let state =
+                crate::ssh::client::probe_host_trust(&r.host, r.port, store_path.clone()).await;
+            let line = match &state {
+                crate::ssh::trust::SshTrustState::Trusted => {
+                    let fp = {
+                        let store = crate::ssh::trust::SshHostTrustStore::load(&store_path);
+                        store.get(&hostport).unwrap_or("").to_string()
+                    };
+                    format!("  ✓ {name} ({hostport}): trusted ({fp})")
+                }
+                crate::ssh::trust::SshTrustState::Untrusted => {
+                    format!("  ∼ {name} ({hostport}): untrusted — first contact will be recorded (TOFU)")
+                }
+                crate::ssh::trust::SshTrustState::Mismatch { expected, observed } => format!(
+                    "  ✗ {name} ({hostport}): MISMATCH\n      stored:     {expected}\n      presented:  {observed}\n      to accept the new key: dsync trust ssh rm {hostport}"
+                ),
+                crate::ssh::trust::SshTrustState::Unreachable(reason) => {
+                    format!("  ✗ {name} ({hostport}): unreachable ({reason})")
+                }
+            };
+            println!("{line}");
+        }
+    } else {
+        println!("\n  (no remotes configured)");
+    }
+
     Ok(())
 }
 
@@ -116,6 +162,7 @@ async fn try_ping_hub(cfg: &Config) -> Result<()> {
     let conn = crate::client::connect::connect_with_retry(cfg).await?;
     let req = crate::protocol::StatusRequest {
         machine: cfg.machine.name.clone(),
+        token: crate::client::connect::hub_token(cfg),
     };
     let resp = crate::client::connect::send_status(&conn, &req).await?;
     for (name, s) in &resp.machines {

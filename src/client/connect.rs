@@ -267,6 +267,24 @@ pub async fn status(cfg: Config) -> Result<Vec<String>> {
             fmt_civil(status.last_push),
             fmt_relative(status.last_push),
         ));
+        // Исходы последних SSH-пуллов хаба по проектам (pull-orchestration).
+        let mut pulls: Vec<_> = status.pulls.iter().collect();
+        pulls.sort_by_key(|(p, _)| (*p).clone());
+        for (project, outcome) in pulls {
+            let res = if outcome.ok {
+                "ok".to_string()
+            } else {
+                format!("FAILED ({})", outcome.error.as_deref().unwrap_or("?"))
+            };
+            out.push(format!(
+                "      {project}: pull {res}, {} attempt(s), finished {}",
+                outcome.attempts,
+                fmt_civil(outcome.finished_at),
+            ));
+        }
+        if status.pulls.is_empty() && resp.machines.len() > 1 {
+            out.push("      (no pulls yet)".to_string());
+        }
     }
 
     Ok(out)

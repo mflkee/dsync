@@ -25,7 +25,8 @@ async fn main() -> Result<()> {
     init_tracing(tui_mode);
 
     match args.command {
-        // init и trust не требуют существующего конфига.
+        // init и trust не требуют существующего конфига (для trust ssh конфиг
+        // берём по-возможности — оттуда [hub] data_dir).
         cli::Commands::Init => return init::run(),
         cli::Commands::Trust { action } => match action {
             cli::TrustAction::List => {
@@ -34,6 +35,20 @@ async fn main() -> Result<()> {
             }
             cli::TrustAction::Rm { address } => {
                 print_lines(trust::trust_rm(&address)?);
+                return Ok(());
+            }
+            cli::TrustAction::Ssh(sub) => {
+                let data_dir = config::Config::load()
+                    .map(|c| c.hub_data_dir())
+                    .unwrap_or_else(|_| dirs::data_dir().unwrap_or_default().join("dsync"));
+                match sub {
+                    cli::TrustSshAction::List => {
+                        print_lines(ssh::trust::ssh_trust_list(&data_dir));
+                    }
+                    cli::TrustSshAction::Rm { host_port } => {
+                        print_lines(ssh::trust::ssh_trust_rm(&data_dir, &host_port));
+                    }
+                }
                 return Ok(());
             }
         },

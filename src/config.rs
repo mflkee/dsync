@@ -158,6 +158,15 @@ impl Config {
         }
         Ok(cfg)
     }
+
+    /// Директория данных хаба: `[hub] data_dir` или дефолт `~/.local/share/dsync`.
+    /// Здесь живут `machines.json`, TLS-сертификат и `ssh_known_hosts.toml`.
+    pub fn hub_data_dir(&self) -> PathBuf {
+        self.hub
+            .as_ref()
+            .and_then(|h| h.data_dir.clone())
+            .unwrap_or_else(|| dirs::data_dir().unwrap_or_default().join("dsync"))
+    }
 }
 
 /// Путь к конфигу в том же порядке, что и `Config::load`.

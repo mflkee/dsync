@@ -52,12 +52,26 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum TrustAction {
-    /// List trusted hub fingerprints
+    /// List trusted hub fingerprints (QUIC cert TOFU)
     List,
     /// Forget a trusted hub fingerprint (accept the new one on next connect)
     Rm {
         /// Hub address, e.g. 100.89.126.211:42069
         address: String,
+    },
+    /// SSH host-key trust (hub pulls)
+    #[command(subcommand)]
+    Ssh(TrustSshAction),
+}
+
+#[derive(Subcommand)]
+pub enum TrustSshAction {
+    /// List trusted SSH host-key fingerprints
+    List,
+    /// Forget a machine's SSH host-key fingerprint (re-trust via TOFU on next pull)
+    Rm {
+        /// Machine "host:port", e.g. 100.89.198.212:22
+        host_port: String,
     },
 }
 

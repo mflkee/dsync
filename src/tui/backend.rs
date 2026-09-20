@@ -279,6 +279,7 @@ async fn try_snapshot(
     };
     let req = crate::protocol::StatusRequest {
         machine: cfg.machine.name.clone(),
+        token: crate::client::connect::hub_token(&cfg),
     };
     match crate::client::connect::send_status(&conn, &req).await {
         Ok(resp) => {
@@ -459,6 +460,7 @@ async fn run_doctor(cfg: Config, info: CfgSummary, ev: Sender<Event>) {
         Ok(conn) => {
             let req = crate::protocol::StatusRequest {
                 machine: cfg.machine.name.clone(),
+                token: crate::client::connect::hub_token(&cfg),
             };
             match crate::client::connect::send_status(&conn, &req).await {
                 Ok(resp) => {
