@@ -31,9 +31,13 @@ pub(super) async fn push_core(cfg: Config, machine: Option<String>) -> Result<Ve
         info!("targeting SSH pull to machine {m}");
     }
 
-    let conn = connect_with_retry(&cfg).await?;
-
+    // Сначала локальная работа с репозиториями, потом — короткая сессия hub.
+    // Иначе, пока мы 30-60с ходим по git (медленный origin), QUIC-соединение
+    // умирает по idle-таймауту и `send_push` падает с «timed out». Плюс
+    // локальные коммиты сохраняются, даже если hub сейчас недоступен.
     let projects = collect_projects(&cfg).await?;
+
+    let conn = connect_with_retry(&cfg).await?;
 
     let req = PushRequest {
         machine: cfg.machine.name.clone(),
