@@ -41,17 +41,18 @@ pub async fn capture(cfg: Config, paths: Vec<PathBuf>) -> Result<Vec<String>> {
     }
 
     let mut msgs: Vec<String> = Vec::new();
-    let mut state = CaptureState::load();
+    // Явный capture не трогает слепок хешей (state): иначе его частичный
+    // слепок заставил бы следующий периодический push re-add-ить всё.
+    let mut dummy = CaptureState::default();
     for p in &paths {
         let abs = to_abs(p);
-        match capture_one(&cfg, &abs, &mut state) {
+        // Явная команда `dsync capture <path>` — всегда re-add, даже если
+        // слепок ещё не создавался.
+        match capture_one(&cfg, &abs, &mut dummy, true) {
             Ok(Some(m)) => msgs.push(m),
             Ok(None) => info!("capture {}: nothing to capture", abs.display()),
             Err(e) => warn!("capture {}: {e:#}", abs.display()),
         }
-    }
-    if let Err(e) = state.save() {
-        warn!("capture state save failed: {e:#}");
     }
 
     if msgs.is_empty() {
@@ -67,12 +68,15 @@ pub async fn capture(cfg: Config, paths: Vec<PathBuf>) -> Result<Vec<String>> {
 /// Не падает — ошибки только логируются, чтобы не сломать обычный push.
 pub fn capture_changed(cfg: &Config) -> Vec<String> {
     let mut msgs = Vec::new();
+    // Первый запуск: только снимок хешей (baseline), без re-add. Иначе пустой
+    // слепок заставил бы re-add-ить каждый файл, как будто все изменились.
+    let re_add = CaptureState::path().exists();
     let mut state = CaptureState::load();
     let candidates = watch_candidates(cfg);
     let mut seen = HashSet::with_capacity(candidates.len());
     for live in candidates {
         seen.insert(live.to_string_lossy().to_string());
-        match capture_one(cfg, &live, &mut state) {
+        match capture_one(cfg, &live, &mut state, re_add) {
             Ok(Some(m)) => msgs.push(m),
             Ok(None) => {}
             Err(e) => warn!("capture {}: {e:#}", live.display()),
@@ -91,7 +95,13 @@ pub fn capture_changed(cfg: &Config) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// Обрабатывает один путь. Возвращает Some(сообщение), если что-то сделано.
-fn capture_one(cfg: &Config, path: &Path, state: &mut CaptureState) -> Result<Option<String>> {
+/// `re_add=false` (baseline-снимок) — только запоминает хеш без re-add.
+fn capture_one(
+    cfg: &Config,
+    path: &Path,
+    state: &mut CaptureState,
+    re_add: bool,
+) -> Result<Option<String>> {
     // Правка внутри репозитория проекта (например ~/dotfiles/dot_zshrc) —
     // это исходник, его не re-add-им, а применяем локально, чтобы живой файл
     // обновился сразу здесь же.
@@ -116,6 +126,11 @@ fn capture_one(cfg: &Config, path: &Path, state: &mut CaptureState) -> Result<Op
     let hash = file_hash(path)?;
     if state.map.get(&key) == Some(&hash) {
         return Ok(None); // не менялся с прошлого захвата
+    }
+    if !re_add {
+        // Baseline (первый запуск): только запоминаем текущий хеш.
+        state.map.insert(key, hash);
+        return Ok(None);
     }
 
     let src = chezmoi_source(path).context("chezmoi source-path")?;
@@ -233,10 +248,14 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn is_excluded(cfg: &Config, path: &Path) -> bool {
+    // Регенерируемое и медиа по умолчанию не трогаем: конфиги из шаблонов,
+    // темы, которые пересобирают скрипты, .desktop из install-скриптов и т.п.
     let mut excludes: Vec<PathBuf> = vec![
         home_join(".config/ghostty/themes"),
         home_join(".config/kitty/themes"),
         home_join(".config/dsync"), // конфиг dsync рождается из шаблона
+        home_join(".local/share/applications"), // генерируется install-скриптами
+        home_join("Pictures"), // картинки — не конфиги
     ];
     if let Some(cap) = &cfg.capture {
         if let Some(list) = &cap.exclude {
