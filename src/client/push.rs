@@ -17,6 +17,20 @@ pub async fn push(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     // сделано (nvim, bash, sed, скрипты) — см. capture::capture_changed.
     let captured = super::capture::capture_changed(&cfg);
 
+    let mut out = push_core(cfg, machine).await?;
+    out.splice(0..0, captured);
+    Ok(out)
+}
+
+/// Ядро push без периодического захвата: коммит репозиториев, пуш в origin,
+/// уведомление хаба. Используется явным `dsync capture`, который уже сам
+/// re-add-нул нужные файлы и не должен гонять повторный скан.
+pub(super) async fn push_core(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
+    info!("starting push from {}", cfg.machine.name);
+    if let Some(m) = &machine {
+        info!("targeting SSH pull to machine {m}");
+    }
+
     let conn = connect_with_retry(&cfg).await?;
 
     let projects = collect_projects(&cfg).await?;
@@ -33,7 +47,6 @@ pub async fn push(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     let resp = send_push(&conn, &req).await?;
     close_conn(&conn);
     let mut out = Vec::new();
-    out.extend(captured);
     if resp.ok {
         info!("push successful");
         out.push("✓ pushed to hub".to_string());

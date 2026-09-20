@@ -27,7 +27,7 @@ use tracing::{info, warn};
 
 use crate::config::{Config, ProjectConfig};
 
-use super::push;
+use super::push::{push, push_core};
 
 // ---------------------------------------------------------------------------
 // Внешний API клиента
@@ -58,7 +58,7 @@ pub async fn capture(cfg: Config, paths: Vec<PathBuf>) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
 
-    let mut out = push(cfg, None).await?;
+    let mut out = push_core(cfg, None).await?;
     out.splice(0..0, msgs);
     Ok(out)
 }
