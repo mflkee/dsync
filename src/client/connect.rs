@@ -9,7 +9,8 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::protocol::{
-    PullRequest, PullResponse, PushRequest, PushResponse, StatusRequest, StatusResponse,
+    MachineStatus, PullRequest, PullResponse, PushRequest, PushResponse, StatusRequest,
+    StatusResponse,
 };
 use crate::trust::{fingerprint, TrustStore};
 
@@ -260,32 +261,82 @@ pub async fn status(cfg: Config) -> Result<Vec<String>> {
 
     let mut out = vec!["Sync Status:".to_string()];
     for (name, status) in &resp.machines {
-        out.push(format!(
-            "  {}: online={}, last_push={} ({})",
-            name,
-            status.online,
-            fmt_civil(status.last_push),
-            fmt_relative(status.last_push),
-        ));
-        // Исходы последних SSH-пуллов хаба по проектам (pull-orchestration).
-        let mut pulls: Vec<_> = status.pulls.iter().collect();
-        pulls.sort_by_key(|(p, _)| (*p).clone());
-        for (project, outcome) in pulls {
-            let res = if outcome.ok {
-                "ok".to_string()
-            } else {
-                format!("FAILED ({})", outcome.error.as_deref().unwrap_or("?"))
-            };
-            out.push(format!(
-                "      {project}: pull {res}, {} attempt(s), finished {}",
-                outcome.attempts,
-                fmt_civil(outcome.finished_at),
-            ));
-        }
+        out.extend(machine_status_lines(name, status));
         if status.pulls.is_empty() && resp.machines.len() > 1 {
             out.push("      (no pulls yet)".to_string());
         }
     }
 
     Ok(out)
+}
+
+/// Строки статуса одной машины, включая исходы последних SSH-пуллов хаба
+/// (pull-orchestration) — вынесено в чистую функцию ради юнит-тестов 4.3.
+fn machine_status_lines(name: &str, status: &MachineStatus) -> Vec<String> {
+    let mut lines = vec![format!(
+        "  {name}: online={}, last_push={} ({})",
+        status.online,
+        fmt_civil(status.last_push),
+        fmt_relative(status.last_push),
+    )];
+    let mut pulls: Vec<_> = status.pulls.iter().collect();
+    pulls.sort_by_key(|(p, _)| (*p).clone());
+    for (project, outcome) in pulls {
+        let res = if outcome.ok {
+            "ok".to_string()
+        } else {
+            format!("FAILED ({})", outcome.error.as_deref().unwrap_or("?"))
+        };
+        lines.push(format!(
+            "      {project}: pull {res}, {} attempt(s), finished {}",
+            outcome.attempts,
+            fmt_civil(outcome.finished_at),
+        ));
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::PullOutcome;
+
+    fn outcome(ok: bool, err: Option<&str>, attempts: u32, finished_at: i64) -> PullOutcome {
+        PullOutcome {
+            ok,
+            error: err.map(str::to_string),
+            attempts,
+            finished_at,
+        }
+    }
+
+    #[test]
+    fn machine_lines_show_ok_and_failed_pulls() {
+        let mut pulls = std::collections::HashMap::new();
+        pulls.insert("dotfiles".to_string(), outcome(true, None, 1, 1_700_000_000));
+        pulls.insert("notes".to_string(), outcome(false, Some("ssh timed out"), 3, 1_700_000_100));
+        let status = MachineStatus {
+            online: true,
+            last_seen: 1_700_000_000,
+            last_push: 1_700_000_000,
+            pulls,
+        };
+        let lines = machine_status_lines("desktop", &status);
+        assert!(lines[0].contains("desktop: online=true"));
+        assert!(lines.iter().any(|l| l.contains("dotfiles: pull ok, 1 attempt(s)")));
+        assert!(lines.iter().any(|l| l.contains("notes: pull FAILED (ssh timed out), 3 attempt(s)")));
+    }
+
+    #[test]
+    fn machine_lines_without_pulls_show_header_only() {
+        let status = MachineStatus {
+            online: false,
+            last_seen: 0,
+            last_push: 0,
+            pulls: std::collections::HashMap::new(),
+        };
+        let lines = machine_status_lines("notebook", &status);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("notebook: online=false"));
+    }
 }

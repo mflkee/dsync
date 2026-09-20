@@ -14,7 +14,7 @@ rust-version = "1.80"
 quinn = "0.11"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

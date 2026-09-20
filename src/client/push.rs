@@ -39,15 +39,7 @@ pub(super) async fn push_core(cfg: Config, machine: Option<String>) -> Result<Ve
 
     let conn = connect_with_retry(&cfg).await?;
 
-    let req = PushRequest {
-        machine: cfg.machine.name.clone(),
-        token: super::connect::hub_token(&cfg),
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs() as i64,
-        projects,
-        target: machine,
-    };
+    let req = build_push_request(&cfg, machine, projects)?;
 
     let resp = send_push(&conn, &req).await?;
     close_conn(&conn);
@@ -62,6 +54,24 @@ pub(super) async fn push_core(cfg: Config, machine: Option<String>) -> Result<Ve
     Ok(out)
 }
 
+/// Собирает `PushRequest` от имени конфига: несёт machine name и токен из
+/// `[hub_connect] token` (пустой токен хаб отвергнет — см. hub-auth).
+fn build_push_request(
+    cfg: &Config,
+    machine: Option<String>,
+    projects: Vec<crate::protocol::ProjectState>,
+) -> Result<PushRequest> {
+    Ok(PushRequest {
+        machine: cfg.machine.name.clone(),
+        token: super::connect::hub_token(cfg),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64,
+        projects,
+        target: machine,
+    })
+}
+
 async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectState>> {
     if let Some(projects) = &cfg.projects {
         for (name, config) in projects {
@@ -73,5 +83,44 @@ async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectSt
         crate::projects::status::scan(projects)
     } else {
         Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{HubConnectConfig, MachineConfig};
+
+    fn cfg_with_token(token: &str) -> Config {
+        Config {
+            config_version: 1,
+            machine: MachineConfig {
+                name: "desktop".into(),
+                ssh_key: None,
+            },
+            hub: None,
+            hub_connect: Some(HubConnectConfig {
+                address: "10.0.0.1:42069".into(),
+                token: token.into(),
+            }),
+            projects: None,
+            remote: None,
+            capture: None,
+        }
+    }
+
+    #[test]
+    fn built_request_carries_configured_token_on_the_wire() {
+        let req = build_push_request(&cfg_with_token("t0k3n"), None, Vec::new()).unwrap();
+        let val = serde_json::to_value(&req).unwrap();
+        assert_eq!(val["machine"], "desktop");
+        assert_eq!(val["token"], "t0k3n");
+    }
+
+    #[test]
+    fn missing_token_serializes_as_empty_string() {
+        let req = build_push_request(&cfg_with_token(""), None, Vec::new()).unwrap();
+        let val = serde_json::to_value(&req).unwrap();
+        assert_eq!(val["token"], "");
     }
 }

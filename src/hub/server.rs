@@ -61,28 +61,13 @@ pub async fn run_server(cfg: Config) -> Result<()> {
 
     info!("hub listening on {bind}");
 
-    loop {
-        tokio::select! {
-            incoming = endpoint.accept() => {
-                match incoming {
-                    Some(incoming) => {
-                        let state = state.clone();
-                        let cfg = cfg.clone();
-                        let sem = semaphore.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = handle_connection(incoming, state, cfg, max_message_size, sem).await {
-                                error!("connection error: {e}");
-                            }
-                        });
-                    }
-                    None => break,
-                }
-            }
-            _ = signal::ctrl_c() => {
-                info!("shutting down hub");
-                endpoint.close(0u32.into(), b"shutdown");
-                break;
-            }
+    // Основной цикл accept'а живёт в serve_loop (его же гоняют эндпоинт-тесты);
+    // здесь ждём его завершения или Ctrl-C.
+    let serve = serve_loop(endpoint, state, cfg, max_message_size, semaphore);
+    tokio::select! {
+        _ = serve => {}
+        _ = signal::ctrl_c() => {
+            info!("shutting down hub");
         }
     }
 
@@ -328,35 +313,29 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
             let ssh_key = ssh_key.clone();
             tokio::spawn(async move {
                 info!("SSH pulling {project_name} on {machine_name} ({host})...");
-                let outcome = {
-                    let mut attempts: u32 = 0;
-                    let mut backoff = Duration::from_secs(5);
-                    loop {
-                        attempts += 1;
+                let outcome = retry_pull(pull_retries, || {
+                    let store_path = store_path.clone();
+                    let host = host.clone();
+                    let user = user.clone();
+                    let cmd = cmd.clone();
+                    let ssh_key = ssh_key.clone();
+                    async move {
                         match crate::ssh::client::exec_with_key_verifying(
-                            &host, port, &user, &cmd, &ssh_key, store_path.clone(),
+                            &host,
+                            port,
+                            &user,
+                            &cmd,
+                            &ssh_key,
+                            store_path,
                         )
                         .await
                         {
-                            Ok(_) => break PullOutcome::success(attempts),
-                            Err(e) => {
-                                let last_err = format!("{e:#}");
-                                info!(
-                                    "SSH pull {machine_name}/{project_name} attempt \
-                                     {attempts} failed: {last_err}"
-                                );
-                                if attempts > pull_retries {
-                                    break PullOutcome::failure(last_err, attempts);
-                                }
-                                let wait = backoff.min(Duration::from_secs(60));
-                                if !wait.is_zero() {
-                                    tokio::time::sleep(wait).await;
-                                }
-                                backoff = backoff.saturating_mul(2);
-                            }
+                            Ok(_) => Ok(()),
+                            Err(e) => Err(format!("{e:#}")),
                         }
                     }
-                };
+                })
+                .await;
                 state.record_pull(&machine_name, &project_name, &outcome).await;
                 match &outcome {
                     PullOutcome { ok: true, .. } => {
@@ -369,6 +348,34 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                     ),
                 }
             });
+        }
+    }
+}
+
+/// Retry-обёртка для SSH-пулла: первая попытка + `pull_retries` повторных,
+/// backoff `5s·2^n` с потолком 60 с. Возвращает итоговый `PullOutcome`
+/// (см. `hub-pull-orchestration`); тестируется с pause-time.
+async fn retry_pull<F, Fut>(pull_retries: u32, mut attempt: F) -> PullOutcome
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let mut attempts: u32 = 0;
+    let mut backoff = Duration::from_secs(5);
+    loop {
+        attempts += 1;
+        match attempt().await {
+            Ok(()) => return PullOutcome::success(attempts),
+            Err(err) => {
+                if attempts > pull_retries {
+                    return PullOutcome::failure(err, attempts);
+                }
+                let wait = backoff.min(Duration::from_secs(60));
+                if !wait.is_zero() {
+                    tokio::time::sleep(wait).await;
+                }
+                backoff = backoff.saturating_mul(2);
+            }
         }
     }
 }
@@ -716,5 +723,40 @@ mod tests {
         let val: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(val["type"], "error");
         assert!(val["error"].as_str().unwrap().contains("hub busy"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_first_attempt_fails_then_succeeds() {
+        let mut calls: u32 = 0;
+        let outcome = retry_pull(2, || {
+            calls += 1;
+            async move {
+                if calls == 1 {
+                    Err("ssh dead".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await;
+        assert!(outcome.ok, "pulled after the first failure");
+        assert_eq!(outcome.attempts, 2);
+        assert_eq!(outcome.error, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_all_failures_store_last_error() {
+        let outcome = retry_pull(2, || async { Err("boom".to_string()) }).await;
+        assert!(!outcome.ok);
+        assert_eq!(outcome.attempts, 3, "initial attempt + 2 retries");
+        assert_eq!(outcome.error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_zero_pull_retries_single_attempt() {
+        let outcome = retry_pull(0, || async { Err("nope".to_string()) }).await;
+        assert!(!outcome.ok);
+        assert_eq!(outcome.attempts, 1);
+        assert_eq!(outcome.error.as_deref(), Some("nope"));
     }
 }

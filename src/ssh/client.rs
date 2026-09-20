@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -196,7 +196,7 @@ pub async fn probe_host_trust(host: &str, port: u16, store_path: PathBuf) -> Ssh
                 _ => SshTrustState::Unreachable(format!("{e:#}")),
             }
         }
-        Ok(Ok(mut session)) => {
+        Ok(Ok(session)) => {
             let _ = session
                 .disconnect(russh::Disconnect::ByApplication, "", "doctor probe")
                 .await;
