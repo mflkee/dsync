@@ -19,6 +19,27 @@ pub struct Config {
     pub projects: Option<HashMap<String, ProjectConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<HashMap<String, RemoteMachine>>,
+    /// Захват live-правок dotfiles в их репозитории (см. `src/client/capture.rs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture: Option<CaptureConfig>,
+}
+
+/// Настройка авто-захвата правок живых dotfiles-файлов при `dsync push`.
+///
+/// Список `watch` задаёт исходные пути (файлы/директории; директории
+/// обходятся рекурсивно). Если секции `[capture]` или `watch` нет — по
+/// умолчанию берутся **все** файлы, которыми управляет chezmoi
+/// (`chezmoi managed --include files`), так что ловится любое изменение —
+/// из nvim, bash, sed, скриптов. Правки, которых chezmoi не знает,
+/// пропускаются.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct CaptureConfig {
+    /// Живые пути для сканирования (опционально; default — все chezmoi managed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch: Option<Vec<String>>,
+    /// Живые пути, которые никогда не захватываются (регенерируемые темы и т.п.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
 fn default_config_version() -> u32 {

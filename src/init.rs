@@ -129,6 +129,7 @@ pub fn run() -> Result<()> {
         } else {
             Some(remotes)
         },
+        capture: None,
     };
 
     // Показываем итог и пишем.

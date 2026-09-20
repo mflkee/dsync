@@ -20,10 +20,15 @@ pub enum Commands {
         #[arg(long, default_value_t = 900)]
         interval: u64,
     },
-    /// Push local state to hub
+    /// Push local state to hub (also captures live dotfile edits)
     Push {
         /// Target machine name (default: all)
         machine: Option<String>,
+    },
+    /// Capture live dotfile edits into repos and push fleet state
+    Capture {
+        /// Live files or dotfiles source paths to capture (empty = plain push)
+        paths: Vec<std::path::PathBuf>,
     },
     /// Pull state from hub
     Pull {

@@ -12,6 +12,11 @@ pub async fn push(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
         info!("targeting SSH pull to machine {m}");
     }
 
+    // Захват live-правок dotfiles в репы до коммита: приходит сюда любое
+    // изменение живых файлов (~/.zshrc, ~/.config/...), откуда бы оно ни было
+    // сделано (nvim, bash, sed, скрипты) — см. capture::capture_changed.
+    let captured = super::capture::capture_changed(&cfg);
+
     let conn = connect_with_retry(&cfg).await?;
 
     let projects = collect_projects(&cfg).await?;
@@ -28,6 +33,7 @@ pub async fn push(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     let resp = send_push(&conn, &req).await?;
     close_conn(&conn);
     let mut out = Vec::new();
+    out.extend(captured);
     if resp.ok {
         info!("push successful");
         out.push("✓ pushed to hub".to_string());

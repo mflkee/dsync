@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `dsync capture <path>` + automatic capture of live dotfile edits inside
+  `dsync push`: edit `~/.zshrc`, `~/.config/...` etc. from anywhere (nvim,
+  bash, sed, scripts) and the change goes fleet-wide — no `chezmoi edit`
+  needed. Under the hood dsync drives chezmoi (`re-add`/`apply`), see
+  `[capture]` in the config and `src/client/capture.rs`.
 - Cross-platform foundation: built-in `dsync watch` scheduler (no systemd required).
 - Interactive `dsync init` setup wizard (planned).
 - chezmoi wrapper subcommands under `dsync dotfiles` (planned).

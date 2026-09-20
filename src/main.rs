@@ -49,6 +49,10 @@ async fn main() -> Result<()> {
             print_lines(client::push(cfg, machine).await?);
             Ok(())
         }
+        cli::Commands::Capture { paths } => {
+            print_lines(client::capture(cfg, paths).await?);
+            Ok(())
+        }
         cli::Commands::Pull { machine } => {
             print_lines(client::pull(cfg, machine).await?);
             Ok(())
