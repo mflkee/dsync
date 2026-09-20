@@ -56,8 +56,8 @@ pub fn run() -> Result<()> {
         .default(hostname)
         .interact_text()?;
 
-    // 3. Hub адрес.
-    let mut hub_connect = None;
+    // 3. Hub адрес (строка — конфиг с токеном собираем после генерации токенов).
+    let mut hub_addr = None;
     if is_client {
         let default_addr = if is_hub {
             "127.0.0.1:42069".to_string()
@@ -69,10 +69,19 @@ pub fn run() -> Result<()> {
             .default(default_addr)
             .allow_empty(false)
             .interact_text()?;
-        hub_connect = Some(HubConnectConfig { address: addr });
+        hub_addr = Some(addr);
     }
 
-    // 4. [hub] — только если машина — хаб.
+    // 4. SSH-ключ: существующий или генерируем ed25519.
+    let ssh_key = ssh_key_setup()?;
+
+    // 5. Машины флота (remote.*).
+    let remotes = remote_setup()?;
+
+    // 6. Токены хаба: по одному на каждую машину флота + на себя.
+    let machine_tokens = generate_fleet_tokens(&remotes, &name, is_hub || is_client);
+
+    // 7. [hub] — только если машина — хаб.
     let hub = if is_hub {
         let bind: String = Input::new()
             .with_prompt("Hub bind address")
@@ -93,21 +102,47 @@ pub fn run() -> Result<()> {
             cert: None,
             key: None,
             data_dir: Some(data_dir.into()),
+            tokens: machine_tokens.clone(),
+            max_message_size: crate::config::default_max_message_size(),
+            max_concurrency: crate::config::default_max_concurrency(),
+            retention_days: crate::config::default_retention_days(),
+            pull_retries: crate::config::default_pull_retries(),
         })
     } else {
         None
     };
 
-    // 5. SSH-ключ: существующий или генерируем ed25519.
-    let ssh_key = ssh_key_setup()?;
+    if is_hub {
+        println!("\n── machine tokens (hub auth) ──");
+        for (m, t) in &machine_tokens {
+            println!("{m}: {t}");
+        }
+        println!("add [hub_connect] token on each client machine (hub+client already has it)");
+    }
 
-    // 6. Машины флота (remote.*).
-    let remotes = remote_setup()?;
+    // 8. hub_connect: для hub+client токен берём из сгенерированных,
+    //    для чистого клиента — спрашиваем явно.
+    let hub_connect = match hub_addr {
+        None => None,
+        Some(addr) => {
+            let token = match &hub {
+                Some(h) => h.tokens.get(&name).cloned().unwrap_or_default(),
+                None => Input::new()
+                    .with_prompt(
+                        "Hub token (from the hub's [hub] tokens; empty = set later, \
+                         `dsync doctor` will remind you)",
+                    )
+                    .allow_empty(true)
+                    .interact_text()?,
+            };
+            Some(HubConnectConfig { address: addr, token })
+        }
+    };
 
-    // 7. Проекты.
+    // 9. Проекты.
     let projects = projects_setup(&remotes)?;
 
-    // 8. Планировщик.
+    // 10. Планировщик.
     let scheduler = scheduler_setup()?;
 
     // Собираем конфиг.
@@ -165,6 +200,30 @@ pub fn run() -> Result<()> {
               2. From any client:  dsync push   → hub pulls + applies everywhere\n\
               3. Check health:     dsync doctor,  dsync status,  dsync tui");
     Ok(())
+}
+
+/// Генерирует по токену на каждую машину флота + на саму машину (если она
+/// клиент-роль). Возвращает map machine → token.
+fn generate_fleet_tokens(
+    remotes: &std::collections::HashMap<String, RemoteMachine>,
+    self_name: &str,
+    include_self: bool,
+) -> std::collections::HashMap<String, String> {
+    let mut members: Vec<String> = remotes.keys().cloned().collect();
+    if include_self {
+        members.push(self_name.to_string());
+    }
+    members.sort();
+    members.dedup();
+    members
+        .into_iter()
+        .map(|m| (m, generate_token()))
+        .collect()
+}
+
+/// Случайный 32-hex токен (uuid v4, без дефисов).
+fn generate_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 /// Имя машины: hostname через `hostname` (UNIX) / COMPUTERNAME (Windows), fallback "localhost".
@@ -480,6 +539,7 @@ mod tests {
             hub: None,
             hub_connect: Some(HubConnectConfig {
                 address: "10.0.0.5:42069".into(),
+                token: "tok-local".into(),
             }),
             projects: Some(
                 [(
@@ -517,5 +577,62 @@ mod tests {
             projects["dotfiles"].machines.as_ref().unwrap()[1],
             "notebook"
         );
+    }
+
+    #[test]
+    fn fleet_tokens_cover_members_and_self() {
+        let mut remotes = std::collections::HashMap::new();
+        remotes.insert(
+            "notebook".to_string(),
+            RemoteMachine {
+                host: "10.0.0.6".into(),
+                port: 22,
+                user: "me".into(),
+            },
+        );
+        let toks = generate_fleet_tokens(&remotes, "desktop", true);
+        assert_eq!(toks.len(), 2, "notebook + self");
+        assert!(toks.contains_key("desktop"));
+        assert!(toks.contains_key("notebook"));
+        assert_ne!(toks["desktop"], toks["notebook"], "tokens are per-machine");
+        // 32 hex chars (uuid v4 simple).
+        for t in toks.values() {
+            assert_eq!(t.len(), 32);
+            assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn hub_roundtrip_keeps_tokens() {
+        let hub = HubConfig {
+            bind: "0.0.0.0:42069".into(),
+            cert: None,
+            key: None,
+            data_dir: None,
+            tokens: [("desktop".to_string(), "tok-a".to_string())].into_iter().collect(),
+            max_message_size: 1024,
+            max_concurrency: 2,
+            retention_days: 7,
+            pull_retries: 1,
+        };
+        let cfg = Config {
+            config_version: 1,
+            machine: MachineConfig {
+                name: "desktop".into(),
+                ssh_key: None,
+            },
+            hub: Some(hub),
+            hub_connect: Some(HubConnectConfig {
+                address: "127.0.0.1:42069".into(),
+                token: "tok-a".into(),
+            }),
+            projects: None,
+            remote: None,
+            capture: None,
+        };
+        let s = toml::to_string_pretty(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert_eq!(back.hub.unwrap().tokens["desktop"], "tok-a");
+        assert_eq!(back.hub_connect.unwrap().token, "tok-a");
     }
 }

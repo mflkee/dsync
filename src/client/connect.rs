@@ -188,21 +188,29 @@ pub async fn send_push(conn: &Connection, req: &PushRequest) -> Result<PushRespo
     let mut msg = serde_json::to_value(req)?;
     msg["type"] = serde_json::json!("push");
     let buf = send_recv(conn, &msg).await?;
-    Ok(serde_json::from_slice(&buf)?)
+    Ok(crate::protocol::parse_response(&buf)?)
 }
 
 pub async fn send_pull(conn: &Connection, req: &PullRequest) -> Result<PullResponse> {
     let mut msg = serde_json::to_value(req)?;
     msg["type"] = serde_json::json!("pull");
     let buf = send_recv(conn, &msg).await?;
-    Ok(serde_json::from_slice(&buf)?)
+    Ok(crate::protocol::parse_response(&buf)?)
 }
 
 pub async fn send_status(conn: &Connection, req: &StatusRequest) -> Result<StatusResponse> {
     let mut msg = serde_json::to_value(req)?;
     msg["type"] = serde_json::json!("status");
     let buf = send_recv(conn, &msg).await?;
-    Ok(serde_json::from_slice(&buf)?)
+    Ok(crate::protocol::parse_response(&buf)?)
+}
+
+/// Hub auth token from `[hub_connect]`, empty when unset (hub will reject).
+pub fn hub_token(cfg: &Config) -> String {
+    cfg.hub_connect
+        .as_ref()
+        .map(|h| h.token.clone())
+        .unwrap_or_default()
 }
 
 fn unix_now() -> i64 {
@@ -245,6 +253,7 @@ pub async fn status(cfg: Config) -> Result<Vec<String>> {
     let conn = connect_with_retry(&cfg).await?;
     let req = StatusRequest {
         machine: cfg.machine.name.clone(),
+        token: hub_token(&cfg),
     };
     let resp = send_status(&conn, &req).await?;
     close_conn(&conn);

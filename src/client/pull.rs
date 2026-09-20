@@ -16,6 +16,7 @@ pub async fn pull(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
 
     let req = PullRequest {
         machine: cfg.machine.name.clone(),
+        token: super::connect::hub_token(&cfg),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64,

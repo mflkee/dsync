@@ -84,11 +84,46 @@ pub struct HubConfig {
     pub key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<PathBuf>,
+    /// Per-machine auth tokens: `{machine name → token}`. The hub refuses to
+    /// start without at least one entry (fail-secure, see Proposal).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tokens: HashMap<String, String>,
+    /// Maximum serialized request payload accepted (bytes).
+    #[serde(default = "default_max_message_size")]
+    pub max_message_size: u64,
+    /// Maximum concurrently processed requests.
+    #[serde(default = "default_max_concurrency")]
+    pub max_concurrency: u32,
+    /// Machines not seen for this many days are pruned from hub state.
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u64,
+    /// Additional SSH-pull attempts after the first failure (bounded retry).
+    #[serde(default = "default_pull_retries")]
+    pub pull_retries: u32,
+}
+
+pub(crate) fn default_max_message_size() -> u64 {
+    8 * 1024 * 1024
+}
+
+pub(crate) fn default_max_concurrency() -> u32 {
+    32
+}
+
+pub(crate) fn default_retention_days() -> u64 {
+    30
+}
+
+pub(crate) fn default_pull_retries() -> u32 {
+    2
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct HubConnectConfig {
     pub address: String,
+    /// Client token for hub auth (see `[hub] tokens` on the hub side).
+    #[serde(default)]
+    pub token: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -184,5 +219,64 @@ mod tests {
                 .map_err(|e| anyhow::anyhow!(e));
         // Загрузка из строки не валидирует версию — валидация в Config::load.
         assert!(too_new.is_ok());
+    }
+
+    #[test]
+    fn hub_defaults_limits() {
+        let cfg: Config = toml::from_str(
+            "machine = { name = 'x' }\n\
+             [hub]\n\
+             bind = '0.0.0.0:42069'\n",
+        )
+        .unwrap();
+        let hub = cfg.hub.expect("hub present");
+        assert_eq!(hub.max_message_size, 8 * 1024 * 1024);
+        assert_eq!(hub.max_concurrency, 32);
+        assert_eq!(hub.retention_days, 30);
+        assert_eq!(hub.pull_retries, 2);
+        assert!(hub.tokens.is_empty(), "no tokens configured");
+    }
+
+    #[test]
+    fn hub_fields_roundtrip_and_old_config_parses() {
+        let cfg: Config = toml::from_str(
+            "machine = { name = 'desktop' }\n\
+             [hub]\n\
+             bind = '0.0.0.0:42069'\n\
+             max_message_size = 4096\n\
+             max_concurrency = 4\n\
+             retention_days = 7\n\
+             pull_retries = 1\n\
+             [hub.tokens]\n\
+             desktop = 'tok-a'\n\
+             notebook = 'tok-b'\n\
+             [hub_connect]\n\
+             address = '127.0.0.1:42069'\n\
+             token = 'tok-a'\n",
+        )
+        .unwrap();
+        let hub = cfg.hub.as_ref().unwrap();
+        assert_eq!(hub.tokens["desktop"], "tok-a");
+        assert_eq!(hub.tokens["notebook"], "tok-b");
+        assert_eq!(hub.max_message_size, 4096);
+        assert_eq!(hub.max_concurrency, 4);
+        assert_eq!(hub.retention_days, 7);
+        assert_eq!(hub.pull_retries, 1);
+        assert_eq!(
+            cfg.hub_connect.as_ref().unwrap().token,
+            "tok-a",
+            "client token parsed"
+        );
+
+        // Round-trip через toml сохраняет всё.
+        let s = toml::to_string_pretty(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert_eq!(back.hub.as_ref().unwrap().tokens["notebook"], "tok-b");
+        assert_eq!(back.hub_connect.as_ref().unwrap().token, "tok-a");
+
+        // Старый конфиг без новых полей и без [hub] также парсится.
+        let old: Config = toml::from_str("machine = { name = 'x' }\n").unwrap();
+        assert!(old.hub.is_none());
+        assert!(old.hub_connect.is_none());
     }
 }

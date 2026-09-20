@@ -31,6 +31,7 @@ dirs = "5"
 chrono = { version = "0.4", features = ["clock"] }
 async-trait = "0.1"
 sha2 = "0.10"
+subtle = "2"
 dialoguer = "0.11"
 teloxide = { version = "0.12", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
 
