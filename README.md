@@ -57,7 +57,8 @@ dsync tui
 | Command | Description |
 |---------|-------------|
 | `dsync init` | Interactive setup wizard (machine, hub, remotes, projects, scheduler) |
-| `dsync push [machine]` | Commit local changes, push to git origin, notify hub |
+| `dsync push [machine]` | Commit local changes, push to git origin, notify hub. Also captures live dotfile edits (see `dsync capture`) |
+| `dsync capture <path>...` | Instant capture of chezmoi-managed live files (or `~/dotfiles` source edits) into dotfiles repo, then push fleet state — no `chezmoi edit` needed |
 | `dsync pull [machine]` | Fetch fleet state from the hub |
 | `dsync status` | Show online/offline machines and their sync state |
 | `dsync doctor` | Diagnose config, SSH keys, network, hub reachability |
@@ -108,6 +109,33 @@ data_dir = "~/.local/share/dsync-hub"
 Each project's git `origin` is where content actually lives (your GitHub/Gitea
 repo, or a bare repo on the hub). The hub only coordinates: it records each
 machine's state and triggers SSH pulls with `post_pull` hooks.
+
+## Capturing live dotfile edits (no `chezmoi edit`)
+
+Plain `git add/commit` only sees changes **inside repos**. Editing a live file
+like `~/.zshrc` or `~/.config/nvim/init.lua` never touches the `dotfiles` repo,
+so it used to go nowhere. `dsync` fixes that by driving chezmoi under the hood:
+
+- **Periodic (catches anything — bash, sed, scripts, nvim):** every `dsync
+  push` / `dsync watch` compares sha256 of live files against a snapshot
+  (`~/.local/share/dsync/capture-state.json`) and `chezmoi re-add`s whatever
+  changed before committing. Edits to `~/dotfiles/dot_config/...` sources are
+  `chezmoi apply --force`-d locally so the live file follows immediately.
+- **Instant:** an optional nvim `BufWritePost` hook calls `dsync capture <path>`
+  on save, so the fleet gets the change right away.
+
+Behavior controls in `[capture]` (all optional):
+
+```toml
+[capture]
+watch   = ["~/.zshrc", "~/.config", "~/.local/bin"]   # default: all chezmoi-managed files
+exclude = ["~/.config/ghostty/themes"]                # never auto-captured
+```
+
+Skipped by default: files whose source ends `.tmpl` (template output — edit the
+template instead), generated `~/.local/share/applications`/themes, media
+(`~/Pictures`), nested git repos, and anything not managed by chezmoi so
+`dsync capture` never pollutes the dotfiles repo with random project files.
 
 ## Running the hub
 
