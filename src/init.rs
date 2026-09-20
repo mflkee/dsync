@@ -506,6 +506,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             ),
+            capture: None,
         };
         let s = toml::to_string_pretty(&cfg).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
