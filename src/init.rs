@@ -1,8 +1,8 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use dialoguer::theme::ColorfulTheme;
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Input, MultiSelect, Select};
 
 use crate::config::{
     Config, HubConfig, HubConnectConfig, MachineConfig, ProjectConfig, RemoteMachine,
@@ -182,8 +182,9 @@ fn hostname() -> String {
         }
     }
     std::env::var("COMPUTERNAME")
+        .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|_| "localhost".to_string())
+        .unwrap_or_else(|| "localhost".to_string())
 }
 
 /// SSH-ключ: используем существующий или генерируем ed25519.
@@ -256,16 +257,16 @@ fn remote_setup() -> Result<std::collections::HashMap<String, RemoteMachine>> {
             .allow_empty(false)
             .interact_text()?;
         let host: String = Input::new()
-            .with_prompt(&format!("{name}: SSH host/IP"))
+            .with_prompt(format!("{name}: SSH host/IP"))
             .allow_empty(false)
             .interact_text()?;
         let port: u16 = Input::new()
-            .with_prompt(&format!("{name}: SSH port"))
+            .with_prompt(format!("{name}: SSH port"))
             .default(22)
             .interact_text()?;
         let default_user = std::env::var("USER").unwrap_or_else(|_| "root".into());
         let user: String = Input::new()
-            .with_prompt(&format!("{name}: SSH user"))
+            .with_prompt(format!("{name}: SSH user"))
             .default(default_user)
             .interact_text()?;
         remotes.insert(name, RemoteMachine { host, port, user });
@@ -300,28 +301,27 @@ fn projects_setup(
             .allow_empty(false)
             .interact_text()?;
         let path: String = Input::new()
-            .with_prompt(&format!("{name}: local path"))
+            .with_prompt(format!("{name}: local path"))
             .allow_empty(false)
             .interact_text()?;
         let branch: String = Input::new()
-            .with_prompt(&format!("{name}: git branch"))
+            .with_prompt(format!("{name}: git branch"))
             .default("main".to_string())
             .interact_text()?;
         let machines = if remotes.is_empty() {
             Vec::new()
         } else {
             let keys: Vec<String> = remotes.keys().cloned().collect();
-            let mut sel: Vec<usize> = (0..keys.len()).collect();
             println!("{name}: machines to sync on? (space=select, enter=continue)");
-            sel = dialoguer::MultiSelect::new()
+            let sel: Vec<usize> = MultiSelect::new()
                 .with_prompt("  sync machines")
                 .items(&keys)
-                .defaults(&sel.iter().map(|i| *i < keys.len()).collect::<Vec<_>>())
+                .defaults(&vec![true; keys.len()])
                 .interact()?;
             sel.iter().map(|i| keys[*i].clone()).collect()
         };
         let post_pull: String = Input::new()
-            .with_prompt(&format!("{name}: post_pull command (optional)"))
+            .with_prompt(format!("{name}: post_pull command (optional)"))
             .allow_empty(true)
             .interact_text()?;
         let mut project = ProjectConfig {
@@ -374,11 +374,8 @@ fn scheduler_setup() -> Result<Option<String>> {
 
     let choice = choices[idx];
     if choice.starts_with("systemd") {
-        if install_systemd_timer()? {
-            Ok(Some("systemd".into()))
-        } else {
-            Ok(Some("systemd".into()))
-        }
+        install_systemd_timer()?;
+        Ok(Some("systemd".into()))
     } else if choice.starts_with("dsync watch") {
         println!("▶ Run in the background:  dsync watch --interval 900");
         Ok(Some("watch".into()))
@@ -400,7 +397,6 @@ fn install_systemd_timer() -> Result<bool> {
     let timer = unit_dir.join("dsync-watch.timer");
 
     let data_dir = dirs::data_dir().unwrap_or_default().join("dsync");
-    let log_file = data_dir.join("watch.log");
     let binary = std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("dsync"))
         .display()
@@ -430,7 +426,11 @@ fn install_systemd_timer() -> Result<bool> {
     let _ = std::fs::create_dir_all(&data_dir);
     std::fs::write(&service, service_unit)?;
     std::fs::write(&timer, timer_unit)?;
-    println!("✓ wrote systemd units: {service} / {timer}");
+    println!(
+        "✓ wrote systemd units: {} / {}",
+        service.display(),
+        timer.display()
+    );
     println!("  enable:  systemctl --user daemon-reload && systemctl --user enable --now dsync-watch.timer");
     Ok(true)
 }
@@ -510,8 +510,9 @@ mod tests {
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.machine.name, "desktop");
         assert_eq!(back.hub_connect.unwrap().address, "10.0.0.5:42069");
+        let projects = back.projects.as_ref().unwrap();
         assert_eq!(
-            back.projects.unwrap()["dotfiles"].machines.unwrap()[1],
+            projects["dotfiles"].machines.as_ref().unwrap()[1],
             "notebook"
         );
     }
