@@ -80,21 +80,27 @@ pub fn commit_and_push(name: &str, path: &Path) -> Result<bool> {
 }
 
 fn git_output(path: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .args(args)
-        .current_dir(path)
-        .output()
-        .ok()
+    git_cmd(path).args(args).output().ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
 }
 
 fn run_git(path: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .args(args)
-        .current_dir(path)
-        .output()
+    git_cmd(path).args(args).output()
         .unwrap_or_else(|e| panic!("failed to run git {args:?} in {}: {e}", path.display()))
+}
+
+/// git-команда с быстрым отказом, если origin недоступен: по умолчанию
+/// `git fetch` к упавшему хосту висит на TCP-таймауте 2+ минуты. Отключаем
+/// интерактив (BatchMode) и ограничиваем подключение 10 секундами.
+fn git_cmd(path: &Path) -> Command {
+    let mut c = Command::new("git");
+    c.current_dir(path);
+    c.env(
+        "GIT_SSH_COMMAND",
+        "ssh -o ConnectTimeout=10 -o BatchMode=yes",
+    );
+    c
 }
 
 fn stderr_of(o: &Output) -> String {
