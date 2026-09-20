@@ -192,18 +192,17 @@ async fn exec_inner(
     // дыра) TCP-connect висит минуты по системному таймауту, копя висящие
     // пул-таски на каждую (проект × машина). Старый код оборачивал в таймаут
     // весь exec, включая connect — сохраняем это поведение.
-    let mut session = match tokio::time::timeout(timeout, client::connect(config, addr, handler))
-        .await
-    {
-        Err(_) => {
-            return Err(anyhow::anyhow!(
-                "ssh to {user}@{host}:{port} timed out after {}s",
-                timeout.as_secs()
-            ))
-        }
-        Ok(Err(e)) => return Err(enrich_connect_error(&verification, e)),
-        Ok(Ok(s)) => s,
-    };
+    let mut session =
+        match tokio::time::timeout(timeout, client::connect(config, addr, handler)).await {
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "ssh to {user}@{host}:{port} timed out after {}s",
+                    timeout.as_secs()
+                ))
+            }
+            Ok(Err(e)) => return Err(enrich_connect_error(&verification, e)),
+            Ok(Ok(s)) => s,
+        };
 
     // Первый контакт (TOFU): транспорту поверили — фиксируем отпечаток,
     // чтобы следующий пул уже сравнивал, а не пере-доверял.

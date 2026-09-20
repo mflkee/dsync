@@ -9,7 +9,7 @@ use tokio::signal;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 
-use crate::config::Config;
+use crate::config::{Config, SecretTokens};
 use crate::protocol::{
     error_envelope, PullOutcome, PullRequest, PullResponse, PushRequest, PushResponse,
 };
@@ -24,24 +24,50 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-pub async fn run_server(cfg: Config) -> Result<()> {
-    let hub_cfg = cfg
-        .hub
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no [hub] section in config — can't run daemon"))?;
+/// Итоговая карта токенов хаба: конфиг главнее, sidecar-файл — fallback.
+/// Пустая карта означает fail-secure (хаб не стартует).
+fn effective_hub_tokens(
+    cfg_tokens: &std::collections::HashMap<String, String>,
+    secret: SecretTokens,
+) -> std::collections::HashMap<String, String> {
+    if !cfg_tokens.is_empty() {
+        cfg_tokens.clone()
+    } else {
+        secret.hub.map(|h| h.tokens).unwrap_or_default()
+    }
+}
 
-    // Fail-secure: без токенов хаб не стартует (см. hub-auth).
-    if hub_cfg.tokens.is_empty() {
+pub async fn run_server(cfg: Config) -> Result<()> {
+    // Fail-secure: без токенов хаб не стартует (см. hub-auth). Источник —
+    // `[hub] tokens` из конфига, иначе — sidecar `tokens.toml` (главный конфиг
+    // управляется chezmoi и перегенерируется при `chezmoi apply`, поэтому
+    // секреты в нём не живут; см. config::read_secret_tokens).
+    let (cfg_tokens, bind): (std::collections::HashMap<String, String>, SocketAddr) = {
+        let hub_cfg = cfg
+            .hub
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no [hub] section in config — can't run daemon"))?;
+        (hub_cfg.tokens.clone(), hub_cfg.bind.parse()?)
+    };
+    let hub_tokens = effective_hub_tokens(&cfg_tokens, crate::config::read_secret_tokens());
+    if hub_tokens.is_empty() {
         anyhow::bail!(
             "hub refuses to start: [hub] tokens is missing/empty.\n\
-             Configure per-machine tokens: rerun `dsync init` with the hub role, or set:\n\n\
+             Configure per-machine tokens: rerun `dsync init` with the hub role, set\n\
+             [hub] tokens in the config, or create the sidecar file:\n\n\
+             ~/.config/dsync/dsync/tokens.toml\n\
              [hub]\n\
              tokens = {{ \"<machine>\": \"<token>\" }}\n\n\
              and put the matching [hub_connect] token on each client."
         );
     }
+    // Резолвим токены один раз и кладём обратно в конфиг: проверка запросов
+    // (authorized) читает cfg.hub.tokens, так что быть должна уже резолвленная
+    // карта, а не только конфиговая.
+    let mut cfg = cfg;
+    cfg.hub.as_mut().unwrap().tokens = hub_tokens;
+    let hub_cfg = cfg.hub.as_ref().unwrap();
 
-    let bind: SocketAddr = hub_cfg.bind.parse()?;
     info!("starting dsync hub on {bind}");
 
     let data_dir = cfg.hub_data_dir();
@@ -465,6 +491,41 @@ mod tests {
     use std::sync::Arc;
 
     use crate::config::{HubConfig, MachineConfig, ProjectConfig, RemoteMachine};
+
+    #[test]
+    fn hub_token_precedence_config_over_sidecar() {
+        use std::collections::HashMap;
+        // Конфиг непустой → победил конфиг.
+        let cfg_toks = HashMap::from([("desktop".to_string(), "cfg-tok".to_string())]);
+        let secret = SecretTokens {
+            hub: Some(crate::config::SecretHub {
+                tokens: HashMap::from([("desktop".to_string(), "file-tok".to_string())]),
+            }),
+            hub_connect: None,
+        };
+        let got = effective_hub_tokens(&cfg_toks, secret);
+        assert_eq!(got["desktop"], "cfg-tok");
+    }
+
+    #[test]
+    fn hub_token_precedence_sidecar_when_config_empty() {
+        use std::collections::HashMap;
+        let secret = SecretTokens {
+            hub: Some(crate::config::SecretHub {
+                tokens: HashMap::from([("notebook".to_string(), "file-tok".to_string())]),
+            }),
+            hub_connect: None,
+        };
+        let got = effective_hub_tokens(&HashMap::new(), secret);
+        assert_eq!(got["notebook"], "file-tok");
+    }
+
+    #[test]
+    fn hub_token_precedence_empty_when_both_empty() {
+        use std::collections::HashMap;
+        let got = effective_hub_tokens(&HashMap::new(), SecretTokens::default());
+        assert!(got.is_empty());
+    }
 
     /// Принимающий всё verifier — тестовый аналог TOFU-клиента.
     #[derive(Debug)]

@@ -208,9 +208,19 @@ pub async fn send_status(conn: &Connection, req: &StatusRequest) -> Result<Statu
 
 /// Hub auth token from `[hub_connect]`, empty when unset (hub will reject).
 pub fn hub_token(cfg: &Config) -> String {
-    cfg.hub_connect
+    // Токен из `[hub_connect]`, иначе — sidecar `tokens.toml` (главный конфиг
+    // перегенерируется chezmoi-apply, секреты в нём не живут).
+    if let Some(t) = cfg
+        .hub_connect
         .as_ref()
-        .map(|h| h.token.clone())
+        .map(|h| h.token.trim())
+        .filter(|t| !t.is_empty())
+    {
+        return t.to_string();
+    }
+    crate::config::read_secret_tokens()
+        .hub_connect
+        .and_then(|h| h.token)
         .unwrap_or_default()
 }
 

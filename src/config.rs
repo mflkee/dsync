@@ -126,6 +126,68 @@ pub struct HubConnectConfig {
     pub token: String,
 }
 
+/// Секретные токены в отдельном sidecar-файле `~/.config/dsync/dsync/tokens.toml`
+/// (0600, игнорируется chezmoi-apply и dsync-capture). В главном `config.toml`
+/// их держать нельзя: файл управляется chezmoi и перегенерируется при каждом
+/// `chezmoi apply` (post_pull dotfiles), стирая ручные правки. Формат:
+///
+/// ```toml
+/// # у каждого клиента
+/// [hub_connect]
+/// token = "…"
+///
+/// # только у хаба
+/// [hub]
+/// tokens = { "desktop" = "…", "notebook" = "…" }
+/// ```
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SecretTokens {
+    #[serde(default)]
+    pub hub_connect: Option<SecretHubConnect>,
+    #[serde(default)]
+    pub hub: Option<SecretHub>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SecretHubConnect {
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SecretHub {
+    #[serde(default)]
+    pub tokens: HashMap<String, String>,
+}
+
+/// Путь к sidecar-файлу токенов — рядом с главным конфигом.
+pub fn tokens_path() -> PathBuf {
+    directories::ProjectDirs::from("com", "mflkee", "dsync")
+        .map(|d| d.config_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("~/.config/dsync"))
+        .join("dsync/tokens.toml")
+}
+
+/// Читает токены из sidecar-файла. Отсутствие файла или битый TOML — не
+/// ошибка (просто пустой результат): пустоту обрабатывает вызывающий код
+/// (fail-secure хаба / пустой токен клиента).
+pub fn read_secret_tokens() -> SecretTokens {
+    read_secret_tokens_from(&tokens_path())
+}
+
+pub fn read_secret_tokens_from(path: &std::path::Path) -> SecretTokens {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return SecretTokens::default();
+    };
+    match toml::from_str(&content) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("ignoring malformed tokens file {}: {e:#}", path.display());
+            SecretTokens::default()
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ProjectConfig {
     pub path: PathBuf,
@@ -287,5 +349,47 @@ mod tests {
         let old: Config = toml::from_str("machine = { name = 'x' }\n").unwrap();
         assert!(old.hub.is_none());
         assert!(old.hub_connect.is_none());
+    }
+
+    fn tmp_tokens_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dsync-secrets-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn secret_tokens_missing_file_is_empty() {
+        let dir = tmp_tokens_dir("missing");
+        let t = read_secret_tokens_from(&dir.join("tokens.toml"));
+        assert!(t.hub_connect.is_none());
+        assert!(t.hub.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn secret_tokens_parse_hub_and_client() {
+        let dir = tmp_tokens_dir("parse");
+        std::fs::write(
+            dir.join("tokens.toml"),
+            "[hub_connect]\ntoken = \"tok-m\"\n\n[hub]\ntokens = { \"desktop\" = \"tok-d\", \"notebook\" = \"tok-n\" }\n",
+        )
+        .unwrap();
+        let t = read_secret_tokens_from(&dir.join("tokens.toml"));
+        assert_eq!(t.hub_connect.unwrap().token.unwrap(), "tok-m");
+        let hub = t.hub.unwrap();
+        assert_eq!(hub.tokens.get("desktop").unwrap(), "tok-d");
+        assert_eq!(hub.tokens.get("notebook").unwrap(), "tok-n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn secret_tokens_malformed_is_empty_not_error() {
+        let dir = tmp_tokens_dir("malformed");
+        std::fs::write(dir.join("tokens.toml"), "not = [valid toml").unwrap();
+        let t = read_secret_tokens_from(&dir.join("tokens.toml"));
+        assert!(t.hub_connect.is_none());
+        assert!(t.hub.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
