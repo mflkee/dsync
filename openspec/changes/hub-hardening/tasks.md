@@ -42,4 +42,22 @@
 
 - [x] 7.1 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and the full `cargo test` suite pass with the new code
 - [x] 7.2 Update README (Security section: token auth + SSH host trust; config example with `[hub] tokens`, `[hub_connect] token`, limits/retention) and CHANGELOG (Unreleased: added auth/limits/retry/retention/ssh-trust, **BREAKING** note for hub tokens). Verify rendered docs mention the migration steps from design.md
-- [ ] 7.3 Live migration smoke test (manual): on the hub host add `[hub] tokens`, deploy the new binary, restart `dsync-hub.service`, add a client token, then `dsync doctor` → `dsync push` → `dsync status` validates auth, pulls, and outcome display end-to-end
+- [x] 7.3 Live migration smoke test (manual, done against archlinux-server fleet):
+  - Hub tokens are **sidecar** (`~/.config/dsync/dsync/tokens.toml`, 0600, chezmoi-ignored in
+    `dotfiles/.chezmoiignore`); `config.toml` is token-less by design — `chezmoi apply` regenerates it,
+    so inline secrets were erased in the old scheme (smoke-confirmed). Precedence: config > sidecar,
+    empty → fail-secure.
+  - Deployed fresh client (`dsync`) + hub (`dsync-hub daemon`) binaries; restart confirmed tokens resolve
+    from `tokens.toml` ("4 machines loaded from disk" with a token-less config).
+  - Validated: `dsync doctor` → ✓ hub token (sidecar-aware), `dsync push` from mkair **and** server
+    accepted via sidecar tokens, `dsync status` shows per-machine pull outcomes with retries/backoff.
+  - Fleet result (live): archlinux-mkair + archlinux-server pulls `ok` (dsync up to 2 attempts,
+    dotfiles 1–2), desktop/notebook `FAILED` ×3 with differentiated `connect to ... timed out after
+    30s` (hosts offline — correct behavior, no hang).
+  - Smoke surfaced and fixed: pull exec shared the 30s connect timeout, killing `post_pull` builds
+    (`cargo build`) → split timeouts (`[hub] pull_timeout_secs`, default 300) with distinct error
+    messages; concurrent state saves raced on one tmp file → serialized `save_lock` + unique tmp name.
+  - Sidecar survives `chezmoi apply` on mkair (config stays token-less, `tokens.toml` intact) and the
+    hub keeps accepting pushes afterwards.
+  - desktop/notebook are offline; they pick up the new client + `tokens.toml` via their 15-min timer
+    when back online (no action needed now).
