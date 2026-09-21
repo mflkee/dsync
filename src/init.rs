@@ -169,6 +169,7 @@ pub fn run() -> Result<()> {
             Some(remotes)
         },
         capture: None,
+        state: None,
     };
 
     // Показываем итог и пишем.
@@ -568,6 +569,7 @@ mod tests {
                 .collect(),
             ),
             capture: None,
+            state: None,
         };
         let s = toml::to_string_pretty(&cfg).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
@@ -633,6 +635,7 @@ mod tests {
             projects: None,
             remote: None,
             capture: None,
+            state: None,
         };
         let s = toml::to_string_pretty(&cfg).unwrap();
         let back: Config = toml::from_str(&s).unwrap();

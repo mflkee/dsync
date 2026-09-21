@@ -12,6 +12,7 @@ use tracing::{error, info, warn};
 use crate::config::{Config, SecretTokens};
 use crate::protocol::{
     error_envelope, PullOutcome, PullRequest, PullResponse, PushRequest, PushResponse,
+    StatePullRequest, StatePullResponse, StatePushRequest, StatePushResponse,
 };
 
 use super::state::HubState;
@@ -176,14 +177,18 @@ async fn handle_connection(
                     Ok(val) => {
                         let kind = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
                         let resp = match kind {
-                            "push" | "pull" | "status" if authorized(&val, cfg.hub.as_ref()) => {
+                            "push" | "pull" | "status" | "state_push" | "state_pull"
+                                if authorized(&val, cfg.hub.as_ref()) =>
+                            {
                                 match kind {
                                     "push" => handle_push(val, &state, &cfg).await,
                                     "pull" => handle_pull(val, &state).await,
+                                    "state_push" => handle_state_push(val, &state).await,
+                                    "state_pull" => handle_state_pull(val, &state).await,
                                     _ => handle_status(&state).await,
                                 }
                             }
-                            "push" | "pull" | "status" => {
+                            "push" | "pull" | "status" | "state_push" | "state_pull" => {
                                 let machine =
                                     val.get("machine").and_then(|v| v.as_str()).unwrap_or("?");
                                 warn!("authentication failed for machine '{machine}'");
@@ -194,6 +199,8 @@ async fn handle_connection(
                             }
                             _ => {
                                 error!("unknown message type: {kind}");
+                                let err = error_envelope(format!("unknown message type: {kind}"));
+                                let _ = send.write_all(&serde_json::to_vec(&err)?).await;
                                 continue;
                             }
                         };
@@ -420,6 +427,36 @@ async fn handle_pull(val: serde_json::Value, state: &HubState) -> serde_json::Va
         serde_json::to_value(PullResponse { machines }).unwrap_or_default()
     } else {
         error_envelope("invalid pull request")
+    }
+}
+
+async fn handle_state_push(val: serde_json::Value, state: &Arc<HubState>) -> serde_json::Value {
+    if let Ok(req) = serde_json::from_value::<StatePushRequest>(val) {
+        let n = req.items.len();
+        let seq = state.merge_state(req.items, &req.machine).await;
+        info!("state push from {}: {n} item(s), seq={seq}", req.machine);
+        serde_json::to_value(StatePushResponse {
+            ok: true,
+            error: None,
+            state_seq: seq,
+        })
+        .unwrap_or_default()
+    } else {
+        error_envelope("invalid state_push request")
+    }
+}
+
+async fn handle_state_pull(val: serde_json::Value, state: &HubState) -> serde_json::Value {
+    if let Ok(req) = serde_json::from_value::<StatePullRequest>(val) {
+        let (items, seq) = state.state_since(req.state_seq, &req.machine).await;
+        info!("state pull from {}: {} item(s)", req.machine, items.len());
+        serde_json::to_value(StatePullResponse {
+            items,
+            state_seq: seq,
+        })
+        .unwrap_or_default()
+    } else {
+        error_envelope("invalid state_pull request")
     }
 }
 
@@ -658,8 +695,12 @@ mod tests {
                 .collect(),
             ),
             capture: None,
+            state: None,
         }
     }
+
+    /// Уникальный каталог данных для тестового хаба (иначе state не хранится).
+    static HUB_TEST_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     async fn spawn_test_hub(
         tokens: &[(&str, &str)],
@@ -670,7 +711,13 @@ mod tests {
         let server_cfg = test_server_config();
         let endpoint = Endpoint::server(server_cfg, "127.0.0.1:0".parse().unwrap()).unwrap();
         let addr = endpoint.local_addr().unwrap();
-        let state = Arc::new(HubState::new(None, 30));
+        let dir = std::env::temp_dir().join(format!(
+            "dsync-hub-test-{}-{}",
+            std::process::id(),
+            HUB_TEST_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state = Arc::new(HubState::new(Some(dir), 30));
         let cfg = Arc::new(test_config(tokens, max_message_size, max_concurrency));
         let semaphore = Arc::new(Semaphore::new(max_concurrency as usize));
         tokio::spawn(serve_loop(
@@ -788,6 +835,74 @@ mod tests {
         let val: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(val["type"], "error");
         assert!(val["error"].as_str().unwrap().contains("hub busy"));
+    }
+
+    #[tokio::test]
+    async fn state_push_pull_routing_and_self_exclusion() {
+        use crate::protocol::{StateItem, StatePullRequest, StatePushRequest};
+
+        let (addr, _state, _sem) =
+            spawn_test_hub(&[("desktop", "td"), ("notebook", "tn")], 1 << 20, 4).await;
+        let conn = connect(addr).await;
+
+        // desktop загружает элемент состояния.
+        let push = StatePushRequest {
+            machine: "desktop".into(),
+            token: "td".into(),
+            timestamp: unix_now(),
+            items: vec![StateItem {
+                channel: "opencode".into(),
+                key: "ses_1".into(),
+                updated: 5,
+                data: r#"{"k":1}"#.into(),
+                ..Default::default()
+            }],
+        };
+        let resp = crate::client::connect::send_state_push(&conn, &push)
+            .await
+            .unwrap();
+        assert!(resp.ok);
+        assert_eq!(resp.state_seq, 1);
+
+        // notebook видит элемент.
+        let pull = StatePullRequest {
+            machine: "notebook".into(),
+            token: "tn".into(),
+            state_seq: 0,
+        };
+        let r = crate::client::connect::send_state_pull(&conn, &pull)
+            .await
+            .unwrap();
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.items[0].key, "ses_1");
+        assert_eq!(r.items[0].origin, "desktop");
+        assert_eq!(r.items[0].data, r#"{"k":1}"#);
+        assert_eq!(r.state_seq, 1);
+
+        // desktop не получает свой же элемент обратно.
+        let own = StatePullRequest {
+            machine: "desktop".into(),
+            token: "td".into(),
+            state_seq: 0,
+        };
+        assert!(crate::client::connect::send_state_pull(&conn, &own)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+
+        // Чужой токен — отказ (и не утечка).
+        let bad = StatePullRequest {
+            machine: "notebook".into(),
+            token: "wrong".into(),
+            state_seq: 0,
+        };
+        let err = crate::client::connect::send_state_pull(&conn, &bad).await;
+        assert!(err.is_err(), "bad token must be rejected");
+        assert!(err
+            .unwrap_err()
+            .to_string()
+            .contains("authentication failed"));
     }
 
     #[tokio::test(start_paused = true)]

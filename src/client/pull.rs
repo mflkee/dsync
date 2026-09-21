@@ -35,5 +35,8 @@ pub async fn pull(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
         out.push(format!("  {name}: {} projects", state.projects.len()));
     }
 
+    // Не-git состояние флота (tmux-снапшот, сессии opencode) — best-effort.
+    out.extend(crate::client::state::sync_state(&cfg).await);
+
     Ok(out)
 }

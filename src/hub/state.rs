@@ -4,7 +4,43 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tokio::sync::RwLock;
 
-use crate::protocol::{MachineState, PullOutcome};
+use crate::protocol::{MachineState, PullOutcome, StateItem};
+
+/// Метаданные одного элемента состояния (сам payload — в отдельном файле).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct StoredStateItem {
+    channel: String,
+    key: String,
+    updated: i64,
+    origin: String,
+    seq: i64,
+    #[serde(default)]
+    meta: Option<String>,
+    /// Относительный путь (под `<data_dir>/state`) к файлу с payload.
+    file: String,
+}
+
+/// Индекс состояния хаба: сквозной `seq` и метаданные всех элементов.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct StateIndex {
+    #[serde(default)]
+    seq: i64,
+    #[serde(default)]
+    items: Vec<StoredStateItem>,
+}
+
+/// Безопасное имя файла из ключа элемента.
+fn sanitize_key(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
 
 fn expand(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
@@ -28,11 +64,15 @@ fn unix_now() -> i64 {
 pub struct HubState {
     machines: RwLock<HashMap<String, MachineState>>,
     data_dir: Option<PathBuf>,
-    /// Machines not seen for this many days are pruned (0 = never prune).
+    /// Машины не подававшие признаков жизни дольше retention (0 = никогда).
     retention_days: u64,
     /// Сериализует одновременные `save()`: несколько пулл-тасок финишируют
     /// разом и писали в один tmp-файл (rename второго ловил ENOENT).
     save_lock: tokio::sync::Mutex<()>,
+    /// Не-git состояние флота (tmux / opencode), проиндексированное по (channel, key).
+    state_index: RwLock<StateIndex>,
+    /// Каталог для payload-файлов состояния (`<data_dir>/state`).
+    state_dir: Option<PathBuf>,
 }
 
 impl HubState {
@@ -42,14 +82,25 @@ impl HubState {
             .as_ref()
             .and_then(|d| Self::load_machines(d).ok())
             .unwrap_or_default();
+        let state_dir = data_dir.as_ref().map(|d| d.join("state"));
+        let state_index = data_dir
+            .as_ref()
+            .and_then(|d| Self::load_state_index(d).ok())
+            .unwrap_or_default();
 
-        tracing::info!("hub state: {} machines loaded from disk", machines.len());
+        tracing::info!(
+            "hub state: {} machines, {} state items loaded from disk",
+            machines.len(),
+            state_index.items.len()
+        );
 
         Self {
             machines: RwLock::new(machines),
             data_dir,
             retention_days,
             save_lock: tokio::sync::Mutex::new(()),
+            state_index: RwLock::new(state_index),
+            state_dir,
         }
     }
 
@@ -111,6 +162,146 @@ impl HubState {
     pub async fn all_machines(&self) -> HashMap<String, MachineState> {
         let machines = self.machines.read().await;
         machines.clone()
+    }
+
+    /// Склеивает присланные элементы состояния (last-write-wins по `updated`),
+    /// присваивает сквозные `seq` и сохраняет индекс. Возвращает текущий seq.
+    pub async fn merge_state(&self, items: Vec<StateItem>, origin: &str) -> i64 {
+        if self.state_dir.is_none() {
+            return 0;
+        }
+        let state_dir = self.state_dir.clone().unwrap();
+        {
+            let mut idx = self.state_index.write().await;
+            for item in items {
+                if item.key.is_empty() || item.channel.is_empty() {
+                    continue;
+                }
+                // LWW: не откатываем более свежее чужое значение старым.
+                if let Some(existing) = idx
+                    .items
+                    .iter()
+                    .find(|i| i.channel == item.channel && i.key == item.key)
+                {
+                    if item.updated <= existing.updated && existing.origin != origin {
+                        continue;
+                    }
+                }
+
+                idx.seq += 1;
+                let seq = idx.seq;
+                let rel = format!(
+                    "{}/{}",
+                    sanitize_key(&item.channel),
+                    sanitize_key(&item.key)
+                );
+                let path = state_dir.join(&rel);
+                if let Some(parent) = path.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                if tokio::fs::write(&path, item.data.as_bytes()).await.is_err() {
+                    idx.seq -= 1;
+                    continue;
+                }
+                idx.items
+                    .retain(|i| !(i.channel == item.channel && i.key == item.key));
+                let updated = item.updated;
+                let meta = item.meta;
+                let channel = item.channel;
+                let key = item.key;
+                idx.items.push(StoredStateItem {
+                    channel,
+                    key,
+                    updated,
+                    origin: origin.to_string(),
+                    seq,
+                    meta,
+                    file: rel,
+                });
+            }
+        }
+        self.save_state_index().await;
+        self.state_index.read().await.seq
+    }
+
+    /// Элементы состояния с `seq > since`, записанные не этой машиной.
+    /// Возвращает (элементы, текущий seq хаба).
+    pub async fn state_since(&self, since: i64, exclude_origin: &str) -> (Vec<StateItem>, i64) {
+        let (selected, cur): (Vec<StoredStateItem>, i64) = {
+            let idx = self.state_index.read().await;
+            (
+                idx.items
+                    .iter()
+                    .filter(|i| i.seq > since && i.origin != exclude_origin)
+                    .cloned()
+                    .collect(),
+                idx.seq,
+            )
+        };
+        let Some(state_dir) = self.state_dir.clone() else {
+            return (Vec::new(), cur);
+        };
+        let mut out = Vec::with_capacity(selected.len());
+        for it in selected {
+            let path = state_dir.join(&it.file);
+            let Ok(data) = tokio::fs::read_to_string(&path).await else {
+                continue;
+            };
+            out.push(StateItem {
+                channel: it.channel,
+                key: it.key,
+                updated: it.updated,
+                origin: it.origin,
+                seq: it.seq,
+                meta: it.meta,
+                data,
+            });
+        }
+        (out, cur)
+    }
+
+    async fn save_state_index(&self) {
+        let _guard = self.save_lock.lock().await;
+        let Some(dir) = &self.data_dir else {
+            return;
+        };
+        let idx = self.state_index.read().await;
+        let data = match serde_json::to_string_pretty(&*idx) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("failed to serialize state index: {e}");
+                return;
+            }
+        };
+        let state_dir = dir.join("state");
+        if let Err(e) = tokio::fs::create_dir_all(&state_dir).await {
+            tracing::error!("failed to create state dir {state_dir:?}: {e}");
+            return;
+        }
+        let tmp = state_dir.join(format!(
+            "index.json.tmp-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        if let Err(e) = tokio::fs::write(&tmp, data).await {
+            tracing::error!("failed to save state index: {e}");
+            return;
+        }
+        if let Err(e) = tokio::fs::rename(&tmp, state_dir.join("index.json")).await {
+            tracing::error!("failed to rename state index: {e}");
+        }
+    }
+
+    fn load_state_index(dir: &Path) -> Result<StateIndex> {
+        let path = dir.join("state/index.json");
+        if !path.exists() {
+            return Ok(StateIndex::default());
+        }
+        let data = std::fs::read_to_string(&path)?;
+        Ok(serde_json::from_str(&data).unwrap_or_default())
     }
 
     pub async fn status(&self) -> Result<crate::protocol::StatusResponse> {
@@ -369,6 +560,58 @@ mod tests {
                 .await;
             assert!(!state.prune_stale().await);
             assert!(state.all_machines().await.contains_key("ancient"));
+        });
+    }
+
+    #[test]
+    fn state_merge_and_since_roundtrip() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = std::env::temp_dir().join(format!("dsync-st-items-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let state = HubState::new(Some(dir.clone()), 30);
+            let items = vec![StateItem {
+                channel: "opencode".into(),
+                key: "ses_a".into(),
+                updated: 100,
+                data: r#"{"a":1}"#.into(),
+                ..Default::default()
+            }];
+            assert_eq!(state.merge_state(items, "notebook").await, 1);
+
+            // Другая машина видит элемент; автор — нет.
+            let (got, cur) = state.state_since(0, "desktop").await;
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].key, "ses_a");
+            assert_eq!(got[0].origin, "notebook");
+            assert_eq!(got[0].data, r#"{"a":1}"#);
+            assert_eq!(cur, 1);
+            assert!(state.state_since(0, "notebook").await.0.is_empty());
+
+            // Персистентность: перечитываем с диска.
+            let state2 = HubState::new(Some(dir.clone()), 30);
+            let (got2, cur2) = state2.state_since(0, "desktop").await;
+            assert_eq!(got2.len(), 1);
+            assert_eq!(cur2, 1);
+
+            // LWW: устаревшее чужое обновление игнорируется.
+            let stale = vec![StateItem {
+                channel: "opencode".into(),
+                key: "ses_a".into(),
+                updated: 50,
+                data: "OLD".into(),
+                ..Default::default()
+            }];
+            assert_eq!(
+                state2.merge_state(stale, "desktop").await,
+                1,
+                "stale ignored"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
         });
     }
 }

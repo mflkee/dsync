@@ -51,6 +51,10 @@ pub(super) async fn push_core(cfg: Config, machine: Option<String>) -> Result<Ve
         anyhow::bail!("push failed: {}", resp.error.unwrap_or_default());
     }
 
+    // Не-git состояние флота (tmux-снапшот, сессии opencode) — best-effort:
+    // ошибки логируются и не валят общий push.
+    out.extend(crate::client::state::sync_state(&cfg).await);
+
     Ok(out)
 }
 
@@ -110,6 +114,7 @@ mod tests {
             projects: None,
             remote: None,
             capture: None,
+            state: None,
         }
     }
 

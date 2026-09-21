@@ -22,6 +22,42 @@ pub struct Config {
     /// Захват live-правок dotfiles в их репозитории (см. `src/client/capture.rs`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture: Option<CaptureConfig>,
+    /// Синхронизация не-git состояния флота: tmux-раскладка и сессии opencode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<StateConfig>,
+}
+
+/// Синхронизация не-git состояния флота через хаб (см. `src/client/state.rs`).
+///
+/// ```toml
+/// [state]
+/// tmux = true            # синхронизировать tmux-resurrect снапшот
+/// tmux_restore = false   # после применения — запускать resurrect restore
+///
+/// [state.opencode]
+/// # каталоги проектов, чьи сессии синхронизируем (по умолчанию — все [projects.*])
+/// projects = ["~/projects/mushroomwars"]
+/// ```
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct StateConfig {
+    /// Синхронизировать снапшот tmux-resurrect.
+    #[serde(default)]
+    pub tmux: bool,
+    /// После применения чужого снапшота запускать `tmux-resurrect` restore
+    /// (в уже запущенном tmux). По умолчанию выключено: восстановление
+    /// в живую сессию может насаждать окна, если делать это слишком часто.
+    #[serde(default)]
+    pub tmux_restore: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opencode: Option<OpencodeStateConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct OpencodeStateConfig {
+    /// Каталоги проектов, сессии которых синхронизируем. Если не задано —
+    /// берутся пути всех `[projects.*]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projects: Option<Vec<PathBuf>>,
 }
 
 /// Настройка авто-захвата правок живых dotfiles-файлов при `dsync push`.
@@ -408,5 +444,31 @@ mod tests {
         assert!(t.hub_connect.is_none());
         assert!(t.hub.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn state_section_parses() {
+        let cfg: Config = toml::from_str(
+            "machine = { name = 'x' }\n\
+             [state]\n\
+             tmux = true\n\
+             tmux_restore = true\n\
+             [state.opencode]\n\
+             projects = ['~/projects/mushroomwars']\n",
+        )
+        .unwrap();
+        let st = cfg.state.expect("state present");
+        assert!(st.tmux);
+        assert!(st.tmux_restore);
+        assert_eq!(
+            st.opencode.unwrap().projects.unwrap()[0],
+            PathBuf::from("~/projects/mushroomwars")
+        );
+    }
+
+    #[test]
+    fn missing_state_section_is_none() {
+        let cfg: Config = toml::from_str("machine = { name = 'x' }\n").unwrap();
+        assert!(cfg.state.is_none());
     }
 }

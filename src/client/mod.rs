@@ -2,6 +2,7 @@ pub mod capture;
 pub mod connect;
 mod pull;
 mod push;
+pub mod state;
 mod watch;
 
 pub use capture::capture;

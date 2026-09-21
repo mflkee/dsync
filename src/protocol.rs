@@ -123,6 +123,77 @@ pub struct MachineStatus {
     pub pulls: HashMap<String, PullOutcome>,
 }
 
+// ---------------------------------------------------------------------------
+// Non-git fleet state (tmux snapshot / opencode sessions)
+// ---------------------------------------------------------------------------
+
+/// One unit of non-git synced state.
+///
+/// Channels: `tmux` (a single item keyed `latest`) and `opencode` (one item per
+/// exported session, keyed by session id). The hub assigns `seq` and `origin`;
+/// clients send `seq = 0` and ignore `origin` on upload.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct StateItem {
+    /// Channel: `"tmux"` | `"opencode"`.
+    pub channel: String,
+    /// Item identity inside the channel (`tmux`: `"latest"`; `opencode`: session id).
+    pub key: String,
+    /// Source timestamp for last-write-wins (ms for opencode, seconds for tmux).
+    #[serde(default)]
+    pub updated: i64,
+    /// Machine that last wrote the item (set by the hub).
+    #[serde(default)]
+    pub origin: String,
+    /// Hub-assigned sequence number (set by the hub; 0 from clients).
+    #[serde(default)]
+    pub seq: i64,
+    /// Optional metadata (opencode: project directory; tmux: snapshot filename).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<String>,
+    /// Payload (exported session JSON, or the tmux-resurrect save file text).
+    pub data: String,
+}
+
+/// Client → hub: upload locally changed state items.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StatePushRequest {
+    pub machine: String,
+    #[serde(default)]
+    pub token: String,
+    pub timestamp: i64,
+    #[serde(default)]
+    pub items: Vec<StateItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StatePushResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Hub's current global state sequence after the merge.
+    #[serde(default)]
+    pub state_seq: i64,
+}
+
+/// Client → hub: fetch state items newer than `state_seq`, excluding own origin.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StatePullRequest {
+    pub machine: String,
+    #[serde(default)]
+    pub token: String,
+    #[serde(default)]
+    pub state_seq: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StatePullResponse {
+    #[serde(default)]
+    pub items: Vec<StateItem>,
+    /// Hub's current global state sequence (store it for the next pull).
+    #[serde(default)]
+    pub state_seq: i64,
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -207,5 +278,33 @@ mod tests {
         let st: MachineStatus =
             serde_json::from_str(r#"{"online":true,"last_seen":1,"last_push":1}"#).unwrap();
         assert!(st.pulls.is_empty());
+    }
+
+    #[test]
+    fn state_item_roundtrips_and_defaults() {
+        let it = StateItem {
+            channel: "opencode".into(),
+            key: "ses_x".into(),
+            updated: 5,
+            meta: Some("/p".into()),
+            data: "{}".into(),
+            ..Default::default()
+        };
+        let back: StateItem = serde_json::from_str(&serde_json::to_string(&it).unwrap()).unwrap();
+        assert_eq!(back.key, "ses_x");
+        assert_eq!(back.origin, "", "origin default");
+        assert_eq!(back.seq, 0, "seq default");
+        assert_eq!(back.meta.as_deref(), Some("/p"));
+    }
+
+    #[test]
+    fn state_responses_tolerate_minimal_json() {
+        let r: StatePullResponse = serde_json::from_str("{}").unwrap();
+        assert!(r.items.is_empty());
+        assert_eq!(r.state_seq, 0);
+
+        let p: StatePushResponse = serde_json::from_str(r#"{"ok":true}"#).unwrap();
+        assert!(p.ok);
+        assert_eq!(p.state_seq, 0);
     }
 }
