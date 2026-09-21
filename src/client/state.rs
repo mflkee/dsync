@@ -29,6 +29,8 @@ const TMUX_CHANNEL: &str = "tmux";
 const OPENCODE_CHANNEL: &str = "opencode";
 /// Не приближаемся к hub `max_message_size` (8 MB по умолчанию).
 const MAX_BATCH_BYTES: usize = 6 * 1024 * 1024;
+/// Таймаут одной state-операции: загрузка/выгрузка может быть многомегабайтной.
+const STATE_TIMEOUT: Duration = Duration::from_secs(180);
 
 // ---------------------------------------------------------------------------
 // Локальный индекс
@@ -367,11 +369,8 @@ pub async fn sync_state(cfg: &Config) -> Vec<String> {
             timestamp: now_secs(),
             items: batch.clone(),
         };
-        match tokio::time::timeout(
-            Duration::from_secs(30),
-            super::connect::send_state_push(&conn, &req),
-        )
-        .await
+        match tokio::time::timeout(STATE_TIMEOUT, super::connect::send_state_push(&conn, &req))
+            .await
         {
             Ok(Ok(resp)) if resp.ok => mark_synced(&batch),
             Ok(Ok(resp)) => warn!("state push rejected: {}", resp.error.unwrap_or_default()),
@@ -392,12 +391,7 @@ pub async fn sync_state(cfg: &Config) -> Vec<String> {
         token: super::connect::hub_token(cfg),
         state_seq: get_seq(),
     };
-    match tokio::time::timeout(
-        Duration::from_secs(30),
-        super::connect::send_state_pull(&conn, &req),
-    )
-    .await
-    {
+    match tokio::time::timeout(STATE_TIMEOUT, super::connect::send_state_pull(&conn, &req)).await {
         Ok(Ok(resp)) => {
             let (msgs, failed_min) = apply(cfg, resp.items);
             out.extend(msgs);
@@ -603,11 +597,12 @@ fn list_sessions(bin: &Path, project: &Path) -> Vec<SessionRow> {
 }
 
 fn export_session(bin: &Path, project: &Path, id: &str) -> Option<String> {
-    // Экспорт opencode V2 бывает недетерминированно обрезан (баг самого CLI):
-    // валидируем JSON и повторяем, пока не получим целый документ.
+    // Экспорт opencode V2 через общий фоновый сервис недетерминированно
+    // обрезает вывод (баг CLI). `--standalone` (приватный сервер) даёт
+    // стабильный полный JSON; на всякий случай всё равно валидируем.
     for attempt in 1..=5 {
         let out = match Command::new(bin)
-            .args(["session", "export", id])
+            .args(["session", "export", "--standalone", id])
             .current_dir(project)
             .output()
         {
