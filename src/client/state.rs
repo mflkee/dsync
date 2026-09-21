@@ -349,6 +349,15 @@ pub async fn sync_state(cfg: &Config) -> Vec<String> {
     if cfg.state.is_none() {
         return out;
     }
+
+    // Сначала (возможно, долгий) сбор — экспорт сессий opencode занимает
+    // десятки секунд. Делаем это ДО подключения: иначе QUIC-соединение
+    // простаивает и рвётся по idle-таймауту.
+    let changed = collect(cfg);
+    if !changed.is_empty() {
+        info!("state: {} item(s) to upload", changed.len());
+    }
+
     let conn = match super::connect::connect_with_retry(cfg).await {
         Ok(c) => c,
         Err(e) => {
@@ -356,12 +365,6 @@ pub async fn sync_state(cfg: &Config) -> Vec<String> {
             return out;
         }
     };
-
-    // 1. Загрузка локальных изменений (батчами под лимит сообщения).
-    let changed = collect(cfg);
-    if !changed.is_empty() {
-        info!("state: {} item(s) to upload", changed.len());
-    }
     for batch in batches(changed) {
         let req = StatePushRequest {
             machine: cfg.machine.name.clone(),
