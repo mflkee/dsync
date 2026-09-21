@@ -101,7 +101,9 @@ async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectSt
                 .unwrap_or_else(|| std::path::Path::new("~/projects")),
         );
         if root.is_dir() {
-            match crate::projects::status::discover(&root, &static_names) {
+            let excluded: std::collections::HashSet<String> =
+                ap.exclude.iter().flatten().cloned().collect();
+            match crate::projects::status::discover(&root, &static_names, &excluded) {
                 Ok(found) => {
                     if !found.is_empty() {
                         info!("auto-discovered {} new project(s) in {}", found.len(), root.display());

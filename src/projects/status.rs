@@ -18,9 +18,14 @@ pub fn scan(projects: &HashMap<String, ProjectConfig>) -> Result<Vec<ProjectStat
 }
 
 /// Обходит `root` на глубину 1 и собирает состояния git-репозиториев
-/// (каталогов с `.git`), которых нет в `static_names` (явные `[projects.*]`).
+/// (каталогов с `.git`), которых нет в `static_names` (явные `[projects.*]`)
+/// и в `excluded` (скретч/учёба из `[auto_projects] exclude`).
 /// Используется авто-обнаружением новых проектов флота (`[auto_projects]`).
-pub fn discover(root: &Path, static_names: &std::collections::HashSet<String>) -> Result<Vec<ProjectState>> {
+pub fn discover(
+    root: &Path,
+    static_names: &std::collections::HashSet<String>,
+    excluded: &std::collections::HashSet<String>,
+) -> Result<Vec<ProjectState>> {
     let mut states = Vec::new();
     for entry in std::fs::read_dir(root)? {
         let dir = entry?.path();
@@ -30,7 +35,7 @@ pub fn discover(root: &Path, static_names: &std::collections::HashSet<String>) -
         let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if static_names.contains(name) {
+        if static_names.contains(name) || excluded.contains(name) {
             continue;
         }
         states.push(scan_one(name, &dir));
@@ -180,7 +185,12 @@ mod tests {
 
         let static_names =
             std::collections::HashSet::from(["beta".to_string()]);
-        let states = discover(&base, &static_names).unwrap();
+        let excluded = std::collections::HashSet::from(["alpha".to_string()]);
+        // alpha в exclude — не анонсируется вовсе.
+        let states = discover(&base, &static_names, &excluded).unwrap();
+        assert!(states.is_empty(), "excluded repo must not be announced");
+
+        let states = discover(&base, &static_names, &std::collections::HashSet::new()).unwrap();
         assert_eq!(states.len(), 1, "beta excluded by static names");
         assert_eq!(states[0].name, "alpha");
         assert_eq!(states[0].branch, "main");
@@ -188,7 +198,12 @@ mod tests {
         assert_eq!(states[0].path, base.join("alpha").to_string_lossy());
 
         // Без исключений — оба git-репо.
-        let states = discover(&base, &std::collections::HashSet::new()).unwrap();
+        let states = discover(
+            &base,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .unwrap();
         let mut names: Vec<_> = states.iter().map(|s| s.name.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, ["alpha", "beta"]);

@@ -275,6 +275,7 @@ pub struct ProjectConfig {
 /// root = "~/projects"
 /// branch = "main"
 /// machines = ["notebook", "desktop", "archlinux-mkair", "archlinux-server"]
+/// exclude = ["rustlings", "git-tutorial"]   # имена, НЕ разворачиваемые на флоте
 /// ```
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct AutoProjectsConfig {
@@ -288,6 +289,10 @@ pub struct AutoProjectsConfig {
     /// берутся все машины из `[remote.*]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub machines: Option<Vec<String>>,
+    /// Имена проектов (каталогов), которые авто-анонс НЕ трогает: учёба,
+    /// скретч, чужые форки, дубли. Не влияет на явные `[projects.*]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -511,13 +516,15 @@ mod tests {
              [auto_projects]\n\
              root = '~/projects'\n\
              branch = 'main'\n\
-             machines = ['notebook', 'desktop']\n",
+             machines = ['notebook', 'desktop']\n\
+             exclude = ['rustlings', 'study']\n",
         )
         .unwrap();
         let ap = cfg.auto_projects.expect("auto_projects present");
         assert_eq!(ap.root.as_deref().unwrap(), Path::new("~/projects"));
         assert_eq!(ap.branch.as_deref(), Some("main"));
         assert_eq!(ap.machines.as_ref().unwrap().len(), 2);
+        assert_eq!(ap.exclude.as_ref().unwrap().len(), 2);
 
         // Минимальная секция: всё по умолчанию (None).
         let cfg: Config = toml::from_str(
@@ -525,7 +532,7 @@ mod tests {
         )
         .unwrap();
         let ap = cfg.auto_projects.expect("present");
-        assert!(ap.root.is_none() && ap.branch.is_none() && ap.machines.is_none());
+        assert!(ap.root.is_none() && ap.branch.is_none() && ap.machines.is_none() && ap.exclude.is_none());
 
         // Отсутствует секция — None.
         let cfg: Config = toml::from_str("machine = { name = 'x' }\n").unwrap();
