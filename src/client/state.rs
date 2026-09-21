@@ -100,6 +100,16 @@ pub fn set_seq(seq: i64) {
     }
 }
 
+/// Принудительно ставит seq (в т.ч. назад) — чтобы на следующем pull повторить
+/// элементы, которые не удалось применить.
+fn set_seq_force(seq: i64) {
+    let mut idx = StateIndex::load();
+    idx.seq = seq.max(0);
+    if let Err(e) = idx.save() {
+        warn!("can't save state index: {e:#}");
+    }
+}
+
 /// Помечает элементы отправленными/применёнными (после успешной синхронизации).
 fn mark_synced(items: &[StateItem]) {
     let mut idx = StateIndex::load();
@@ -213,13 +223,16 @@ fn collect_opencode(
 // Применение чужих изменений
 // ---------------------------------------------------------------------------
 
-/// Применяет полученные от хаба элементы. Возвращает человекочитаемые строки.
-pub fn apply(cfg: &Config, items: Vec<StateItem>) -> Vec<String> {
+/// Применяет полученные от хаба элементы. Возвращает (строки, минимальный
+/// `seq` неудачного элемента) — второй нужен, чтобы не терять сбойные элементы
+/// при продвижении локального seq.
+pub fn apply(cfg: &Config, items: Vec<StateItem>) -> (Vec<String>, Option<i64>) {
     let Some(st) = cfg.state.as_ref() else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     let mut messages = Vec::new();
     let mut applied: Vec<StateItem> = Vec::new();
+    let mut failed_min: Option<i64> = None;
     for item in items {
         let wanted = match item.channel.as_str() {
             TMUX_CHANNEL => st.tmux,
@@ -237,16 +250,21 @@ pub fn apply(cfg: &Config, items: Vec<StateItem>) -> Vec<String> {
                 messages.push(msg);
                 applied.push(item);
             }
-            Err(e) => warn!(
-                "state: не удалось применить {}/{}: {e:#}",
-                item.channel, item.key
-            ),
+            Err(e) => {
+                warn!(
+                    "state: не удалось применить {}/{}: {e:#}",
+                    item.channel, item.key
+                );
+                if item.seq > 0 {
+                    failed_min = Some(failed_min.map_or(item.seq, |m| m.min(item.seq)));
+                }
+            }
         }
     }
     if !applied.is_empty() {
         mark_synced(&applied);
     }
-    messages
+    (messages, failed_min)
 }
 
 fn apply_one(cfg: &Config, item: &StateItem) -> Result<String> {
@@ -281,6 +299,9 @@ fn apply_tmux(cfg: &Config, item: &StateItem) -> Result<String> {
 
 fn apply_opencode(item: &StateItem) -> Result<String> {
     let bin = opencode_bin().context("opencode binary not found")?;
+    if serde_json::from_str::<serde_json::Value>(&item.data).is_err() {
+        bail!("session JSON невалиден/обрезан ({} байт)", item.data.len());
+    }
     let dir = item
         .meta
         .clone()
@@ -378,9 +399,14 @@ pub async fn sync_state(cfg: &Config) -> Vec<String> {
     .await
     {
         Ok(Ok(resp)) => {
-            let msgs = apply(cfg, resp.items);
+            let (msgs, failed_min) = apply(cfg, resp.items);
             out.extend(msgs);
-            set_seq(resp.state_seq);
+            // Не теряем сбойные элементы: если что-то не применилось, не
+            // продвигаем seq за них — на следующем pull повторим.
+            match failed_min {
+                Some(min) => set_seq_force(min - 1),
+                None => set_seq(resp.state_seq),
+            }
         }
         Ok(Err(e)) => warn!("state pull failed: {e:#}"),
         Err(_) => warn!("state pull timed out (hub too old?)"),
@@ -577,15 +603,30 @@ fn list_sessions(bin: &Path, project: &Path) -> Vec<SessionRow> {
 }
 
 fn export_session(bin: &Path, project: &Path, id: &str) -> Option<String> {
-    let out = Command::new(bin)
-        .args(["session", "export", id])
-        .current_dir(project)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    // Экспорт opencode V2 бывает недетерминированно обрезан (баг самого CLI):
+    // валидируем JSON и повторяем, пока не получим целый документ.
+    for attempt in 1..=5 {
+        let out = match Command::new(bin)
+            .args(["session", "export", id])
+            .current_dir(project)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return None,
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let data = String::from_utf8_lossy(&out.stdout).to_string();
+        if serde_json::from_str::<serde_json::Value>(&data).is_ok() {
+            return Some(data);
+        }
+        warn!(
+            "opencode: экспорт сессии {id} вернул неполный JSON ({} байт), попытка {attempt}/5",
+            data.len()
+        );
     }
-    Some(String::from_utf8_lossy(&out.stdout).to_string())
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -679,7 +720,7 @@ mod tests {
             state: None,
         };
         assert!(collect(&cfg).is_empty());
-        assert!(apply(&cfg, vec![item("tmux", "latest", 1, 3)]).is_empty());
+        assert!(apply(&cfg, vec![item("tmux", "latest", 1, 3)]).0.is_empty());
     }
 
     #[test]
