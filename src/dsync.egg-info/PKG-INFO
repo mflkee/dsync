@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: dsync
+Version: 0.1.0
+Summary: Decentralized chezmoi dotfiles sync via NetBird
+Requires-Python: >=3.11
+Requires-Dist: lz4>=4.4.5
+Requires-Dist: rich>=13.0
+Requires-Dist: tomli-w>=1.0.0
