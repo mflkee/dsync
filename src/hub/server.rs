@@ -328,7 +328,11 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
             let project_name = project.name.clone();
             let machine_name = machine_name.clone();
             let mut cmd = format!(
-                "cd {} && git stash push && git pull --rebase origin {}",
+                // `--autostash`: незакоммиченные правки прячутся на время
+                // rebase и возвращаются обратно. Раньше был `git stash push`
+                // без возврата — WIP молча уезжал в стеши и пропадал из
+                // рабочего дерева (напр. незавершённая работа агента).
+                "cd {} && git pull --rebase --autostash origin {}",
                 q(&path.display().to_string()),
                 q(&branch),
             );
