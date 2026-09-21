@@ -276,9 +276,11 @@ async fn handle_push(
 }
 
 async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubState>) {
-    let (Some(projects_cfg), Some(remote_cfg)) = (&cfg.projects, &cfg.remote) else {
+    let Some(remote_cfg) = &cfg.remote else {
         return;
     };
+    let projects_cfg = cfg.projects.as_ref();
+    let auto_cfg = cfg.auto_projects.as_ref();
     let pull_retries = cfg
         .hub
         .as_ref()
@@ -295,23 +297,58 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
     let ssh_key = cfg.machine.ssh_key_path();
 
     for project in &req.projects {
-        let Some(project_cfg) = projects_cfg.get(&project.name) else {
-            continue;
+        let static_cfg = projects_cfg.and_then(|p| p.get(&project.name));
+
+        // Машины: из явного [projects.X] machines, иначе — [auto_projects]
+        // machines, иначе — весь флот из [remote.*].
+        let machines: Vec<String> = match static_cfg.and_then(|pc| pc.machines.clone()) {
+            Some(m) if !m.is_empty() => m,
+            _ => match auto_cfg.and_then(|a| a.machines.clone()) {
+                Some(m) if !m.is_empty() => m,
+                _ => remote_cfg.keys().cloned().collect(),
+            },
         };
-        let Some(machines) = &project_cfg.machines else {
+        if machines.is_empty() {
             continue;
-        };
+        }
+
+        // Ветка: статическая конфигурация важнее; для авто-проектов — ветка
+        // машины-источника (приходит в состоянии проекта).
+        let branch = static_cfg
+            .and_then(|pc| pc.branch.clone())
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| {
+                if project.branch.is_empty() {
+                    auto_cfg
+                        .and_then(|a| a.branch.clone())
+                        .filter(|b| !b.is_empty())
+                        .unwrap_or_else(|| "main".to_string())
+                } else {
+                    project.branch.clone()
+                }
+            });
+        let path = crate::projects::status::expand_user_path(
+            static_cfg
+                .map(|pc| pc.path.as_path())
+                .unwrap_or(std::path::Path::new(&project.path)),
+        );
+        let cmd = build_pull_command(
+            &path,
+            &branch,
+            &project.url,
+            static_cfg.and_then(|pc| pc.post_pull.as_deref()),
+        );
 
         for machine_name in machines {
-            if machine_name == &req.machine {
+            if machine_name == req.machine {
                 continue;
             }
             if let Some(target) = &req.target {
-                if machine_name != target {
+                if machine_name != *target {
                     continue;
                 }
             }
-            let Some(remote) = remote_cfg.get(machine_name) else {
+            let Some(remote) = remote_cfg.get(&machine_name) else {
                 error!("no remote config for machine {machine_name}");
                 continue;
             };
@@ -319,31 +356,9 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
             let host = remote.host.clone();
             let port = remote.port;
             let user = remote.user.clone();
-            // Путь раскрываем в абсолютный (~/...) и берём в одинарные
-            // кавычки: пробел или спецсимвол в пути/ветке иначе ломает
-            // команду на удалённом shell'е.
-            let path = crate::projects::status::expand_user_path(&project_cfg.path);
-            let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-            let branch = project_cfg.branch.as_deref().unwrap_or("main").to_string();
             let project_name = project.name.clone();
             let machine_name = machine_name.clone();
-            let mut cmd = format!(
-                // `--autostash`: незакоммиченные правки прячутся на время
-                // rebase и возвращаются обратно. Раньше был `git stash push`
-                // без возврата — WIP молча уезжал в стеши и пропадал из
-                // рабочего дерева (напр. незавершённая работа агента).
-                "cd {} && git pull --rebase --autostash origin {}",
-                q(&path.display().to_string()),
-                q(&branch),
-            );
-            if let Some(post) = &project_cfg.post_pull {
-                let post = post.trim();
-                if !post.is_empty() {
-                    cmd.push_str(" && ");
-                    cmd.push_str(post);
-                }
-            }
-
+            let cmd = cmd.clone();
             let state = state.clone();
             let store_path = store_path.clone();
             let ssh_key = ssh_key.clone();
@@ -390,6 +405,40 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
             });
         }
     }
+}
+
+/// Собирает remote-команду разворачивания проекта на целевой машине:
+/// если каталога проекта ещё нет — `git clone` из origin (bootstrap), иначе —
+/// обычный `git pull --rebase --autostash` (WIP не теряется); затем
+/// `post_pull`, если задан. Если `url` пуст (у проекта нет remote) — только
+/// pull по существующему каталогу.
+fn build_pull_command(
+    path: &std::path::Path,
+    branch: &str,
+    url: &str,
+    post_pull: Option<&str>,
+) -> String {
+    let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let dir = q(&path.display().to_string());
+    let dot_git = q(&path.join(".git").display().to_string());
+    let pull = format!("cd {dir} && git pull --rebase --autostash origin {}", q(branch));
+    let mut cmd = if url.trim().is_empty() {
+        pull.clone()
+    } else {
+        format!(
+            "if [ -d {dot_git} ]; then {pull}; else git clone {} {dir} && cd {dir} && git checkout {}; fi",
+            q(url.trim()),
+            q(branch)
+        )
+    };
+    if let Some(post) = post_pull {
+        let post = post.trim();
+        if !post.is_empty() {
+            cmd.push_str(" && ");
+            cmd.push_str(post);
+        }
+    }
+    cmd
 }
 
 /// Retry-обёртка для SSH-пулла: первая попытка + `pull_retries` повторных,
@@ -943,5 +992,40 @@ mod tests {
         assert!(!outcome.ok);
         assert_eq!(outcome.attempts, 1);
         assert_eq!(outcome.error.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn pull_command_clones_when_dir_missing_else_pulls() {
+        let path = std::path::Path::new("/home/mflkee/projects/newproj");
+        // Есть url — bootstrap-клон для машин без каталога.
+        let cmd = build_pull_command(
+            path,
+            "main",
+            "git@github.com:mflkee/mycelium.git",
+            None,
+        );
+        assert!(
+            cmd.contains("if [ -d '/home/mflkee/projects/newproj/.git' ]; then"),
+            "clone-if-missing guard expected, got: {cmd}"
+        );
+        assert!(
+            cmd.contains("git clone 'git@github.com:mflkee/mycelium.git' '/home/mflkee/projects/newproj'"),
+            "clone with url expected, got: {cmd}"
+        );
+        assert!(cmd.contains("git checkout 'main'"));
+
+        // Путь/имя с пробелом и кавычками в пути — экранирование одинарными.
+        let weird = std::path::Path::new("/tmp/a b/'quote'");
+        let cmd = build_pull_command(weird, "main", "git@h:r.git", None);
+        assert!(cmd.contains("'/tmp/a b/'\\''quote'\\''/.git'"));
+    }
+
+    #[test]
+    fn pull_command_pull_only_without_url_and_appends_post_pull() {
+        let path = std::path::Path::new("/home/mflkee/projects/localonly");
+        let cmd = build_pull_command(path, "dev", "", Some("bash ./deploy.sh"));
+        assert!(cmd.starts_with("cd '/home/mflkee/projects/localonly' && git pull --rebase --autostash origin 'dev'"));
+        assert!(cmd.ends_with("&& bash ./deploy.sh"));
+        assert!(!cmd.contains("git clone"));
     }
 }

@@ -104,6 +104,15 @@ pub async fn run(cfg: Config) -> Result<()> {
         println!("\n  (no projects configured)");
     }
 
+    if let Some(ref ap) = cfg.auto_projects {
+        let root = ap
+            .root
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("~/projects"));
+        println!("\nauto_projects ({:?}):", root);
+        println!("  ✓ watching root, new git projects auto-deploy to fleet");
+    }
+
     println!("\nchecking hub connectivity...");
     match try_ping_hub(&cfg).await {
         Ok(_) => {}

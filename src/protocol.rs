@@ -240,6 +240,19 @@ mod tests {
     }
 
     #[test]
+    fn project_state_url_defaults_to_empty() {
+        // Старые клиенты шлют состояние без url — поле дефолтится в "".
+        let ps: ProjectState = serde_json::from_str(
+            r#"{"name":"x","path":"/p","branch":"main","dirty":false,"ahead":0,"behind":0,"commit_hash":"h","last_commit_time":0}"#,
+        )
+        .unwrap();
+        assert_eq!(ps.url, "");
+        let s = serde_json::to_string(&ps).unwrap();
+        let back: ProjectState = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.url, "");
+    }
+
+    #[test]
     fn pull_outcome_serializes_roundtrip() {
         let ok = PullOutcome::success(2);
         let s = serde_json::to_string(&ok).unwrap();

@@ -77,17 +77,43 @@ fn build_push_request(
 }
 
 async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectState>> {
+    let mut static_names = std::collections::HashSet::new();
+    let mut states = Vec::new();
+
     if let Some(projects) = &cfg.projects {
         for (name, config) in projects {
+            static_names.insert(name.clone());
             let path = crate::projects::status::expand_user_path(&config.path);
             if let Err(e) = crate::projects::sync::commit_and_push(name, &path) {
                 tracing::warn!("{e}");
             }
         }
-        crate::projects::status::scan(projects)
-    } else {
-        Ok(Vec::new())
+        states = crate::projects::status::scan(projects)?;
     }
+
+    // Авто-обнаружение новых git-проектов в общем каталоге ([auto_projects]).
+    // Анонсируем (хаб развернёт на флоте), но не коммитим за репозиторий —
+    // авто-уход («project sync: …») остаётся за явными [projects.*].
+    if let Some(ap) = &cfg.auto_projects {
+        let root = crate::projects::status::expand_user_path(
+            ap.root
+                .as_deref()
+                .unwrap_or_else(|| std::path::Path::new("~/projects")),
+        );
+        if root.is_dir() {
+            match crate::projects::status::discover(&root, &static_names) {
+                Ok(found) => {
+                    if !found.is_empty() {
+                        info!("auto-discovered {} new project(s) in {}", found.len(), root.display());
+                        states.extend(found);
+                    }
+                }
+                Err(e) => tracing::warn!("auto_projects scan of {} failed: {e:#}", root.display()),
+            }
+        }
+    }
+
+    Ok(states)
 }
 
 #[cfg(test)]

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Auto-project discovery** (`auto-projects`): dsync watches a root directory
+  (default `~/projects`, depth 1) and automatically announces any new git repo
+  to the fleet — no manual `[projects.*]` config edit needed. Configure via
+  `[auto_projects] { root, branch, machines }`. Announced projects are
+  **bootstrapped** on machines that don't have them yet: the hub `git clone`s
+  them from their origin URL (reported by the pushing machine), then keeps
+  pulling as usual (`git pull --rebase --autostash`). Auto-discovered repos are
+  announced but not auto-committed — dsync-owned repos stay in `[projects.*]`.
 - `dsync capture <path>` + automatic capture of live dotfile edits inside
   `dsync push`: edit `~/.zshrc`, `~/.config/...` etc. from anywhere (nvim,
   bash, sed, scripts) and the change goes fleet-wide — no `chezmoi edit`

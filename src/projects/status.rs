@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(states[0].url, "git@github.com:mflkee/alpha.git");
         assert_eq!(states[0].path, base.join("alpha").to_string_lossy());
 
-        // Без исключений — боth git-репо.
+        // Без исключений — оба git-репо.
         let states = discover(&base, &std::collections::HashSet::new()).unwrap();
         let mut names: Vec<_> = states.iter().map(|s| s.name.as_str()).collect();
         names.sort_unstable();
