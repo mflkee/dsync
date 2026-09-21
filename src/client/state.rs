@@ -235,6 +235,7 @@ pub fn apply(cfg: &Config, items: Vec<StateItem>) -> (Vec<String>, Option<i64>) 
     let mut messages = Vec::new();
     let mut applied: Vec<StateItem> = Vec::new();
     let mut failed_min: Option<i64> = None;
+    let mut refresh_projects: Vec<PathBuf> = Vec::new();
     for item in items {
         let wanted = match item.channel.as_str() {
             TMUX_CHANNEL => st.tmux,
@@ -250,6 +251,11 @@ pub fn apply(cfg: &Config, items: Vec<StateItem>) -> (Vec<String>, Option<i64>) 
         match apply_one(cfg, &item) {
             Ok(msg) => {
                 messages.push(msg);
+                if item.channel == OPENCODE_CHANNEL {
+                    if let Some(m) = &item.meta {
+                        refresh_projects.push(PathBuf::from(m));
+                    }
+                }
                 applied.push(item);
             }
             Err(e) => {
@@ -266,7 +272,41 @@ pub fn apply(cfg: &Config, items: Vec<StateItem>) -> (Vec<String>, Option<i64>) 
     if !applied.is_empty() {
         mark_synced(&applied);
     }
+    // Импорт opencode бампает локальный `updated` сессии, из-за чего её
+    // тут же захотелось бы отправить обратно (эхо-петля). Освежаем индекс
+    // по фактическим локальным updated для уже известных сессий.
+    if !refresh_projects.is_empty() {
+        refresh_projects.sort();
+        refresh_projects.dedup();
+        refresh_opencode_index(&refresh_projects);
+    }
     (messages, failed_min)
+}
+
+/// Обновляет `updated` уже известных (синхронизированных) сессий до
+/// локального значения, чтобы не пере-экспортировать только что импортированное.
+fn refresh_opencode_index(projects: &[PathBuf]) {
+    let Some(bin) = opencode_bin() else {
+        return;
+    };
+    let mut idx = StateIndex::load();
+    let mut changed = false;
+    for proj in projects {
+        for s in list_sessions(&bin, proj) {
+            let key = format!("{OPENCODE_CHANNEL}:{}", s.id);
+            if let Some(v) = idx.items.get_mut(&key) {
+                if s.updated > *v {
+                    *v = s.updated;
+                    changed = true;
+                }
+            }
+        }
+    }
+    if changed {
+        if let Err(e) = idx.save() {
+            warn!("can't save state index: {e:#}");
+        }
+    }
 }
 
 fn apply_one(cfg: &Config, item: &StateItem) -> Result<String> {
