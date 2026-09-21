@@ -17,6 +17,11 @@ pub struct Config {
     pub hub_connect: Option<HubConnectConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub projects: Option<HashMap<String, ProjectConfig>>,
+    /// Авто-обнаружение новых git-проектов в общем каталоге (обычно
+    /// `~/projects`): любая новая папка с `.git` попадает в флот без ручной
+    /// правки конфига. См. `AutoProjectsConfig`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_projects: Option<AutoProjectsConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<HashMap<String, RemoteMachine>>,
     /// Захват live-правок dotfiles в их репозитории (см. `src/client/capture.rs`).
@@ -252,6 +257,39 @@ pub struct ProjectConfig {
     pub post_pull: Option<String>,
 }
 
+/// Авто-обнаружение новых git-проектов флота.
+///
+/// Клиент при каждом `dsync push` обходит `root` на глубину 1 и включает в
+/// push-сообщение все каталоги с `.git`, которых нет в явном `[projects.*]`
+/// (имя проекта — имя каталога). Хаб, получив такой проект, разворачивает его
+/// на машинах из `machines`: клонирует из origin (`url` приходит в состоянии
+/// проекта), если каталога на машине ещё нет, а дальше — обычный
+/// `git pull --rebase --autostash`.
+///
+/// Семантика: авто-проекты **анонсируются** (разворачиваются на флоте), но
+/// dsync не делает за них `git add/commit/push` — репозитории, за которыми
+/// dsync «ухаживает» (автокоммит «project sync: …»), остаются в `[projects.*]`.
+///
+/// ```toml
+/// [auto_projects]
+/// root = "~/projects"
+/// branch = "main"
+/// machines = ["notebook", "desktop", "archlinux-mkair", "archlinux-server"]
+/// ```
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct AutoProjectsConfig {
+    /// Корень сканирования (по умолчанию `~/projects`), глубина 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+    /// Ветка по умолчанию для новых проектов без неё (по умолчанию `main`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Машины флота, на которые разворачиваются новые проекты. Если не задано —
+    /// берутся все машины из `[remote.*]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machines: Option<Vec<String>>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RemoteMachine {
     pub host: String,
@@ -464,6 +502,34 @@ mod tests {
             st.opencode.unwrap().projects.unwrap()[0],
             PathBuf::from("~/projects/mushroomwars")
         );
+    }
+
+    #[test]
+    fn auto_projects_section_parses_and_defaults() {
+        let cfg: Config = toml::from_str(
+            "machine = { name = 'x' }\n\
+             [auto_projects]\n\
+             root = '~/projects'\n\
+             branch = 'main'\n\
+             machines = ['notebook', 'desktop']\n",
+        )
+        .unwrap();
+        let ap = cfg.auto_projects.expect("auto_projects present");
+        assert_eq!(ap.root.as_deref().unwrap(), Path::new("~/projects"));
+        assert_eq!(ap.branch.as_deref(), Some("main"));
+        assert_eq!(ap.machines.as_ref().unwrap().len(), 2);
+
+        // Минимальная секция: всё по умолчанию (None).
+        let cfg: Config = toml::from_str(
+            "machine = { name = 'x' }\n[auto_projects]\n",
+        )
+        .unwrap();
+        let ap = cfg.auto_projects.expect("present");
+        assert!(ap.root.is_none() && ap.branch.is_none() && ap.machines.is_none());
+
+        // Отсутствует секция — None.
+        let cfg: Config = toml::from_str("machine = { name = 'x' }\n").unwrap();
+        assert!(cfg.auto_projects.is_none());
     }
 
     #[test]

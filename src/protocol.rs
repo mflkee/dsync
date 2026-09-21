@@ -98,6 +98,11 @@ pub struct ProjectState {
     pub behind: usize,
     pub commit_hash: String,
     pub last_commit_time: i64,
+    /// Origin URL машины-источника (`git remote get-url origin`). Пустая —
+    /// если у проекта нет remote. Нужен хабу для bootstrap-клона на машинах,
+    /// у которых каталог проекта ещё не появился.
+    #[serde(default)]
+    pub url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

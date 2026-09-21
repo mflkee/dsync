@@ -686,6 +686,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             ),
+            auto_projects: None,
             remote: Some(
                 [(
                     "notebook".to_string(),

@@ -163,6 +163,7 @@ pub fn run() -> Result<()> {
         } else {
             Some(projects)
         },
+        auto_projects: None,
         remote: if remotes.is_empty() {
             None
         } else {
@@ -556,6 +557,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             ),
+            auto_projects: None,
             remote: Some(
                 [(
                     "notebook".to_string(),
@@ -633,6 +635,7 @@ mod tests {
                 token: "tok-a".into(),
             }),
             projects: None,
+            auto_projects: None,
             remote: None,
             capture: None,
             state: None,

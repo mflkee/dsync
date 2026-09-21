@@ -112,6 +112,7 @@ mod tests {
                 token: token.into(),
             }),
             projects: None,
+            auto_projects: None,
             remote: None,
             capture: None,
             state: None,

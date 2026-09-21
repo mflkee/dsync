@@ -753,6 +753,7 @@ mod tests {
             hub: None,
             hub_connect: None,
             projects: None,
+            auto_projects: None,
             remote: None,
             capture: None,
             state: None,
