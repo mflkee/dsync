@@ -148,17 +148,31 @@ fn collect_tmux(idx: &StateIndex, out: &mut Vec<StateItem>) {
     let Ok(data) = std::fs::read_to_string(&path) else {
         return;
     };
+    // `updated` = хеш содержимого: неизменённую раскладку повторно не гоним
+    // (mtime меняется от каждого save, содержимое — нет).
     let item = StateItem {
         channel: TMUX_CHANNEL.into(),
         key: "latest".into(),
-        updated: mtime,
+        updated: content_hash(&data),
         meta: path.file_name().map(|s| s.to_string_lossy().to_string()),
         data,
         ..Default::default()
     };
+    let _ = mtime;
     if !idx.has(&item) {
         out.push(item);
     }
+}
+
+/// Стабильный положительный i64-хеш содержимого (для `updated`).
+fn content_hash(data: &str) -> i64 {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(data.as_bytes());
+    let d = h.finalize();
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&d[..8]);
+    i64::from_be_bytes(b) & i64::MAX
 }
 
 fn collect_opencode(
@@ -640,6 +654,13 @@ mod tests {
     fn batches_single_when_small() {
         let b = batches(vec![item("tmux", "latest", 1, 10)]);
         assert_eq!(b.len(), 1);
+    }
+
+    #[test]
+    fn content_hash_stable_and_positive() {
+        assert_eq!(content_hash("abc"), content_hash("abc"));
+        assert_ne!(content_hash("abc"), content_hash("abd"));
+        assert!(content_hash("abc") >= 0);
     }
 
     #[test]
