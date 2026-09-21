@@ -97,6 +97,16 @@ branch = "main"
 machines = ["desktop", "notebook", "server"]
 post_pull = "cargo build --release && cp target/release/dsync ~/.local/bin/dsync"
 
+# Auto-discovery: любая новая папка с .git в root анонсируется флоту при push —
+# hub клонирует её на машины без каталога (bootstrap), дальше обычный pull.
+# exclude — имена (скретч/учёба), которые не раскатываются. Автокоммит
+# «project sync: …» остаётся только за явными [projects.*].
+[auto_projects]
+root = "~/projects"
+branch = "main"
+machines = ["desktop", "notebook", "server"]
+exclude = ["rustlings", "git-tutorial", "study"]
+
 [remote.desktop]
 host = "192.168.1.10"
 port = 22
@@ -117,7 +127,11 @@ pull_timeout_secs = 300           # exec window for `git pull && post_pull` (bui
 
 Each project's git `origin` is where content actually lives (your GitHub/Gitea
 repo, or a bare repo on the hub). The hub only coordinates: it records each
-machine's state and triggers SSH pulls with `post_pull` hooks.
+machine's state and triggers SSH pulls with `post_pull` hooks. Since v0.1 the
+pull command is clone-if-missing: machines without the project directory get a
+`git clone` from the origin URL reported by the pushing machine (bootstrap),
+machines that have it get `git pull --rebase --autostash` (WIP is stashed and
+restored, never lost).
 
 ## Capturing live dotfile edits (no `chezmoi edit`)
 
