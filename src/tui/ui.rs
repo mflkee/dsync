@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
-use crate::tui::app::{fmt_ago, fmt_civil, fmt_clock, App, Tab};
+use crate::tui::app::{fmt_ago, fmt_civil, fmt_clock, App, ConfirmAction, Tab};
 
 /// Высота шапки: строка вкладок + 2 строки статуса.
 pub const HEADER_ROWS: u16 = 3;
@@ -30,6 +30,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Tab::Dashboard => draw_dashboard(frame, app, body),
         Tab::Projects => draw_projects(frame, app, body),
         Tab::Machines => draw_machines(frame, app, body),
+        Tab::State => draw_state(frame, app, body),
         Tab::Doctor => draw_doctor(frame, app, body),
         Tab::Log => draw_log(frame, app, body),
         Tab::Help => draw_help(frame, app, body),
@@ -37,6 +38,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     if app.form.is_some() {
         draw_form(frame, app, body);
+    }
+    if app.show_pull_details {
+        draw_pull_details(frame, app, body);
     }
 }
 
@@ -129,17 +133,28 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             .map(|f| f.action.is_some())
             .unwrap_or(false);
         if confirm {
-            "   [Enter] delete  [Esc] cancel".to_string()
+            "   [Enter] confirm  [Esc] cancel".to_string()
         } else {
-            "   [Tab/↑↓] field  [Enter] save  [Esc] cancel".to_string()
+            // Подсказка редактирования + позиция курсора активного поля.
+            let col = app
+                .form
+                .as_ref()
+                .and_then(|f| f.fields.get(f.cursor))
+                .map(|f| f.cursor)
+                .unwrap_or(0);
+            format!(
+                "   [Tab/↑↓] field  [←/→/Home/End] cursor  [⌫/Del] edit  [Ctrl-U] clear  \
+                 [Enter] save  [Esc] cancel  · insert at column {col}"
+            )
         }
     } else {
         format!(
             "   {}",
             match app.tab {
-                Tab::Dashboard => "[↑↓] select  [P] push selected  [L] pull selected",
+                Tab::Dashboard => "[↑↓] select  [P] push selected  [L] pull selected  [e] failed pulls",
                 Tab::Projects => "[↑↓] select  [n] add project  [d] delete",
-                Tab::Machines => "[↑↓] select  [n] add machine  [d] delete",
+                Tab::Machines => "[↑↓] select  [n] add machine  [d] delete  [e] failed pulls",
+                Tab::State => "[t] tmux  [T] auto-restore  [n] opencode projects  [r] refresh",
                 Tab::Doctor => "[r] run checks  [↑↓/PgUp/PgDn] scroll",
                 Tab::Log => "[↑↓/PgUp/PgDn] scroll  [Enter] clear",
                 Tab::Help => "[↑↓/PgUp/PgDn] scroll",
@@ -576,6 +591,231 @@ fn draw_machines(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
+// --- STATE (не-git состояние флота) ---
+
+fn on_off(v: bool) -> &'static str {
+    if v { "on" } else { "off" }
+}
+
+fn draw_state(frame: &mut Frame, app: &mut App, area: Rect) {
+    let [config_area, health_area] =
+        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).areas(area);
+
+    // Слева — эффективная конфигурация [state].
+    let mut cfg_lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled(" tmux sync      : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                on_off(app.cfg.state.tmux),
+                Style::default().fg(if app.cfg.state.tmux {
+                    Color::Green
+                } else {
+                    Color::Red
+                }),
+            ),
+            Span::styled("   [t]", Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(vec![
+            Span::styled(" auto-restore   : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                on_off(app.cfg.state.tmux_restore),
+                Style::default().fg(if app.cfg.state.tmux_restore {
+                    Color::Green
+                } else {
+                    Color::Red
+                }),
+            ),
+            Span::styled("   [T]", Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                " opencode sessions",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   [n]", Style::default().fg(Color::Yellow)),
+        ]),
+    ];
+    match &app.cfg.state.opencode_projects {
+        Some(list) => {
+            for p in list {
+                cfg_lines.push(Line::from(Span::styled(
+                    format!("   · {p}"),
+                    Style::default().fg(Color::White),
+                )));
+            }
+        }
+        None => {
+            cfg_lines.push(Line::from(Span::styled(
+                "   · all [projects.*] (не задан список)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+    if !app.cfg.state.configured {
+        cfg_lines.push(Line::from(Span::styled(
+            "   (секции [state] нет — дефолты: tmux on, restore off)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    if app.cfg.chezmoi_managed {
+        cfg_lines.push(Line::from(""));
+        cfg_lines.push(Line::from(Span::styled(
+            " config under chezmoi: changes are confirmed and applied",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    let block = Block::bordered().title(Span::styled(
+        " State config ",
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    ));
+    frame.render_widget(Paragraph::new(cfg_lines).block(block), config_area);
+
+    // Справа — сводка с хаба (state_status). «unavailable» — хаб старый/недоступен.
+    let mut health: Vec<Line> = Vec::new();
+    if let Some(err) = &app.state_status_error {
+        health.push(Line::from(Span::styled(
+            " ⚠ state_status: unavailable",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+        health.push(Line::from(Span::styled(
+            format!("   {err}"),
+            Style::default().fg(Color::Red),
+        )));
+        health.push(Line::from(Span::styled(
+            "   (нужен dsync-hub с поддержкой state_status; [r] — retry)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if app.state_channels.is_empty() {
+        health.push(Line::from(Span::styled(
+            if app.state_status_ts > 0 {
+                " No state synced yet (каналы пусты)."
+            } else {
+                " ⟳ ждём сводку с хаба… ([r] обновить)"
+            },
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for ch in &app.state_channels {
+            let mut line = vec![Span::styled(
+                format!(" {} ", ch.channel),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )];
+            if let Some(err) = &ch.error {
+                line.push(Span::styled("✗", Style::default().fg(Color::Red)));
+                line.push(Span::styled(
+                    format!("  {err}"),
+                    Style::default().fg(Color::Red),
+                ));
+            } else {
+                line.push(Span::styled("✓", Style::default().fg(Color::Green)));
+            }
+            health.push(Line::from(line));
+            health.push(Line::from(Span::styled(
+                format!(
+                    "     items: {}   last: {}  by {}",
+                    ch.item_count,
+                    if ch.last_updated > 0 {
+                        format!("{} ({})", fmt_ago(ch.last_updated), fmt_civil(ch.last_updated))
+                    } else {
+                        "—".into()
+                    },
+                    if ch.last_origin.is_empty() { "—" } else { &ch.last_origin },
+                ),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+    let block = Block::bordered().title(Span::styled(
+        format!(
+            " Hub state status{} ",
+            if app.state_status_ts > 0 {
+                format!(" ({} refreshed)", fmt_clock(app.state_status_ts))
+            } else {
+                String::new()
+            }
+        ),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    ));
+    frame.render_widget(Paragraph::new(health).block(block), health_area);
+}
+
+// --- FAILED PULLS (оверлей) ---
+
+fn draw_pull_details(frame: &mut Frame, app: &mut App, area: Rect) {
+    let mut fails: Vec<(String, String, &crate::protocol::PullOutcome)> = Vec::new();
+    for (machine, s) in &app.machines.list {
+        for (project, o) in &s.pulls {
+            if !o.ok {
+                fails.push((machine.clone(), project.clone(), o));
+            }
+        }
+    }
+    fails.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    let popup = centered_rect(88, 78, area);
+    frame.render_widget(Clear, popup);
+
+    let page_h = popup.height.saturating_sub(2) as usize;
+    let start = app
+        .pull_details_scroll
+        .min(fails.len().saturating_sub(page_h));
+    let mut text: Vec<Line> = Vec::new();
+    if fails.is_empty() {
+        text.push(Line::from(""));
+        text.push(Line::from(Span::styled(
+            "   Нет упавших pulls на текущем снимке флота ✓",
+            Style::default().fg(Color::Green),
+        )));
+    } else {
+        for (machine, project, o) in fails.iter().skip(start).take(page_h) {
+            let mut spans = vec![Span::styled(
+                format!(" {machine}/{project}"),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            )];
+            spans.push(Span::styled(
+                format!(
+                    "  ✗ attempts={}  finished {}",
+                    o.attempts,
+                    if o.finished_at > 0 { fmt_ago(o.finished_at) } else { "—".into() }
+                ),
+                Style::default().fg(Color::DarkGray),
+            ));
+            text.push(Line::from(spans));
+            if let Some(e) = &o.error {
+                text.push(Line::from(Span::styled(
+                    format!("      {e}"),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+        }
+    }
+
+    let block = Block::bordered().title(Span::styled(
+        format!(
+            " Failed pulls ({}) — [e]/[Esc] close  [↑↓/wheel] scroll{} ",
+            fails.len(),
+            if start > 0 {
+                format!(" [{}..{}]", start, start + text.len().min(page_h.min(fails.len())))
+            } else {
+                String::new()
+            }
+        ),
+        Style::default()
+            .fg(Color::Red)
+            .add_modifier(Modifier::BOLD),
+    ));
+    frame.render_widget(Paragraph::new(text).block(block), popup);
+}
+
 // --- DOCTOR ---
 
 fn draw_doctor(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -776,6 +1016,12 @@ fn help_lines() -> Vec<Line<'static>> {
 
 // --- FORM OVERLAY ---
 
+/// Разрез значения поля по позиции курсора (символы → байтовый индекс).
+fn split_around(s: &str, pos: usize) -> (String, String) {
+    let bi = crate::tui::app::char_pos_to_byte(s, pos);
+    (s[..bi].to_string(), s[bi..].to_string())
+}
+
 fn draw_form(frame: &mut Frame, app: &App, area: Rect) {
     let Some(form) = &app.form else { return };
     let is_confirm = form.action.is_some();
@@ -787,19 +1033,31 @@ fn draw_form(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     if is_confirm {
         let detail = &form.fields[0].value;
+        let lead = match form.action.as_ref() {
+            Some(ConfirmAction::RemoveProject(_)) | Some(ConfirmAction::RemoveRemote(_)) => {
+                "   Это изменит конфиг dsync:"
+            }
+            Some(ConfirmAction::ChezmoiApply(_)) => {
+                "   chezmoi-managed config — запись в шаблон + `chezmoi apply`:"
+            }
+            Some(ConfirmAction::StateToggle { .. }) => "   Переключение [state]:",
+            None => "   Подтверждение:",
+        };
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "   Это удалит запись из конфига:",
+            lead,
             Style::default().fg(Color::Yellow),
         )));
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("   {detail}"),
-            Style::default().fg(Color::White),
-        )));
+        for dl in detail.lines() {
+            lines.push(Line::from(Span::styled(
+                format!("   {dl}"),
+                Style::default().fg(Color::White),
+            )));
+        }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "   [Enter] — удалить   [Esc] — отмена",
+            "   [Enter] — подтвердить   [Esc] — отмена",
             Style::default().fg(Color::DarkGray),
         )));
     } else {
@@ -807,9 +1065,32 @@ fn draw_form(frame: &mut Frame, app: &App, area: Rect) {
         for (i, f) in form.fields.iter().enumerate() {
             let active = i == form.cursor;
             let arrow = if active { "▸ " } else { "  " };
-            lines.push(Line::from(vec![
-                Span::styled(arrow, Style::default().fg(Color::Cyan)),
-                Span::styled(
+            // Значение активного поля рендерится с кареткой на позиции курсора.
+            let value: Vec<Span> = if active {
+                let (before, after) = split_around(&f.value, f.cursor);
+                vec![
+                    Span::styled(before, Style::default().fg(Color::White)),
+                    Span::styled(
+                        "│",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(after, Style::default().fg(Color::White)),
+                ]
+            } else {
+                vec![Span::styled(
+                    f.value.clone(),
+                    Style::default().fg(Color::White),
+                )]
+            };
+            lines.push(Line::from(
+                std::iter::once(Span::styled(
+                    arrow,
+                    Style::default().fg(Color::Cyan),
+                ))
+                .chain(std::iter::once(Span::styled(
                     format!("{}: ", f.label),
                     if active {
                         Style::default()
@@ -818,20 +1099,18 @@ fn draw_form(frame: &mut Frame, app: &App, area: Rect) {
                     } else {
                         Style::default().fg(Color::DarkGray)
                     },
-                ),
-                Span::styled(
-                    f.value.clone(),
-                    Style::default().fg(Color::White).bg(if active {
-                        Color::DarkGray
-                    } else {
-                        Color::Reset
-                    }),
-                ),
-            ]));
+                )))
+                .chain(value)
+                .collect::<Vec<_>>(),
+            ));
         }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "   [Tab/↑↓] поле   [Enter] следующее / сохранить   [Esc] отмена",
+            "   [Tab/↑↓] поле   [←/→/Home/End] курсор   [⌫/Del] правка   [Ctrl-U] очистить",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "   [Enter] следующее / сохранить   [Esc] отмена",
             Style::default().fg(Color::DarkGray),
         )));
     }

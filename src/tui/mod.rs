@@ -12,7 +12,13 @@ pub mod ui;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event as TermEvent, KeyCode, KeyEventKind,
+    KeyModifiers, MouseEventKind,
+};
+use crossterm::execute;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::backend::CrosstermBackend;
 use ratatui::DefaultTerminal;
 
 use crate::config::Config;
@@ -21,10 +27,32 @@ use crate::tui::backend::Cmd;
 
 pub fn run(cfg: Config) -> Result<()> {
     let _ = cfg;
-    let mut terminal = ratatui::init();
+    // raw mode + alternate screen — как ratatui::init, но явно: нужен ещё
+    // mouse capture для скролла колёсиком.
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    // mouse capture может не получиться (минимальный терминал) — не беда:
+    // идём дальше, скролл остаётся клавиатурным (spec: graceful degrade).
+    let _ = execute!(stdout, EnterAlternateScreen, EnableMouseCapture);
+    let mut terminal: DefaultTerminal = ratatui::Terminal::new(CrosstermBackend::new(stdout))?;
+
+    // Паника до restore оставляла «сломанный» терминал (raw mode + alt screen):
+    // hook восстанавливает терминал до печати backtrace.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        prev_hook(info);
+    }));
+
     let res = run_loop(&mut terminal);
-    ratatui::restore();
+    restore_terminal();
     res
+}
+
+/// Выход из TUI: отключить mouse capture, покинуть alternate screen, raw mode off.
+fn restore_terminal() {
+    let _ = execute!(std::io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+    let _ = disable_raw_mode();
 }
 
 fn run_loop(terminal: &mut DefaultTerminal) -> Result<()> {
@@ -37,10 +65,17 @@ fn run_loop(terminal: &mut DefaultTerminal) -> Result<()> {
         "dsync TUI — [Tab] tabs  [p] push  [l] pull  [r] refresh  [q] quit".to_string(),
     );
     if app.cfg.chezmoi_managed {
-        app.log(
-            2,
-            "config is chezmoi-managed: changes apply to the live file; update the template separately".to_string(),
-        );
+        match &app.cfg.chezmoi_template {
+            Some(t) => app.log(
+                2,
+                format!("config is chezmoi-managed: each save is confirmed and written to template {t} + chezmoi apply"),
+            ),
+            None => app.log(
+                3,
+                "config is chezmoi-managed but no source template found: config edits will be refused"
+                    .to_string(),
+            ),
+        }
     }
 
     while !app.should_quit {
@@ -49,6 +84,13 @@ fn run_loop(terminal: &mut DefaultTerminal) -> Result<()> {
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 TermEvent::Key(key) if key.kind == KeyEventKind::Press => handle_key(&mut app, key),
+                TermEvent::Mouse(m) if app.form.is_none() && !app.show_pull_details => {
+                    match m.kind {
+                        MouseEventKind::ScrollDown => scroll_down(&mut app),
+                        MouseEventKind::ScrollUp => scroll_up(&mut app),
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
@@ -61,6 +103,15 @@ fn run_loop(terminal: &mut DefaultTerminal) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
+    // Оверлей «failed pulls»: [e]/[Esc] закрывают, [↑↓]/колесо скроллят.
+    if app.show_pull_details {
+        match key.code {
+            KeyCode::Char('e') | KeyCode::Esc => app.show_pull_details = false,
+            _ => {}
+        }
+        return;
+    }
+
     if app.form.is_some() {
         handle_form_key(app, key);
         return;
@@ -70,8 +121,8 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
 
     match key.code {
         Char('q') | Esc => app.should_quit = true,
-        Tab => app.tab = app.tab.next(),
-        BackTab => app.tab = app.tab.prev(),
+        Tab => app.switch_tab(app.tab.next()),
+        BackTab => app.switch_tab(app.tab.prev()),
         // push/pull: lowercase — все машины, P/L — выбранную (на Dashboard).
         Char('p') => app.run_action("push", Cmd::Push { target: None }),
         Char('l') => app.run_action("pull", Cmd::Pull { target: None }),
@@ -85,13 +136,44 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
         }
         Char('r') => match app.tab {
             app::Tab::Doctor => app.send(Cmd::Doctor),
+            app::Tab::State => app.send(Cmd::StateStatus),
             _ => app.send(Cmd::Poll),
+        },
+        Char('e') => match app.tab {
+            app::Tab::Dashboard | app::Tab::Machines => {
+                app.show_pull_details = true;
+                app.pull_details_scroll = 0;
+            }
+            _ => {}
         },
         Char('n') => match app.tab {
             app::Tab::Projects => open_add_project_form(app),
             app::Tab::Machines => open_add_remote_form(app),
+            app::Tab::State => open_opencode_form(app),
             _ => {}
         },
+        Char('t') if app.tab == app::Tab::State => {
+            let new = !app.cfg.state.tmux;
+            app.form = Some(Form::confirm(
+                " toggle tmux ",
+                format!("tmux sync: {} → {new}", app.cfg.state.tmux),
+                ConfirmAction::StateToggle {
+                    tmux: Some(new),
+                    tmux_restore: None,
+                },
+            ));
+        }
+        Char('T') if app.tab == app::Tab::State => {
+            let new = !app.cfg.state.tmux_restore;
+            app.form = Some(Form::confirm(
+                " toggle tmux_restore ",
+                format!("tmux auto-restore: {} → {new}", app.cfg.state.tmux_restore),
+                ConfirmAction::StateToggle {
+                    tmux: None,
+                    tmux_restore: Some(new),
+                },
+            ));
+        }
         Char('d') => match app.tab {
             app::Tab::Projects => {
                 if let Some(p) = app.projects.get(app.projects_sel.idx).cloned() {
@@ -158,6 +240,10 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
 }
 
 fn scroll_up(app: &mut App) {
+    if app.show_pull_details {
+        app.pull_details_scroll = app.pull_details_scroll.saturating_sub(1);
+        return;
+    }
     match app.tab {
         app::Tab::Log => app.log_scroll = app.log_scroll.saturating_sub(1),
         app::Tab::Help => app.help_scroll = app.help_scroll.saturating_sub(1),
@@ -167,6 +253,10 @@ fn scroll_up(app: &mut App) {
 }
 
 fn scroll_down(app: &mut App) {
+    if app.show_pull_details {
+        app.pull_details_scroll += 1;
+        return;
+    }
     match app.tab {
         app::Tab::Log => app.log_scroll += 1,
         app::Tab::Help => app.help_scroll += 1,
@@ -210,20 +300,32 @@ impl Form {
     pub fn confirm(title: &'static str, detail: String, action: ConfirmAction) -> Self {
         Self {
             title,
-            fields: vec![FormField::new("confirm", &detail)],
+            fields: vec![FormField::new("confirm", detail)],
             cursor: 0,
             action: Some(action),
         }
     }
-}
 
-impl FormField {
-    pub fn new(label: &'static str, value: &str) -> Self {
+    /// Форма списка проектов opencode (одно поле, через запятую).
+    pub fn opencode(list: &str) -> Self {
         Self {
-            label,
-            value: value.to_string(),
+            title: " opencode projects ",
+            fields: vec![FormField::new("projects (comma-separated paths)", list)],
+            cursor: 0,
+            action: None,
         }
     }
+}
+
+fn open_opencode_form(app: &mut App) {
+    let prefill = app
+        .cfg
+        .state
+        .opencode_projects
+        .as_ref()
+        .map(|p| p.join(", "))
+        .unwrap_or_default();
+    app.form = Some(Form::opencode(&prefill));
 }
 
 fn open_add_project_form(app: &mut App) {
@@ -264,7 +366,8 @@ fn open_add_remote_form(app: &mut App) {
 }
 
 /// Обрабатывает клавиши внутри формы (форма забирается из app, обрабатывается,
-/// затем возвращается на место либо закрывается).
+/// затем возвращается на место либо закрывается). Полноценное редактирование:
+/// курсор [←]/[→], Home/End, Backspace, Delete, Ctrl-U очистка поля.
 fn handle_form_key(app: &mut App, key: crossterm::event::KeyEvent) {
     let mut form = match app.form.take() {
         Some(f) => f,
@@ -276,10 +379,12 @@ fn handle_form_key(app: &mut App, key: crossterm::event::KeyEvent) {
     use KeyCode::*;
     match key.code {
         Esc => return, // отмена: форма просто не возвращается на место
-        Tab | Down | Char('j') if !is_confirm => {
+        // Переключение поля — только Tab/BackTab/↑↓ (символы j/k теперь
+        // вводятся как текст: раньше их тоже нельзя было напечатать в форме).
+        Tab | Down if !is_confirm => {
             form.cursor = (form.cursor + 1) % form.fields.len();
         }
-        BackTab | Up | Char('k') if !is_confirm => {
+        BackTab | Up if !is_confirm => {
             form.cursor = (form.cursor + form.fields.len() - 1) % form.fields.len();
         }
         Enter => {
@@ -290,49 +395,136 @@ fn handle_form_key(app: &mut App, key: crossterm::event::KeyEvent) {
             }
             form.cursor += 1;
         }
-        Backspace if !is_confirm => {
-            form.fields[form.cursor].value.pop();
+        Left if !is_confirm => {
+            let f = &mut form.fields[form.cursor];
+            f.cursor = f.cursor.saturating_sub(1);
+        }
+        Right if !is_confirm => {
+            let f = &mut form.fields[form.cursor];
+            f.cursor = (f.cursor + 1).min(f.char_len());
+        }
+        Home if !is_confirm => form.fields[form.cursor].cursor = 0,
+        End if !is_confirm => form.fields[form.cursor].cursor = form.fields[form.cursor].char_len(),
+        Backspace if !is_confirm => form.fields[form.cursor].backspace(),
+        Delete if !is_confirm => form.fields[form.cursor].delete(),
+        // Ctrl-U: очистить поле (crossterm шлёт Char('u') + CONTROL).
+        Char('u') if !is_confirm && key.modifiers.contains(KeyModifiers::CONTROL) => {
+            form.fields[form.cursor].clear();
         }
         Char(c) if !is_confirm && !c.is_control() => {
-            form.fields[form.cursor].value.push(c);
+            form.fields[form.cursor].insert_char(c);
         }
         _ => {}
     }
     app.form = Some(form);
 }
 
-/// Отправить данные формы в backend.
+/// Отправить данные формы в backend. Конфиг-мутации на chezmoi-managed
+/// конфиге уходят через шаблон (см. route_config_cmd).
 fn submit_form(app: &mut App, form: &Form) {
     if let Some(action) = &form.action {
-        match action {
+        match action.clone() {
             ConfirmAction::RemoveProject(name) => {
-                app.send(Cmd::RemoveProject { name: name.clone() })
+                route_config_cmd(app, Cmd::RemoveProject { name, use_template: false });
             }
-            ConfirmAction::RemoveRemote(name) => app.send(Cmd::RemoveRemote { name: name.clone() }),
+            ConfirmAction::RemoveRemote(name) => {
+                route_config_cmd(app, Cmd::RemoveRemote { name, use_template: false });
+            }
+            ConfirmAction::ChezmoiApply(mut cmd) => {
+                set_use_template(&mut cmd, true);
+                app.send(cmd);
+            }
+            ConfirmAction::StateToggle { tmux, tmux_restore } => {
+                route_config_cmd(
+                    app,
+                    Cmd::SetState {
+                        tmux,
+                        tmux_restore,
+                        opencode_projects: None,
+                        use_template: false,
+                    },
+                );
+            }
         }
         return;
     }
-    if form.title.contains("project") {
-        let machines: Vec<String> = form.fields[3]
-            .value
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        app.send(Cmd::AddProject {
+    let cmd = match form.title {
+        " Add project " => Cmd::AddProject {
             name: form.fields[0].value.clone(),
             path: form.fields[1].value.clone(),
             branch: Some(form.fields[2].value.clone()).filter(|s| !s.is_empty()),
-            machines,
+            machines: split_csv(&form.fields[3].value),
             post_pull: Some(form.fields[4].value.clone()).filter(|s| !s.is_empty()),
-        });
-    } else if form.title.contains("machine") {
-        let port: u16 = form.fields[2].value.trim().parse().unwrap_or(22);
-        app.send(Cmd::AddRemote {
-            name: form.fields[0].value.clone(),
-            host: form.fields[1].value.clone(),
-            port,
-            user: form.fields[3].value.clone(),
-        });
+            use_template: false,
+        },
+        " Add machine " => {
+            let port: u16 = form.fields[2].value.trim().parse().unwrap_or(22);
+            Cmd::AddRemote {
+                name: form.fields[0].value.clone(),
+                host: form.fields[1].value.clone(),
+                port,
+                user: form.fields[3].value.clone(),
+                use_template: false,
+            }
+        }
+        " opencode projects " => Cmd::SetState {
+            tmux: None,
+            tmux_restore: None,
+            opencode_projects: Some(split_csv(&form.fields[0].value)),
+            use_template: false,
+        },
+        _ => return,
+    };
+    route_config_cmd(app, cmd);
+}
+
+fn split_csv(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
+}
+
+/// Конфиг-мутация: на chezmoi-managed конфиге требует явного подтверждения
+/// записи в шаблон + `chezmoi apply`; без шаблона — отказ с инструкцией.
+fn route_config_cmd(app: &mut App, mut cmd: Cmd) {
+    if !app.cfg.chezmoi_managed {
+        app.send(cmd);
+        return;
+    }
+    match app.cfg.chezmoi_template.clone() {
+        Some(src) if std::path::Path::new(&src).exists() => {
+            set_use_template(&mut cmd, true);
+            app.log(
+                2,
+                format!("config is chezmoi-managed: confirm writing to template {src}"),
+            );
+            app.form = Some(Form::confirm(
+                " chezmoi apply ",
+                format!("Write change to template\n{src}\nand run `chezmoi apply`?"),
+                ConfirmAction::ChezmoiApply(cmd),
+            ));
+        }
+        _ => {
+            app.log(
+                3,
+                format!(
+                    "refusing config change: chezmoi-managed but no source template found — \
+                     edit {} in ~/dotfiles manually",
+                    app.cfg.config_path
+                ),
+            );
+        }
+    }
+}
+
+fn set_use_template(cmd: &mut Cmd, v: bool) {
+    match cmd {
+        Cmd::AddProject { use_template, .. }
+        | Cmd::RemoveProject { use_template, .. }
+        | Cmd::AddRemote { use_template, .. }
+        | Cmd::RemoveRemote { use_template, .. }
+        | Cmd::SetState { use_template, .. } => *use_template = v,
+        _ => {}
     }
 }

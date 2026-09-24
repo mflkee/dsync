@@ -199,6 +199,37 @@ pub struct StatePullResponse {
     pub state_seq: i64,
 }
 
+/// Client → hub: read-only summary of the state store (State tab in the TUI).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StateStatusRequest {
+    pub machine: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+/// Per-channel summary for the State tab.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChannelStatus {
+    pub channel: String,
+    #[serde(default)]
+    pub item_count: usize,
+    /// Seconds since epoch of the newest item in the channel.
+    #[serde(default)]
+    pub last_updated: i64,
+    /// Machine that last wrote the newest item.
+    #[serde(default)]
+    pub last_origin: String,
+    /// Last known sync error for the channel, if any.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct StateStatusResponse {
+    #[serde(default)]
+    pub channels: Vec<ChannelStatus>,
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

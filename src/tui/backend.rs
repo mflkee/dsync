@@ -35,18 +35,29 @@ pub enum Cmd {
         branch: Option<String>,
         machines: Vec<String>,
         post_pull: Option<String>,
+        use_template: bool,
     },
     /// Удалить проект из конфига.
-    RemoveProject { name: String },
+    RemoveProject { name: String, use_template: bool },
     /// Добавить remote-машину в конфиг.
     AddRemote {
         name: String,
         host: String,
         port: u16,
         user: String,
+        use_template: bool,
     },
     /// Удалить remote-машину из конфига.
-    RemoveRemote { name: String },
+    RemoveRemote { name: String, use_template: bool },
+    /// Изменить секцию [state] (tmux/tmux_restore/opencode-список).
+    SetState {
+        tmux: Option<bool>,
+        tmux_restore: Option<bool>,
+        opencode_projects: Option<Vec<String>>,
+        use_template: bool,
+    },
+    /// Запросить сводку состояния у хаба (вкладка State).
+    StateStatus,
 }
 
 pub type CmdSender = tokio::sync::mpsc::Sender<Cmd>;
@@ -76,6 +87,11 @@ pub enum Event {
     Doctor(Vec<CheckItem>),
     /// Конфиг изменился — перечитай снимок.
     ConfigChanged { summary: CfgSummary },
+    /// Сводка состояния с хаба (вкладка State); err = хаб недоступен/старый.
+    StateStatus {
+        channels: Vec<crate::protocol::ChannelStatus>,
+        err: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -151,13 +167,15 @@ async fn run_backend(
                     let ev2 = ev.clone();
                     tokio::spawn(async move { run_doctor(cfg, info, ev2).await; });
                 }
-                Some(Cmd::AddProject { name, path, branch, machines, post_pull }) => {
+                Some(Cmd::AddProject { name, path, branch, machines, post_pull, use_template }) => {
                     let res = editor.add_project(
-                        &name, &path, branch.as_deref(), &machines, post_pull.as_deref(),
+                        &name, &path, branch.as_deref(), &machines, post_pull.as_deref(), use_template,
                     );
                     match res {
-                        Ok(()) => {
-                            let _ = ev.send(Event::Log { level: 1, text: format!("project {name:?} added") });
+                        Ok(diff) => {
+                            for d in diff {
+                                let _ = ev.send(Event::Log { level: 1, text: d });
+                            }
                             let _ = ev.send(Event::ConfigChanged { summary: editor.summary() });
                             // пересканируем проекты; список машин не трогаем
                             let cfg2 = editor.cfg.clone();
@@ -170,10 +188,12 @@ async fn run_backend(
                         Err(e) => { let _ = ev.send(Event::Log { level: 3, text: format!("add project: {e}") }); }
                     }
                 }
-                Some(Cmd::RemoveProject { name }) => {
-                    match editor.remove_project(&name) {
-                        Ok(()) => {
-                            let _ = ev.send(Event::Log { level: 1, text: format!("project {name:?} removed") });
+                Some(Cmd::RemoveProject { name, use_template }) => {
+                    match editor.remove_project(&name, use_template) {
+                        Ok(diff) => {
+                            for d in diff {
+                                let _ = ev.send(Event::Log { level: 1, text: d });
+                            }
                             let _ = ev.send(Event::ConfigChanged { summary: editor.summary() });
                             let cfg2 = editor.cfg.clone();
                             let projects = cfg2.projects.as_ref()
@@ -185,23 +205,77 @@ async fn run_backend(
                         Err(e) => { let _ = ev.send(Event::Log { level: 3, text: format!("remove project: {e}") }); }
                     }
                 }
-                Some(Cmd::AddRemote { name, host, port, user }) => {
-                    match editor.add_remote(&name, &host, port, &user) {
-                        Ok(()) => {
-                            let _ = ev.send(Event::Log { level: 1, text: format!("remote {name:?} added ({host}:{port})") });
+                Some(Cmd::AddRemote { name, host, port, user, use_template }) => {
+                    match editor.add_remote(&name, &host, port, &user, use_template) {
+                        Ok(diff) => {
+                            for d in diff {
+                                let _ = ev.send(Event::Log { level: 1, text: d });
+                            }
                             let _ = ev.send(Event::ConfigChanged { summary: editor.summary() });
                         }
                         Err(e) => { let _ = ev.send(Event::Log { level: 3, text: format!("add remote: {e}") }); }
                     }
                 }
-                Some(Cmd::RemoveRemote { name }) => {
-                    match editor.remove_remote(&name) {
-                        Ok(()) => {
-                            let _ = ev.send(Event::Log { level: 1, text: format!("remote {name:?} removed") });
+                Some(Cmd::RemoveRemote { name, use_template }) => {
+                    match editor.remove_remote(&name, use_template) {
+                        Ok(diff) => {
+                            for d in diff {
+                                let _ = ev.send(Event::Log { level: 1, text: d });
+                            }
                             let _ = ev.send(Event::ConfigChanged { summary: editor.summary() });
                         }
                         Err(e) => { let _ = ev.send(Event::Log { level: 3, text: format!("remove remote: {e}") }); }
                     }
+                }
+                Some(Cmd::SetState { tmux, tmux_restore, opencode_projects, use_template }) => {
+                    match editor.apply_state(tmux, tmux_restore, opencode_projects, use_template) {
+                        Ok(diff) => {
+                            for d in diff {
+                                let _ = ev.send(Event::Log { level: 1, text: d });
+                            }
+                            let _ = ev.send(Event::ConfigChanged { summary: editor.summary() });
+                            // обновляем снимок машин у хаба (состояние зависит от конфига)
+                            let cfg = editor.cfg.clone();
+                            let ev2 = ev.clone();
+                            tokio::spawn(async move {
+                                run_action(&ev2, "push", crate::client::push(cfg, None)).await;
+                            });
+                        }
+                        Err(e) => { let _ = ev.send(Event::Log { level: 3, text: format!("set state: {e}") }); }
+                    }
+                }
+                Some(Cmd::StateStatus) => {
+                    let cfg = editor.cfg.clone();
+                    let ev2 = ev.clone();
+                    tokio::spawn(async move {
+                        let _ = ev2.send(Event::Log {
+                            level: 0,
+                            text: "⏳ state status…".into(),
+                        });
+                        let out = async {
+                            let conn = crate::client::connect::connect_with_retry(&cfg).await
+                                .map_err(|e| format!("hub connect: {e}"))?;
+                            let req = crate::protocol::StateStatusRequest {
+                                machine: cfg.machine.name.clone(),
+                                token: crate::client::connect::hub_token(&cfg),
+                            };
+                            let resp = crate::client::connect::send_state_status(&conn, &req).await
+                                .map_err(|e| format!("state_status: {e}"))?;
+                            crate::client::connect::close_conn(&conn);
+                            Ok::<_, String>(resp)
+                        }
+                        .await;
+                        match out {
+                            Ok(resp) => {
+                                let _ = ev2.send(Event::Log { level: 1, text: "✓ state status".into() });
+                                let _ = ev2.send(Event::StateStatus { channels: resp.channels, err: None });
+                            }
+                            Err(e) => {
+                                let _ = ev2.send(Event::Log { level: 3, text: format!("✗ state status: {e}") });
+                                let _ = ev2.send(Event::StateStatus { channels: Vec::new(), err: Some(e) });
+                            }
+                        }
+                    });
                 }
                 None => break,
             }

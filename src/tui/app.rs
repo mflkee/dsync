@@ -15,16 +15,18 @@ pub enum Tab {
     Dashboard,
     Projects,
     Machines,
+    State,
     Doctor,
     Log,
     Help,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 7] = [
         Tab::Dashboard,
         Tab::Projects,
         Tab::Machines,
+        Tab::State,
         Tab::Doctor,
         Tab::Log,
         Tab::Help,
@@ -35,6 +37,7 @@ impl Tab {
             Tab::Dashboard => "Dashboard",
             Tab::Projects => "Projects",
             Tab::Machines => "Machines",
+            Tab::State => "State",
             Tab::Doctor => "Doctor",
             Tab::Log => "Log",
             Tab::Help => "Help",
@@ -152,6 +155,17 @@ pub struct App {
     // -- Doctor results --
     pub doctor: Vec<CheckItem>,
 
+    // -- State tab --
+    pub state_channels: Vec<crate::protocol::ChannelStatus>,
+    /// Ошибка запроса state_status («unavailable» на старом хабе и т.п.).
+    pub state_status_error: Option<String>,
+    /// Время последней успешной сводки состояния.
+    pub state_status_ts: i64,
+
+    // -- Pull details (Dashboard/Machines) --
+    pub show_pull_details: bool,
+    pub pull_details_scroll: usize,
+
     // -- Forms --
     pub form: Option<Form>,
 
@@ -173,6 +187,76 @@ pub struct Form {
 pub struct FormField {
     pub label: &'static str,
     pub value: String,
+    /// Позиция курсора внутри поля (в символах), для [←]/[→]/Home/End/⌫/Del.
+    pub cursor: usize,
+}
+
+impl FormField {
+    pub fn new(label: &'static str, value: impl Into<String>) -> Self {
+        let value = value.into();
+        let cursor = value.chars().count();
+        Self {
+            label,
+            value,
+            cursor,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.value.clear();
+        self.cursor = 0;
+    }
+
+    /// Число символов в значении.
+    pub fn char_len(&self) -> usize {
+        self.value.chars().count()
+    }
+
+    /// Байтовый индекс позиции курсора (для вставки/удаления в String).
+    pub fn byte_idx(&self) -> usize {
+        char_pos_to_byte(&self.value, self.cursor)
+    }
+
+    /// Вставить символ на позицию курсора и сдвинуть курсор.
+    pub fn insert_char(&mut self, c: char) {
+        let bi = self.byte_idx();
+        self.value.insert(bi, c);
+        self.cursor += 1;
+    }
+
+    /// Удалить символ перед курсором (Backspace).
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let before: String = self.value.chars().take(self.cursor.saturating_sub(1)).collect();
+        let after: String = self.value.chars().skip(self.cursor).collect();
+        self.value = format!("{before}{after}");
+        self.cursor -= 1;
+    }
+
+    /// Удалить символ под курсором (Delete).
+    pub fn delete(&mut self) {
+        if self.cursor >= self.char_len() {
+            return;
+        }
+        let before: String = self.value.chars().take(self.cursor).collect();
+        let after: String = self.value.chars().skip(self.cursor + 1).collect();
+        self.value = format!("{before}{after}");
+    }
+}
+
+/// Байтовый индекс начала символа на позиции `pos` (0-based, в символах);
+/// pos ≥ числа символов → конец строки.
+pub fn char_pos_to_byte(s: &str, pos: usize) -> usize {
+    let mut count = 0;
+    for (byte, _) in s.char_indices() {
+        if count == pos {
+            return byte;
+        }
+        count += 1;
+    }
+    s.len()
 }
 
 /// Действие подтверждения удаления.
@@ -180,6 +264,13 @@ pub struct FormField {
 pub enum ConfirmAction {
     RemoveProject(String),
     RemoveRemote(String),
+    /// Подтверждено: сохранить конфиг через chezmoi-шаблон (см. pending_cmd).
+    ChezmoiApply(Cmd),
+    /// Подтверждено переключение [state]: отправить Cmd::SetState.
+    StateToggle {
+        tmux: Option<bool>,
+        tmux_restore: Option<bool>,
+    },
 }
 
 impl App {
@@ -205,6 +296,11 @@ impl App {
             help_scroll: 0,
             cfg,
             doctor: Vec::new(),
+            state_channels: Vec::new(),
+            state_status_error: None,
+            state_status_ts: 0,
+            show_pull_details: false,
+            pull_details_scroll: 0,
             form: None,
             events,
             cmd_tx,
@@ -263,6 +359,7 @@ impl App {
                 self.busy = None;
                 self.last_action = Some((label, ok, text));
                 self.send(Cmd::Poll);
+                self.re_query_state_if_active();
             }
             Event::Doctor(items) => {
                 self.doctor = items;
@@ -273,6 +370,26 @@ impl App {
                 self.projects_sel.len = self.cfg.projects.len();
                 self.remotes_sel.len = self.cfg.remotes.len();
             }
+            Event::StateStatus { channels, err } => {
+                self.state_channels = channels;
+                self.state_status_error = err;
+                self.state_status_ts = if err.is_none() { unix_now() } else { 0 };
+            }
+        }
+    }
+
+    /// Переключить активную вкладку; при входе на State — запросить сводку.
+    pub fn switch_tab(&mut self, tab: Tab) {
+        self.tab = tab;
+        if tab == Tab::State {
+            self.send(Cmd::StateStatus);
+        }
+    }
+
+    /// После завершения push/pull обновляем и state-сводку (если открыт State).
+    pub fn re_query_state_if_active(&mut self) {
+        if self.tab == Tab::State {
+            self.send(Cmd::StateStatus);
         }
     }
 }

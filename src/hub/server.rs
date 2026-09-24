@@ -12,7 +12,7 @@ use tracing::{error, info, warn};
 use crate::config::{Config, SecretTokens};
 use crate::protocol::{
     error_envelope, PullOutcome, PullRequest, PullResponse, PushRequest, PushResponse,
-    StatePullRequest, StatePullResponse, StatePushRequest, StatePushResponse,
+    StatePullRequest, StatePullResponse, StatePushRequest, StatePushResponse, StateStatusRequest,
 };
 
 use super::state::HubState;
@@ -178,6 +178,7 @@ async fn handle_connection(
                         let kind = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
                         let resp = match kind {
                             "push" | "pull" | "status" | "state_push" | "state_pull"
+                                | "state_status"
                                 if authorized(&val, cfg.hub.as_ref()) =>
                             {
                                 match kind {
@@ -185,10 +186,12 @@ async fn handle_connection(
                                     "pull" => handle_pull(val, &state).await,
                                     "state_push" => handle_state_push(val, &state).await,
                                     "state_pull" => handle_state_pull(val, &state).await,
+                                    "state_status" => handle_state_status(val, &state).await,
                                     _ => handle_status(&state).await,
                                 }
                             }
-                            "push" | "pull" | "status" | "state_push" | "state_pull" => {
+                            "push" | "pull" | "status" | "state_push" | "state_pull"
+                            | "state_status" => {
                                 let machine =
                                     val.get("machine").and_then(|v| v.as_str()).unwrap_or("?");
                                 warn!("authentication failed for machine '{machine}'");
@@ -510,6 +513,17 @@ async fn handle_state_pull(val: serde_json::Value, state: &HubState) -> serde_js
         .unwrap_or_default()
     } else {
         error_envelope("invalid state_pull request")
+    }
+}
+
+/// Read-only сводка state store (вкладка State в TUI). Старый хаб (без
+/// `state_status`) отвечает error-обёрткой, клиент показывает "unavailable".
+async fn handle_state_status(val: serde_json::Value, state: &HubState) -> serde_json::Value {
+    if serde_json::from_value::<StateStatusRequest>(val).is_ok() {
+        let resp = state.state_status().await;
+        serde_json::to_value(resp).unwrap_or_default()
+    } else {
+        error_envelope("invalid state_status request")
     }
 }
 

@@ -61,6 +61,17 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Приводит timestamp к секундам: opencode-канал пишет миллисекунды,
+/// tmux — секунды. Значения > 1e12 — это однозначно ms (секунды сейчас
+/// ~1.7e9, и ещё ~век до 1e12).
+fn normalize_ts(v: i64) -> i64 {
+    if v > 1_000_000_000_000 {
+        v / 1000
+    } else {
+        v
+    }
+}
+
 pub struct HubState {
     machines: RwLock<HashMap<String, MachineState>>,
     data_dir: Option<PathBuf>,
@@ -73,6 +84,8 @@ pub struct HubState {
     state_index: RwLock<StateIndex>,
     /// Каталог для payload-файлов состояния (`<data_dir>/state`).
     state_dir: Option<PathBuf>,
+    /// Последняя ошибка синка по каналу (отдаётся в `state_status`).
+    state_errors: RwLock<HashMap<String, String>>,
 }
 
 impl HubState {
@@ -101,6 +114,7 @@ impl HubState {
             save_lock: tokio::sync::Mutex::new(()),
             state_index: RwLock::new(state_index),
             state_dir,
+            state_errors: RwLock::new(HashMap::new()),
         }
     }
 
@@ -199,8 +213,10 @@ impl HubState {
                 if let Some(parent) = path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
-                if tokio::fs::write(&path, item.data.as_bytes()).await.is_err() {
+                if let Err(e) = tokio::fs::write(&path, item.data.as_bytes()).await {
                     idx.seq -= 1;
+                    self.record_state_error(&item.channel, format!("payload write failed: {e}"))
+                        .await;
                     continue;
                 }
                 idx.items
@@ -258,6 +274,49 @@ impl HubState {
             });
         }
         (out, cur)
+    }
+
+    /// Фиксирует последнюю ошибку синка по каналу (для вкладки State).
+    pub async fn record_state_error(&self, channel: &str, err: String) {
+        let mut errors = self.state_errors.write().await;
+        errors.insert(channel.to_string(), err);
+    }
+
+    /// Сводка state store для вкладки State: по каналу — число элементов,
+    /// время/автор последнего обновления, последняя ошибка (если была).
+    pub async fn state_status(&self) -> Result<crate::protocol::StateStatusResponse> {
+        if self.state_dir.is_none() {
+            tracing::warn!("state_status requested but state store is not configured");
+            return Ok(crate::protocol::StateStatusResponse {
+                channels: Vec::new(),
+            });
+        }
+        let idx = self.state_index.read().await;
+        let errors = self.state_errors.read().await;
+        let mut by_channel: std::collections::BTreeMap<String, Vec<&StoredStateItem>> =
+            Default::default();
+        for it in &idx.items {
+            by_channel.entry(it.channel.clone()).or_default().push(it);
+        }
+        let channels = by_channel
+            .into_iter()
+            .map(|(channel, items)| {
+                // Самый свежий элемент: по (updated, seq).
+                let newest = items.iter().max_by_key(|i| (i.updated, i.seq));
+                let (last_updated, last_origin) = match newest {
+                    Some(n) => (normalize_ts(n.updated), n.origin.clone()),
+                    None => (0, String::new()),
+                };
+                crate::protocol::ChannelStatus {
+                    channel,
+                    item_count: items.len(),
+                    last_updated,
+                    last_origin,
+                    error: errors.get(&channel).cloned(),
+                }
+            })
+            .collect();
+        Ok(crate::protocol::StateStatusResponse { channels })
     }
 
     async fn save_state_index(&self) {
@@ -610,6 +669,77 @@ mod tests {
                 1,
                 "stale ignored"
             );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn state_status_summarizes_channels_with_error() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = std::env::temp_dir().join(format!("dsync-st-status-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let state = HubState::new(Some(dir.clone()), 30);
+
+            // tmux: 1 элемент, updated в секундах
+            state
+                .merge_state(
+                    vec![StateItem {
+                        channel: "tmux".into(),
+                        key: "latest".into(),
+                        updated: unix_now() - 120,
+                        data: "{}".into(),
+                        ..Default::default()
+                    }],
+                    "notebook",
+                )
+                .await;
+            // opencode: 2 элемента, updated в мс
+            state
+                .merge_state(
+                    vec![
+                        StateItem {
+                            channel: "opencode".into(),
+                            key: "ses_a".into(),
+                            updated: 1_776_000_000_000,
+                            data: "{}".into(),
+                            ..Default::default()
+                        },
+                        StateItem {
+                            channel: "opencode".into(),
+                            key: "ses_b".into(),
+                            updated: 1_776_000_100_000,
+                            data: "{}".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    "desktop",
+                )
+                .await;
+            state
+                .record_state_error("opencode", "export truncated (CLI bug)")
+                .await;
+
+            let resp = state.state_status().await.unwrap();
+            assert_eq!(resp.channels.len(), 2);
+
+            let tmux = resp.channels.iter().find(|c| c.channel == "tmux").unwrap();
+            assert_eq!(tmux.item_count, 1);
+            assert_eq!(tmux.last_origin, "notebook");
+            // seconds не делятся
+            assert!(tmux.last_updated > 0 && tmux.last_updated < 1_000_000_000_000);
+            assert!(tmux.error.is_none());
+
+            let oc = resp.channels.iter().find(|c| c.channel == "opencode").unwrap();
+            assert_eq!(oc.item_count, 2);
+            assert_eq!(oc.last_origin, "desktop");
+            // ms → s
+            assert_eq!(oc.last_updated, 1_776_000_100);
+            assert_eq!(oc.error.as_deref(), Some("export truncated (CLI bug)"));
 
             let _ = std::fs::remove_dir_all(&dir);
         });

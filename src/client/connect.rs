@@ -10,7 +10,8 @@ use tracing::{info, warn};
 use crate::config::Config;
 use crate::protocol::{
     MachineStatus, PullRequest, PullResponse, PushRequest, PushResponse, StatePullRequest,
-    StatePullResponse, StatePushRequest, StatePushResponse, StatusRequest, StatusResponse,
+    StatePullResponse, StatePushRequest, StatePushResponse, StateStatusRequest,
+    StateStatusResponse, StatusRequest, StatusResponse,
 };
 use crate::trust::{fingerprint, TrustStore};
 
@@ -222,6 +223,16 @@ pub async fn send_state_pull(
 pub async fn send_status(conn: &Connection, req: &StatusRequest) -> Result<StatusResponse> {
     let mut msg = serde_json::to_value(req)?;
     msg["type"] = serde_json::json!("status");
+    let buf = send_recv(conn, &msg).await?;
+    crate::protocol::parse_response(&buf)
+}
+
+pub async fn send_state_status(
+    conn: &Connection,
+    req: &StateStatusRequest,
+) -> Result<StateStatusResponse> {
+    let mut msg = serde_json::to_value(req)?;
+    msg["type"] = serde_json::json!("state_status");
     let buf = send_recv(conn, &msg).await?;
     crate::protocol::parse_response(&buf)
 }
