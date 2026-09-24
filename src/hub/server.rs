@@ -278,6 +278,13 @@ async fn handle_push(
     }
 }
 
+/// Решает, разворачивать ли проект на флоте при получении push:
+/// явные `[projects.*]` — всегда; авто-проекты — только если не включён
+/// контроль-режим (`[auto_projects] sync = false` → анонс без разворота).
+fn should_pull_project(is_auto: bool, auto_sync: Option<bool>) -> bool {
+    !is_auto || auto_sync.unwrap_or(true)
+}
+
 async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubState>) {
     let Some(remote_cfg) = &cfg.remote else {
         return;
@@ -301,6 +308,13 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
 
     for project in &req.projects {
         let static_cfg = projects_cfg.and_then(|p| p.get(&project.name));
+
+        // Контроль-режим ([auto_projects] sync = false): авто-проект анонсирован
+        // (статус виден в status/TUI), но не разворачивается — pull пропускаем.
+        // Явные [projects.*] разворачиваются всегда.
+        if !should_pull_project(static_cfg.is_none(), auto_cfg.and_then(|a| a.sync)) {
+            continue;
+        }
 
         // Машины: из явного [projects.X] machines, иначе — [auto_projects]
         // machines, иначе — весь флот из [remote.*].
@@ -645,6 +659,19 @@ mod tests {
         use std::collections::HashMap;
         let got = effective_hub_tokens(&HashMap::new(), SecretTokens::default());
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn should_pull_project_semantics() {
+        // Явные [projects.*] пулятся всегда, даже при контроль-режиме.
+        assert!(should_pull_project(false, Some(false)));
+        assert!(should_pull_project(false, None));
+        assert!(should_pull_project(false, Some(true)));
+        // Авто-проекты: по умолчанию (None) и sync=true — разворачиваются.
+        assert!(should_pull_project(true, None));
+        assert!(should_pull_project(true, Some(true)));
+        // Контроль-режим: авто-проекты анонсируются, но не пулятся.
+        assert!(!should_pull_project(true, Some(false)));
     }
 
     /// Принимающий всё verifier — тестовый аналог TOFU-клиента.

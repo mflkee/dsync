@@ -293,6 +293,13 @@ pub struct AutoProjectsConfig {
     /// скретч, чужые форки, дубли. Не влияет на явные `[projects.*]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
+    /// Контроль-режим: `sync = false` → авто-проекты только **анонсируются**
+    /// (состояния видны в `dsync status` / TUI Projects), но НЕ разворачиваются
+    /// на флоте: hub не делает git clone/pull. По умолчанию `true` — обычный
+    /// разворот (`git pull --rebase --autostash` / bootstrap clone).
+    /// Явные `[projects.*]` пулятся в любом случае.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -517,7 +524,8 @@ mod tests {
              root = '~/projects'\n\
              branch = 'main'\n\
              machines = ['notebook', 'desktop']\n\
-             exclude = ['rustlings', 'study']\n",
+             exclude = ['rustlings', 'study']\n\
+             sync = false\n",
         )
         .unwrap();
         let ap = cfg.auto_projects.expect("auto_projects present");
@@ -525,6 +533,7 @@ mod tests {
         assert_eq!(ap.branch.as_deref(), Some("main"));
         assert_eq!(ap.machines.as_ref().unwrap().len(), 2);
         assert_eq!(ap.exclude.as_ref().unwrap().len(), 2);
+        assert_eq!(ap.sync, Some(false));
 
         // Минимальная секция: всё по умолчанию (None).
         let cfg: Config = toml::from_str(
@@ -533,6 +542,7 @@ mod tests {
         .unwrap();
         let ap = cfg.auto_projects.expect("present");
         assert!(ap.root.is_none() && ap.branch.is_none() && ap.machines.is_none() && ap.exclude.is_none());
+        assert!(ap.sync.is_none(), "sync default = None (означает true)");
 
         // Отсутствует секция — None.
         let cfg: Config = toml::from_str("machine = { name = 'x' }\n").unwrap();
