@@ -307,12 +307,13 @@ impl HubState {
                     Some(n) => (normalize_ts(n.updated), n.origin.clone()),
                     None => (0, String::new()),
                 };
+                let error = errors.get(&channel).cloned();
                 crate::protocol::ChannelStatus {
                     channel,
                     item_count: items.len(),
                     last_updated,
                     last_origin,
-                    error: errors.get(&channel).cloned(),
+                    error,
                 }
             })
             .collect();
@@ -721,7 +722,7 @@ mod tests {
                 )
                 .await;
             state
-                .record_state_error("opencode", "export truncated (CLI bug)")
+                .record_state_error("opencode", "export truncated (CLI bug)".to_string())
                 .await;
 
             let resp = state.state_status().await.unwrap();

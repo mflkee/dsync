@@ -510,9 +510,12 @@ fn draw_machines(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(" chezmoi  : ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 if app.cfg.chezmoi_managed {
-                    "managed — edits hit the live file, template is separate"
+                    match &app.cfg.chezmoi_template {
+                        Some(t) => format!("managed — saves via template {t} + chezmoi apply"),
+                        None => "managed — no template; config edits refused".to_string(),
+                    }
                 } else {
-                    "not managed"
+                    "not managed".to_string()
                 },
                 Style::default().fg(if app.cfg.chezmoi_managed {
                     Color::Yellow
@@ -984,6 +987,19 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::from("   [↑/↓]              — select remote machine"),
         Line::from("   [n]                — add machine ([remote.<name>]: host/port/user)"),
         Line::from("   [d]                — delete selected machine from config"),
+        Line::from("   [e]                — failed pulls overlay (все машины флота)"),
+        Line::from(""),
+        Line::from(Span::styled(
+            " STATE (tmux / opencode)",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from("   [t]                — toggle tmux-resurrect sync (подтверждение)"),
+        Line::from("   [T]                — toggle tmux auto-restore (подтверждение)"),
+        Line::from("   [n]                — edit opencode project list (пусто = все projects.*)"),
+        Line::from("   [r]                — refresh hub state summary"),
+        Line::from("   Правая панель — сводка с хаба; старый хаб → «unavailable»."),
         Line::from(""),
         Line::from(Span::styled(
             " DOCTOR",
@@ -992,6 +1008,18 @@ fn help_lines() -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("   [r]                — run checks: config, ssh key, netbird, git, hub ping"),
+        Line::from(""),
+        Line::from(Span::styled(
+            " FORMS",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from("   [Tab]/[↑↓]         — switch field"),
+        Line::from("   [←/→] [Home]/[End] — move cursor"),
+        Line::from("   [⌫]/[Del] [Ctrl-U] — backspace / delete / clear field"),
+        Line::from("   На chezmoi-managed конфиге каждая запись конфига подтверждается"),
+        Line::from("   и пишется в шаблон, затем `chezmoi apply` регенерирует живой файл."),
         Line::from(""),
         Line::from(Span::styled(
             " LOG",
@@ -1009,8 +1037,10 @@ fn help_lines() -> Vec<Line<'static>> {
         )),
         Line::from("   UI-поток (ratatui) синхронный; сеть/файлы — в фоне"),
         Line::from("   (src/tui/backend.rs) с собственным tokio runtime."),
-        Line::from("   Конфиг редактируется на живой файл; chezmoi применяй"),
-        Line::from("   отдельно (шаблон в dotfiles)."),
+        Line::from("   Конфиг правится точечными патчами (toml_edit): комментарии"),
+        Line::from("   и неизвестные секции сохраняются; chezmoi-правки идут через"),
+        Line::from("   шаблон (в т.ч. Go-template файлы — текстовый движок по регионам)."),
+        Line::from("   Колесо мыши скроллит списки/лог/доктора (если поддержано)."),
     ]
 }
 

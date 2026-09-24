@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TUI improvements** (`tui-improvements`):
+  - *Config-safe editor*: config mutations from the TUI now go through
+    `toml_edit` patches (`ConfigEditor::apply_patch`) — comments, unknown
+    sections and Go-template syntax in the chezmoi source file survive every
+    add/remove/toggle. On chezmoi-managed configs each save is explicitly
+    confirmed, written to the source template and followed by
+    `chezmoi apply <target>` (refused with an actionable message when no
+    template is found). Every save logs a precise diff
+    (`+ projects.<name> added`, `~ … changed`, `- … removed`).
+  - *Full form editing*: caret-aware input in all forms — Left/Right/Home/End,
+    Backspace/Delete, Ctrl-U (UTF-8-safe, by `char` boundaries), Tab/↑↓ for
+    field navigation, caret rendering and an "insert at column N" hint.
+  - *Pull visibility*: `e` on Dashboard/Machines opens a failed-pulls overlay
+    (machine × project × attempts × last error from `MachineStatus.pulls`,
+    with scroll and a proper empty state).
+  - *Mouse*: terminal init enables mouse capture (graceful degrade to keyboard
+    scroll if unsupported); wheel scrolls Log/Help/Doctor while no form is
+    open; a panic hook restores the terminal on every exit path.
+  - *State tab*: read-only `state_status` hub request (new protocol message)
+    summarizing the state store per channel (item count, last updated/origin,
+    last sync error) plus the local `[state]` config; toggles for
+    `tmux`/`tmux_restore` (with confirmation) and an editor for the
+    `[state.opencode] projects` list — all saved through the safe patch path.
+    Old hubs answer an error envelope → the tab shows "unavailable".
 - **Auto-project discovery** (`auto-projects`): dsync watches a root directory
   (default `~/projects`, depth 1) and automatically announces any new git repo
   to the fleet — no manual `[projects.*]` config edit needed. Configure via

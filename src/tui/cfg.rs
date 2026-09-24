@@ -403,11 +403,6 @@ impl ConfigEditor {
         }
         Ok(())
     }
-
-    /// Есть ли у нас управляемый шаблон для прямой (не-template) записи.
-    pub fn template_available(&self) -> bool {
-        self.chezmoi_source.as_ref().map(|p| p.exists()).unwrap_or(false)
-    }
 }
 
 /// Применить патч к TOML-документу, вернуть diff-строки (точные по ключам).
@@ -588,12 +583,12 @@ fn changed_keys(name: &str, old: &Table, proj: &ProjectConfig) -> Vec<String> {
     let field = |t: &Table, k: &str| -> Option<String> {
         t.get(k).and_then(|i| i.as_value()).map(|v| v.to_string())
     };
-    let new_path = Some(proj.path.display().to_string());
-    if field(old, "path") != new_path {
+    let new_path = proj.path.display().to_string();
+    if field(old, "path") != Some(new_path.clone()) {
         out.push(format!(
             "~ projects.{name}.path: {} → {}",
             field(old, "path").unwrap_or_else(|| "(absent)".into()),
-            new_path.unwrap_or_default()
+            new_path
         ));
     }
     let new_branch = proj.branch.clone();
@@ -949,12 +944,41 @@ tmux_restore = false
     }
 
     #[test]
+    fn utf8_values_survive_add_and_remove() {
+        let (path, dir) = tmp_file("utf8", WITH_COMMENTS);
+        let mut ed = base_editor(path.clone());
+        // Имя проекта и путь с кириллицей/эмодзи — значения пишутся и читаются
+        // без потерь, документ остаётся валидным TOML.
+        ed.add_project("архив-2026", "/tmp/архив-📦", None, &["десктоп".into()], None, false)
+            .unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("архив-2026"));
+        assert!(out.contains("/tmp/архив-📦"));
+        let back: Config = toml::from_str(&out).unwrap();
+        let p = back
+            .projects
+            .unwrap()
+            .get("архив-2026")
+            .unwrap()
+            .clone();
+        assert_eq!(p.path.display().to_string(), "/tmp/архив-📦");
+        assert_eq!(p.machines, vec!["десктоп".to_string()].into());
+        ed.remove_project("архив-2026", false).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(!out.contains("архив-2026"));
+        assert!(out.contains("# main comment"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn unknown_field_survives_remove_remote() {
-        let (path, dir) = tmp_file("unknown-sect", WITH_COMMENTS);
-        let cfg: Config = toml::from_str(
-            "[machine]\nname = \"x\"\n[remote.r1]\nhost = \"h\"\nport = 22\nuser = \"u\"\n[v2_new_section]\nx = 1\n",
-        )
-        .unwrap();
+        let content = "\
+# top comment survives\n\
+[machine]\nname = \"x\"\n\
+[remote.r1]\nhost = \"h\"\nport = 22\nuser = \"u\"\n\
+[v2_new_section]\nx = 1\n";
+        let (path, dir) = tmp_file("unknown-sect", content);
+        let cfg: Config = toml::from_str(content).unwrap();
         let mut ed = ConfigEditor {
             live_path: path.clone(),
             chezmoi_managed: false,
@@ -964,6 +988,7 @@ tmux_restore = false
         ed.remove_remote("r1", false).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(out.contains("[v2_new_section]"), "unknown section survives: {out}");
+        assert!(out.contains("# top comment survives"), "unrelated comment survives: {out}");
         assert!(!out.contains("[remote.r1]"));
         let _ = std::fs::remove_dir_all(&dir);
     }

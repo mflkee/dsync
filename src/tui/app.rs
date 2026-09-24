@@ -249,12 +249,10 @@ impl FormField {
 /// Байтовый индекс начала символа на позиции `pos` (0-based, в символах);
 /// pos ≥ числа символов → конец строки.
 pub fn char_pos_to_byte(s: &str, pos: usize) -> usize {
-    let mut count = 0;
-    for (byte, _) in s.char_indices() {
+    for (count, (byte, _)) in s.char_indices().enumerate() {
         if count == pos {
             return byte;
         }
-        count += 1;
     }
     s.len()
 }
@@ -371,9 +369,10 @@ impl App {
                 self.remotes_sel.len = self.cfg.remotes.len();
             }
             Event::StateStatus { channels, err } => {
+                let ok = err.is_none();
                 self.state_channels = channels;
                 self.state_status_error = err;
-                self.state_status_ts = if err.is_none() { unix_now() } else { 0 };
+                self.state_status_ts = if ok { unix_now() } else { 0 };
             }
         }
     }
@@ -442,4 +441,69 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_insert_at_cursor_middle() {
+        let mut f = FormField::new("name", "mashroomwars");
+        // курсор ставим на 2-й символ «s» (после "ma")
+        f.cursor = 2;
+        f.insert_char('s');
+        assert_eq!(f.value, "masshroomwars");
+        assert_eq!(f.cursor, 3);
+    }
+
+    #[test]
+    fn field_backspace_delete_and_clear() {
+        let mut f = FormField::new("path", "/home/mflkee");
+        f.cursor = 5; // перед 'e'
+        f.backspace();
+        assert_eq!(f.value, "/hom/mflkee");
+        assert_eq!(f.cursor, 4);
+
+        let mut g = FormField::new("path", "abc");
+        g.cursor = 1;
+        g.delete();
+        assert_eq!(g.value, "ac");
+
+        let mut h = FormField::new("x", "hello world");
+        h.clear();
+        assert!(h.value.is_empty());
+        assert_eq!(h.cursor, 0);
+    }
+
+    #[test]
+    fn field_unicode_never_panics_and_counts_chars() {
+        let mut f = FormField::new("machine", "архив-машина-01");
+        assert_eq!(f.char_len(), "архив-машина-01".chars().count());
+        f.cursor = 3;
+        f.insert_char('X');
+        assert_eq!(f.value, "архXив-машина-01");
+        assert_eq!(f.cursor, 4);
+
+        // Вырезка/вставка на границах символов не режет UTF-8.
+        let mut g = FormField::new("x", "привет");
+        g.cursor = g.char_len();
+        g.backspace();
+        assert_eq!(g.value, "приве");
+
+        let mut h = FormField::new("x", "привет");
+        h.cursor = 1;
+        h.delete();
+        assert_eq!(h.value, "пивет");
+    }
+
+    #[test]
+    fn char_pos_clamps_out_of_range() {
+        assert_eq!(char_pos_to_byte("abc", 0), 0);
+        assert_eq!(char_pos_to_byte("abc", 3), "abc".len());
+        assert_eq!(char_pos_to_byte("abc", 99), "abc".len());
+        assert_eq!(char_pos_to_byte("", 2), 0);
+        // граница по символам, а не по байтам
+        assert_eq!(char_pos_to_byte("абв", 2), "абв".char_indices().nth(2).unwrap().0);
+    }
 }

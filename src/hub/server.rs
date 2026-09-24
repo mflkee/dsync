@@ -520,8 +520,10 @@ async fn handle_state_pull(val: serde_json::Value, state: &HubState) -> serde_js
 /// `state_status`) отвечает error-обёрткой, клиент показывает "unavailable".
 async fn handle_state_status(val: serde_json::Value, state: &HubState) -> serde_json::Value {
     if serde_json::from_value::<StateStatusRequest>(val).is_ok() {
-        let resp = state.state_status().await;
-        serde_json::to_value(resp).unwrap_or_default()
+        match state.state_status().await {
+            Ok(resp) => serde_json::to_value(resp).unwrap_or_default(),
+            Err(e) => error_envelope(format!("state_status: {e}")),
+        }
     } else {
         error_envelope("invalid state_status request")
     }
