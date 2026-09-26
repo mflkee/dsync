@@ -62,7 +62,7 @@ fn unix_now() -> i64 {
 }
 
 /// Приводит timestamp к секундам: opencode-канал пишет миллисекунды,
-/// tmux — секунды. Значения > 1e12 — это однозначно ms (секунды сейчас
+/// tmux/zellij — секунды. Значения > 1e12 — это однозначно ms (секунды сейчас
 /// ~1.7e9, и ещё ~век до 1e12).
 fn normalize_ts(v: i64) -> i64 {
     if v > 1_000_000_000_000 {
@@ -80,7 +80,7 @@ pub struct HubState {
     /// Сериализует одновременные `save()`: несколько пулл-тасок финишируют
     /// разом и писали в один tmp-файл (rename второго ловил ENOENT).
     save_lock: tokio::sync::Mutex<()>,
-    /// Не-git состояние флота (tmux / opencode), проиндексированное по (channel, key).
+    /// Не-git состояние флота (zellij / opencode), проиндексированное по (channel, key).
     state_index: RwLock<StateIndex>,
     /// Каталог для payload-файлов состояния (`<data_dir>/state`).
     state_dir: Option<PathBuf>,
@@ -686,11 +686,11 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             let state = HubState::new(Some(dir.clone()), 30);
 
-            // tmux: 1 элемент, updated в секундах
+            // zellij: 1 элемент, updated в секундах
             state
                 .merge_state(
                     vec![StateItem {
-                        channel: "tmux".into(),
+                        channel: "zellij".into(),
                         key: "latest".into(),
                         updated: unix_now() - 120,
                         data: "{}".into(),
@@ -728,7 +728,7 @@ mod tests {
             let resp = state.state_status().await.unwrap();
             assert_eq!(resp.channels.len(), 2);
 
-            let tmux = resp.channels.iter().find(|c| c.channel == "tmux").unwrap();
+            let tmux = resp.channels.iter().find(|c| c.channel == "zellij").unwrap();
             assert_eq!(tmux.item_count, 1);
             assert_eq!(tmux.last_origin, "notebook");
             // seconds не делятся
