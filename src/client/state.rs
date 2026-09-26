@@ -584,28 +584,16 @@ fn batches(items: Vec<StateItem>) -> Vec<Vec<StateItem>> {
 // Хелперы: Zellij
 // ---------------------------------------------------------------------------
 
-/// Имя сессии Zellij, чью раскладку синхронизируем. Берём из переменной
-/// окружения (если `dsync` запущен внутри Zellij) или последнюю активную.
+/// Имя сессии Zellij, чью раскладку синхронизируем. По умолчанию — `main`
+/// (единая постоянная сессия, см. ~/.zshrc). Если `dsync` запущен внутри
+/// другой сессии — берём её имя из окружения.
 fn zellij_session_name() -> Option<String> {
     if let Ok(name) = std::env::var("ZELLIJ_SESSION_NAME") {
         if !name.is_empty() {
             return Some(name);
         }
     }
-    // Иначе — самая свежая сессия (первая строка `zellij list-sessions -s -n`).
-    let out = Command::new("zellij")
-        .args(["list-sessions", "-s", "-n"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let name = text
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty() && !l.contains("[Created"))?;
-    Some(name.to_string())
+    Some("main".to_string())
 }
 
 fn zellij_running() -> bool {
