@@ -154,7 +154,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 Tab::Dashboard => "[↑↓] select  [P] push selected  [L] pull selected  [e] failed pulls",
                 Tab::Projects => "[↑↓] select  [n] add project  [d] delete",
                 Tab::Machines => "[↑↓] select  [n] add machine  [d] delete  [e] failed pulls",
-                Tab::State => "[t] tmux  [T] auto-restore  [n] opencode projects  [r] refresh",
+                Tab::State => "[t] zellij  [T] auto-restore  [n] opencode projects  [r] refresh",
                 Tab::Doctor => "[r] run checks  [↑↓/PgUp/PgDn] scroll",
                 Tab::Log => "[↑↓/PgUp/PgDn] scroll  [Enter] clear",
                 Tab::Help => "[↑↓/PgUp/PgDn] scroll",
@@ -607,10 +607,10 @@ fn draw_state(frame: &mut Frame, app: &mut App, area: Rect) {
     // Слева — эффективная конфигурация [state].
     let mut cfg_lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled(" tmux sync      : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" zellij sync      : ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                on_off(app.cfg.state.tmux),
-                Style::default().fg(if app.cfg.state.tmux {
+                on_off(app.cfg.state.zellij),
+                Style::default().fg(if app.cfg.state.zellij {
                     Color::Green
                 } else {
                     Color::Red
@@ -621,8 +621,8 @@ fn draw_state(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![
             Span::styled(" auto-restore   : ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                on_off(app.cfg.state.tmux_restore),
-                Style::default().fg(if app.cfg.state.tmux_restore {
+                on_off(app.cfg.state.zellij_restore),
+                Style::default().fg(if app.cfg.state.zellij_restore {
                     Color::Green
                 } else {
                     Color::Red
@@ -659,7 +659,7 @@ fn draw_state(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     if !app.cfg.state.configured {
         cfg_lines.push(Line::from(Span::styled(
-            "   (секции [state] нет — дефолты: tmux on, restore off)",
+            "   (секции [state] нет — дефолты: zellij on, restore off)",
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -990,13 +990,13 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::from("   [e]                — failed pulls overlay (все машины флота)"),
         Line::from(""),
         Line::from(Span::styled(
-            " STATE (tmux / opencode)",
+            " STATE (zellij / opencode)",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from("   [t]                — toggle tmux-resurrect sync (подтверждение)"),
-        Line::from("   [T]                — toggle tmux auto-restore (подтверждение)"),
+        Line::from("   [t]                — toggle zellij-resurrect sync (подтверждение)"),
+        Line::from("   [T]                — toggle zellij auto-restore (подтверждение)"),
         Line::from("   [n]                — edit opencode project list (пусто = все projects.*)"),
         Line::from("   [r]                — refresh hub state summary"),
         Line::from("   Правая панель — сводка с хаба; старый хаб → «unavailable»."),

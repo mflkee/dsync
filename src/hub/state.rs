@@ -62,7 +62,7 @@ fn unix_now() -> i64 {
 }
 
 /// Приводит timestamp к секундам: opencode-канал пишет миллисекунды,
-/// tmux/zellij — секунды. Значения > 1e12 — это однозначно ms (секунды сейчас
+/// zellij — секунды. Значения > 1e12 — это однозначно ms (секунды сейчас
 /// ~1.7e9, и ещё ~век до 1e12).
 fn normalize_ts(v: i64) -> i64 {
     if v > 1_000_000_000_000 {
@@ -728,12 +728,12 @@ mod tests {
             let resp = state.state_status().await.unwrap();
             assert_eq!(resp.channels.len(), 2);
 
-            let tmux = resp.channels.iter().find(|c| c.channel == "zellij").unwrap();
-            assert_eq!(tmux.item_count, 1);
-            assert_eq!(tmux.last_origin, "notebook");
+            let zellij = resp.channels.iter().find(|c| c.channel == "zellij").unwrap();
+            assert_eq!(zellij.item_count, 1);
+            assert_eq!(zellij.last_origin, "notebook");
             // seconds не делятся
-            assert!(tmux.last_updated > 0 && tmux.last_updated < 1_000_000_000_000);
-            assert!(tmux.error.is_none());
+            assert!(zellij.last_updated > 0 && zellij.last_updated < 1_000_000_000_000);
+            assert!(zellij.error.is_none());
 
             let oc = resp.channels.iter().find(|c| c.channel == "opencode").unwrap();
             assert_eq!(oc.item_count, 2);

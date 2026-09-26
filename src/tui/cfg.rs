@@ -35,8 +35,8 @@ pub struct CfgSummary {
 pub struct CfgState {
     /// Была ли секция [state] в конфиге вовсе.
     pub configured: bool,
-    pub tmux: bool,
-    pub tmux_restore: bool,
+    pub zellij: bool,
+    pub zellij_restore: bool,
     /// Список путей проектов opencode; None = синхронизируются все.
     pub opencode_projects: Option<Vec<String>>,
 }
@@ -77,8 +77,8 @@ pub enum ConfigPatch {
         name: String,
     },
     State {
-        tmux: Option<bool>,
-        tmux_restore: Option<bool>,
+        zellij: Option<bool>,
+        zellij_restore: Option<bool>,
         opencode_projects: Option<Vec<String>>,
     },
 }
@@ -152,8 +152,8 @@ impl ConfigEditor {
         let st = self.cfg.state.as_ref();
         let state = CfgState {
             configured,
-            tmux: st.map(|s| s.tmux).unwrap_or(true),
-            tmux_restore: st.map(|s| s.tmux_restore).unwrap_or(false),
+            zellij: st.map(|s| s.zellij).unwrap_or(true),
+            zellij_restore: st.map(|s| s.zellij_restore).unwrap_or(false),
             opencode_projects: st
                 .and_then(|s| s.opencode.as_ref())
                 .and_then(|o| o.projects.as_ref())
@@ -256,18 +256,18 @@ impl ConfigEditor {
         )
     }
 
-    /// Применить изменение секции [state] (tmux/tmux_restore/opencode-список).
+    /// Применить изменение секции [state] (zellij/zellij_restore/opencode-список).
     pub fn apply_state(
         &mut self,
-        tmux: Option<bool>,
-        tmux_restore: Option<bool>,
+        zellij: Option<bool>,
+        zellij_restore: Option<bool>,
         opencode_projects: Option<Vec<String>>,
         use_template: bool,
     ) -> Result<Vec<String>> {
         self.apply_patch(
             &ConfigPatch::State {
-                tmux,
-                tmux_restore,
+                zellij,
+                zellij_restore,
                 opencode_projects,
             },
             use_template,
@@ -351,19 +351,19 @@ impl ConfigEditor {
                 }
             }
             ConfigPatch::State {
-                tmux,
-                tmux_restore,
+                zellij,
+                zellij_restore,
                 opencode_projects,
             } => {
-                if tmux.is_none() && tmux_restore.is_none() && opencode_projects.is_none() {
+                if zellij.is_none() && zellij_restore.is_none() && opencode_projects.is_none() {
                     return;
                 }
                 let state = self.cfg.state.get_or_insert_with(Default::default);
-                if let Some(v) = tmux {
-                    state.tmux = *v;
+                if let Some(v) = zellij {
+                    state.zellij = *v;
                 }
-                if let Some(v) = tmux_restore {
-                    state.tmux_restore = *v;
+                if let Some(v) = zellij_restore {
+                    state.zellij_restore = *v;
                 }
                 if let Some(list) = opencode_projects {
                     if list.is_empty() {
@@ -489,34 +489,34 @@ fn apply_doc_patch(doc: &mut DocumentMut, patch: &ConfigPatch) -> Result<Vec<Str
             }
         }
         ConfigPatch::State {
-            tmux,
-            tmux_restore,
+            zellij,
+            zellij_restore,
             opencode_projects,
         } => {
-            if tmux.is_none() && tmux_restore.is_none() && opencode_projects.is_none() {
+            if zellij.is_none() && zellij_restore.is_none() && opencode_projects.is_none() {
                 return Ok(diff);
             }
             let state_item = doc.entry("state").or_insert(Item::Table(Table::new()));
             let state = state_item
                 .as_table_mut()
                 .ok_or_else(|| anyhow::anyhow!("[state] is not a table"))?;
-            if let Some(v) = tmux {
+            if let Some(v) = zellij {
                 let old = state
-                    .get("tmux")
+                    .get("zellij")
                     .and_then(|i| i.as_value())
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "(absent)".into());
-                state.insert("tmux", Item::Value(Value::from(*v)));
-                diff.push(format!("~ state.tmux: {old} → {v}"));
+                state.insert("zellij", Item::Value(Value::from(*v)));
+                diff.push(format!("~ state.zellij: {old} → {v}"));
             }
-            if let Some(v) = tmux_restore {
+            if let Some(v) = zellij_restore {
                 let old = state
-                    .get("tmux_restore")
+                    .get("zellij_restore")
                     .and_then(|i| i.as_value())
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "(absent)".into());
-                state.insert("tmux_restore", Item::Value(Value::from(*v)));
-                diff.push(format!("~ state.tmux_restore: {old} → {v}"));
+                state.insert("zellij_restore", Item::Value(Value::from(*v)));
+                diff.push(format!("~ state.zellij_restore: {old} → {v}"));
             }
             if let Some(list) = opencode_projects {
                 let occ_item = state.entry("opencode").or_insert(Item::Table(Table::new()));
@@ -671,18 +671,18 @@ fn patch_template_text(content: &str, patch: &ConfigPatch) -> Result<(String, Ve
             }
         }
         ConfigPatch::State {
-            tmux,
-            tmux_restore,
+            zellij,
+            zellij_restore,
             opencode_projects,
         } => {
-            if let Some(v) = tmux {
-                set_key_in_block(&mut lines, "[state]", "tmux", Some(v.to_string()), &mut diff);
+            if let Some(v) = zellij {
+                set_key_in_block(&mut lines, "[state]", "zellij", Some(v.to_string()), &mut diff);
             }
-            if let Some(v) = tmux_restore {
+            if let Some(v) = zellij_restore {
                 set_key_in_block(
                     &mut lines,
                     "[state]",
-                    "tmux_restore",
+                    "zellij_restore",
                     Some(v.to_string()),
                     &mut diff,
                 );
@@ -898,8 +898,8 @@ address = "127.0.0.1:42069"
 keep = "me"
 
 [state]
-tmux = true
-tmux_restore = false
+zellij = true
+zellij_restore = false
 "#;
 
     #[test]
@@ -1017,16 +1017,16 @@ tmux_restore = false
         let diff = ed
             .apply_state(Some(false), Some(true), Some(vec![], ), false)
             .unwrap();
-        assert!(diff.iter().any(|l| l.contains("state.tmux")));
-        assert!(diff.iter().any(|l| l.contains("state.tmux_restore")));
+        assert!(diff.iter().any(|l| l.contains("state.zellij")));
+        assert!(diff.iter().any(|l| l.contains("state.zellij_restore")));
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(out.contains("# main comment"));
-        assert!(out.contains("tmux = false"));
-        assert!(out.contains("tmux_restore = true"));
+        assert!(out.contains("zellij = false"));
+        assert!(out.contains("zellij_restore = true"));
         let back: Config = toml::from_str(&out).unwrap();
         let st = back.state.unwrap();
-        assert!(!st.tmux);
-        assert!(st.tmux_restore);
+        assert!(!st.zellij);
+        assert!(st.zellij_restore);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1062,8 +1062,8 @@ branch = "main"
 machines = ["notebook", "desktop"]
 
 [state]
-tmux = true
-tmux_restore = false
+zellij = true
+zellij_restore = false
 
 {{ if eq .chezmoi.hostname "server" }}
 [hub]
@@ -1107,15 +1107,15 @@ bind = "0.0.0.0:42069"
         let (out, diff) = patch_template_text(
             GO_TMPL,
             &ConfigPatch::State {
-                tmux: Some(false),
-                tmux_restore: None,
+                zellij: Some(false),
+                zellij_restore: None,
                 opencode_projects: None,
             },
         )
         .unwrap();
-        assert!(diff.iter().any(|l| l.contains("tmux")));
-        assert!(out.contains("tmux = false"));
-        assert!(out.contains("tmux_restore = false"));
+        assert!(diff.iter().any(|l| l.contains("zellij")));
+        assert!(out.contains("zellij = false"));
+        assert!(out.contains("zellij_restore = false"));
         assert!(out.contains("{{ if eq .chezmoi.hostname \"server\" }}"));
     }
 
