@@ -51,7 +51,7 @@ pub(super) async fn push_core(cfg: Config, machine: Option<String>) -> Result<Ve
         anyhow::bail!("push failed: {}", resp.error.unwrap_or_default());
     }
 
-    // Не-git состояние флота (раскладка Zellij, сессии opencode) — best-effort:
+    // Не-git состояние флота (tmux-снапшот, сессии opencode) — best-effort:
     // ошибки логируются и не валят общий push. Сбор делается здесь (capture=true),
     // pull в том же цикле `dsync-run` только применяет чужие изменения.
     out.extend(crate::client::state::sync_state(&cfg, true).await);

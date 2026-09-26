@@ -35,9 +35,9 @@ pub async fn pull(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
         out.push(format!("  {name}: {} projects", state.projects.len()));
     }
 
-    // Не-git состояние флота (раскладка Zellij, сессии opencode) — best-effort.
+    // Не-git состояние флота (tmux-снапшот, сессии opencode) — best-effort.
     // Только применяем чужие изменения (capture=false): сбор/save уже сделал
-    // push в этом же цикле `dsync-run`, повторный триггер сериализации Zellij
+    // push в этом же цикле `dsync-run`, повторный триггер tmux-resurrect
     // плодил бы лишние снапшоты.
     out.extend(crate::client::state::sync_state(&cfg, false).await);
 

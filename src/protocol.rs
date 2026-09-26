@@ -129,21 +129,21 @@ pub struct MachineStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Non-git fleet state (Zellij session layout / opencode sessions)
+// Non-git fleet state (tmux snapshot / opencode sessions)
 // ---------------------------------------------------------------------------
 
 /// One unit of non-git synced state.
 ///
-/// Channels: `zellij` (a single item keyed `latest`) and `opencode` (one item per
+/// Channels: `tmux` (a single item keyed `latest`) and `opencode` (one item per
 /// exported session, keyed by session id). The hub assigns `seq` and `origin`;
 /// clients send `seq = 0` and ignore `origin` on upload.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct StateItem {
-    /// Channel: `"zellij"` | `"opencode"`.
+    /// Channel: `"tmux"` | `"opencode"`.
     pub channel: String,
-    /// Item identity inside the channel (`zellij`: `"latest"`; `opencode`: session id).
+    /// Item identity inside the channel (`tmux`: `"latest"`; `opencode`: session id).
     pub key: String,
-    /// Source timestamp for last-write-wins (ms for opencode, seconds for zellij).
+    /// Source timestamp for last-write-wins (ms for opencode, seconds for tmux).
     #[serde(default)]
     pub updated: i64,
     /// Machine that last wrote the item (set by the hub).
@@ -152,10 +152,10 @@ pub struct StateItem {
     /// Hub-assigned sequence number (set by the hub; 0 from clients).
     #[serde(default)]
     pub seq: i64,
-    /// Optional metadata (opencode: project directory; zellij: session name).
+    /// Optional metadata (opencode: project directory; tmux: snapshot filename).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<String>,
-    /// Payload (exported session JSON, or the packed Zellij session files).
+    /// Payload (exported session JSON, or the tmux-resurrect save file text).
     pub data: String,
 }
 

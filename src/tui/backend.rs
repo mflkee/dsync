@@ -49,10 +49,10 @@ pub enum Cmd {
     },
     /// Удалить remote-машину из конфига.
     RemoveRemote { name: String, use_template: bool },
-    /// Изменить секцию [state] (zellij/zellij_restore/opencode-список).
+    /// Изменить секцию [state] (tmux/tmux_restore/opencode-список).
     SetState {
-        zellij: Option<bool>,
-        zellij_restore: Option<bool>,
+        tmux: Option<bool>,
+        tmux_restore: Option<bool>,
         opencode_projects: Option<Vec<String>>,
         use_template: bool,
     },
@@ -227,8 +227,8 @@ async fn run_backend(
                         Err(e) => { let _ = ev.send(Event::Log { level: 3, text: format!("remove remote: {e}") }); }
                     }
                 }
-                Some(Cmd::SetState { zellij, zellij_restore, opencode_projects, use_template }) => {
-                    match editor.apply_state(zellij, zellij_restore, opencode_projects, use_template) {
+                Some(Cmd::SetState { tmux, tmux_restore, opencode_projects, use_template }) => {
+                    match editor.apply_state(tmux, tmux_restore, opencode_projects, use_template) {
                         Ok(diff) => {
                             for d in diff {
                                 let _ = ev.send(Event::Log { level: 1, text: d });

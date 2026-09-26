@@ -266,8 +266,8 @@ pub enum ConfirmAction {
     ChezmoiApply(Cmd),
     /// Подтверждено переключение [state]: отправить Cmd::SetState.
     StateToggle {
-        zellij: Option<bool>,
-        zellij_restore: Option<bool>,
+        tmux: Option<bool>,
+        tmux_restore: Option<bool>,
     },
 }
 

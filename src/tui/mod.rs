@@ -153,24 +153,24 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) {
             _ => {}
         },
         Char('t') if app.tab == app::Tab::State => {
-            let new = !app.cfg.state.zellij;
+            let new = !app.cfg.state.tmux;
             app.form = Some(Form::confirm(
-                " toggle zellij ",
-                format!("zellij sync: {} → {new}", app.cfg.state.zellij),
+                " toggle tmux ",
+                format!("tmux sync: {} → {new}", app.cfg.state.tmux),
                 ConfirmAction::StateToggle {
-                    zellij: Some(new),
-                    zellij_restore: None,
+                    tmux: Some(new),
+                    tmux_restore: None,
                 },
             ));
         }
         Char('T') if app.tab == app::Tab::State => {
-            let new = !app.cfg.state.zellij_restore;
+            let new = !app.cfg.state.tmux_restore;
             app.form = Some(Form::confirm(
-                " toggle zellij_restore ",
-                format!("zellij auto-restore: {} → {new}", app.cfg.state.zellij_restore),
+                " toggle tmux_restore ",
+                format!("tmux auto-restore: {} → {new}", app.cfg.state.tmux_restore),
                 ConfirmAction::StateToggle {
-                    zellij: None,
-                    zellij_restore: Some(new),
+                    tmux: None,
+                    tmux_restore: Some(new),
                 },
             ));
         }
@@ -434,12 +434,12 @@ fn submit_form(app: &mut App, form: &Form) {
                 set_use_template(&mut cmd, true);
                 app.send(cmd);
             }
-            ConfirmAction::StateToggle { zellij, zellij_restore } => {
+            ConfirmAction::StateToggle { tmux, tmux_restore } => {
                 route_config_cmd(
                     app,
                     Cmd::SetState {
-                        zellij,
-                        zellij_restore,
+                        tmux,
+                        tmux_restore,
                         opencode_projects: None,
                         use_template: false,
                     },
@@ -468,8 +468,8 @@ fn submit_form(app: &mut App, form: &Form) {
             }
         }
         " opencode projects " => Cmd::SetState {
-            zellij: None,
-            zellij_restore: None,
+            tmux: None,
+            tmux_restore: None,
             opencode_projects: Some(split_csv(&form.fields[0].value)),
             use_template: false,
         },

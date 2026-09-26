@@ -1,9 +1,7 @@
-//! Синхронизация не-git состояния флота: раскладка Zellij и сессии opencode.
+//! Синхронизация не-git состояния флота: tmux-раскладка и сессии opencode.
 //!
 //! Транспорт — хаб (`protocol::StateItem`, `hub::state`). Каналы:
-//! * `zellij` — сериализованная раскладка сессии Zellij (один элемент
-//!   `latest`): набор файлов `~/.cache/zellij/.../session_info/main/`
-//!   (metadata + session-layout + содержимое панелей), упакованный в JSON;
+//! * `tmux` — последний снапшот `tmux-resurrect` (один элемент `latest`);
 //! * `opencode` — экспортированные сессии (`opencode session export`), по
 //!   элементу на сессию (ключ — id сессии, `meta` — каталог проекта).
 //!
@@ -12,7 +10,7 @@
 //! * `items` — `{ "channel:key": updated }` уже отправленных/применённых
 //!   элементов, чтобы не гонять их повторно.
 //!
-//! Всё best-effort: отсутствие Zellij/opencode или ошибка применения не должны
+//! Всё best-effort: отсутствие tmux/opencode или ошибка применения не должны
 //! валить общий `dsync push`/`pull`.
 
 use std::collections::HashMap;
@@ -27,7 +25,7 @@ use tracing::{info, warn};
 use crate::config::{Config, OpencodeStateConfig};
 use crate::protocol::{StateItem, StatePullRequest, StatePushRequest};
 
-const ZELLIJ_CHANNEL: &str = "zellij";
+const TMUX_CHANNEL: &str = "tmux";
 const OPENCODE_CHANNEL: &str = "opencode";
 /// Не приближаемся к hub `max_message_size` (8 MB по умолчанию).
 const MAX_BATCH_BYTES: usize = 6 * 1024 * 1024;
@@ -136,8 +134,8 @@ pub fn collect(cfg: &Config) -> Vec<StateItem> {
     };
     let idx = StateIndex::load();
     let mut out = Vec::new();
-    if st.zellij {
-        collect_zellij(&idx, &mut out);
+    if st.tmux {
+        collect_tmux(&idx, &mut out);
     }
     if let Some(oc) = &st.opencode {
         collect_opencode(cfg, oc, &idx, &mut out);
@@ -145,92 +143,37 @@ pub fn collect(cfg: &Config) -> Vec<StateItem> {
     out
 }
 
-/// Снимок раскладки Zellij. Zellij сам сериализует сессию в
-/// `~/.cache/zellij/<contract>/session_info/<session>/` (metadata + layout +
-/// содержимое панелей). Просим Zellij сохранить актуальное состояние
-/// (`zellij action save-session`), затем упаковываем содержимое каталога в
-/// один JSON-payload (`{ "session": "main", "files": { "<имя>": "<текст>" } }`).
-fn collect_zellij(idx: &StateIndex, out: &mut Vec<StateItem>) {
-    let Some(session) = zellij_session_name() else {
+fn collect_tmux(idx: &StateIndex, out: &mut Vec<StateItem>) {
+    let Some(dir) = tmux_resurrect_dir() else {
         return;
     };
-    // Best-effort: попросить Zellij сохранить текущую раскладку.
-    trigger_zellij_save(&session);
+    if !dir.is_dir() {
+        return;
+    }
+    // Best-effort: попросить tmux сохранить текущую раскладку.
+    let before = newest_resurrect_file(&dir).map(|(_, m)| m).unwrap_or(0);
+    trigger_tmux_save(&dir, before);
 
-    let Some(dir) = zellij_session_dir(&session) else {
+    let Some((path, mtime)) = newest_resurrect_file(&dir) else {
         return;
     };
-    let Some(data) = pack_session_dir(&session, &dir) else {
+    let Ok(data) = std::fs::read_to_string(&path) else {
         return;
     };
+    // `updated` = хеш содержимого: неизменённую раскладку повторно не гоним
+    // (mtime меняется от каждого save, содержимое — нет).
     let item = StateItem {
-        channel: ZELLIJ_CHANNEL.into(),
+        channel: TMUX_CHANNEL.into(),
         key: "latest".into(),
         updated: content_hash(&data),
-        meta: Some(session),
+        meta: path.file_name().map(|s| s.to_string_lossy().to_string()),
         data,
         ..Default::default()
     };
+    let _ = mtime;
     if !idx.has(&item) {
         out.push(item);
     }
-}
-
-/// Каталог сериализованной сессии Zellij, подходящий по имени сессии.
-/// Zellij держит файлы под подкаталогом с contract-версией, которая может
-/// меняться между релизами, поэтому ищем `*/session_info/<session>`.
-fn zellij_session_dir(session: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let root = home.join(".cache/zellij");
-    if !root.is_dir() {
-        return None;
-    }
-    let mut found: Option<PathBuf> = None;
-    if let Ok(entries) = std::fs::read_dir(&root) {
-        for entry in entries.flatten() {
-            let candidate = entry.path().join("session_info").join(session);
-            if candidate.is_dir() {
-                // На случай нескольких contract-версий берём самый свежий.
-                let newer = found
-                    .as_ref()
-                    .and_then(|p| dir_mtime(p))
-                    .zip(dir_mtime(&candidate))
-                    .map(|(a, b)| b > a)
-                    .unwrap_or(found.is_none());
-                if newer {
-                    found = Some(candidate);
-                }
-            }
-        }
-    }
-    found
-}
-
-fn dir_mtime(dir: &Path) -> Option<i64> {
-    let md = std::fs::metadata(dir).ok()?;
-    let since = md.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(since.as_secs() as i64)
-}
-
-/// Собирает файлы каталога сессии в JSON-payload.
-fn pack_session_dir(session: &str, dir: &Path) -> Option<String> {
-    use serde_json::json;
-    let mut files = serde_json::Map::new();
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        files.insert(name, serde_json::Value::String(content));
-    }
-    if files.is_empty() {
-        return None;
-    }
-    serde_json::to_string(&json!({ "session": session, "files": files })).ok()
 }
 
 /// Стабильный положительный i64-хеш содержимого (для `updated`).
@@ -295,7 +238,7 @@ pub fn apply(cfg: &Config, items: Vec<StateItem>) -> (Vec<String>, Option<i64>) 
     let mut refresh_projects: Vec<PathBuf> = Vec::new();
     for item in items {
         let wanted = match item.channel.as_str() {
-            ZELLIJ_CHANNEL => st.zellij,
+            TMUX_CHANNEL => st.tmux,
             OPENCODE_CHANNEL => st.opencode.is_some(),
             other => {
                 warn!("state: неизвестный канал {other}");
@@ -368,72 +311,29 @@ fn refresh_opencode_index(projects: &[PathBuf]) {
 
 fn apply_one(cfg: &Config, item: &StateItem) -> Result<String> {
     match item.channel.as_str() {
-        ZELLIJ_CHANNEL => apply_zellij(cfg, item),
+        TMUX_CHANNEL => apply_tmux(cfg, item),
         OPENCODE_CHANNEL => apply_opencode(item),
         other => bail!("unknown channel {other}"),
     }
 }
 
-/// Применяет чужую раскладку Zellij: распаковывает файлы сессии в каталог
-/// `~/.cache/zellij/<contract>/session_info/<session>/`. Если сессия с таким
-/// именем уже запущена — в неё можно «войти» восстановлением только при
-/// следующем старте; сам живой сервер не трогаем.
-fn apply_zellij(cfg: &Config, item: &StateItem) -> Result<String> {
-    let session = item
-        .meta
-        .clone()
-        .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| "main".to_string());
-    let session = sanitize_filename(&session);
-    let home = dirs::home_dir().context("no home dir")?;
-    let root = home.join(".cache/zellij");
-
-    // Куда писать: contract-каталог уже существующей сессии, иначе создаём
-    // новую contract-папку (`contract_version_1` — текущая в Zellij 0.45).
-    let target_root = zellij_session_dir(&session)
-        .and_then(|p| p.parent().and_then(|p| p.parent()).map(Path::to_path_buf))
-        .or_else(|| {
-            std::fs::read_dir(&root)
-                .ok()
-                .and_then(|it| {
-                    it.flatten()
-                        .map(|e| e.path())
-                        .find(|p| p.join("session_info").is_dir())
-                })
-                .or_else(|| Some(root.join("contract_version_1")))
-        })
-        .context("no zellij cache dir")?;
-    let dir = target_root.join("session_info").join(&session);
+fn apply_tmux(cfg: &Config, item: &StateItem) -> Result<String> {
+    let dir = tmux_resurrect_dir().context("no home dir")?;
     std::fs::create_dir_all(&dir)?;
-
-    let parsed: serde_json::Value =
-        serde_json::from_str(&item.data).context("zellij payload невалиден/обрезан")?;
-    let files = parsed
-        .get("files")
-        .and_then(|f| f.as_object())
-        .context("zellij payload без поля files")?;
-    let mut written = 0usize;
-    for (name, content) in files {
-        let Some(text) = content.as_str() else {
-            continue;
-        };
-        // Имя файла от чужой машины — не доверяем путям.
-        let name = sanitize_filename(name);
-        std::fs::write(dir.join(&name), text.as_bytes())?;
-        written += 1;
-    }
-
-    let mut msg = format!(
-        "zellij: раскладка от {} → сессия {session} ({written} файл(ов))",
-        item.origin
+    let fname = sanitize_filename(
+        item.meta
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .unwrap_or("tmux_resurrect_synced.txt"),
     );
-    if cfg
-        .state
-        .as_ref()
-        .map(|s| s.zellij_restore)
-        .unwrap_or(false)
-        && trigger_zellij_restore(&session)
-    {
+    if !fname.ends_with(".txt") {
+        bail!("unexpected tmux snapshot name {fname}");
+    }
+    std::fs::write(dir.join(&fname), item.data.as_bytes())?;
+    update_last_symlink(&dir, &fname)?;
+
+    let mut msg = format!("tmux: снапшот от {} → {fname}", item.origin);
+    if cfg.state.as_ref().map(|s| s.tmux_restore).unwrap_or(false) && trigger_tmux_restore() {
         msg.push_str(" (restore запущен)");
     }
     Ok(msg)
@@ -483,9 +383,9 @@ fn apply_opencode(item: &StateItem) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 /// Отправляет локальные изменения состояния и применяет чужие.
-/// `capture` = собирать ли локальные изменения (сейв Zellij, экспорт сессий).
+/// `capture` = собирать ли локальные изменения (tmux-сейв, экспорт сессий).
 /// Пуш — собирает; pull — только применяет чужие, чтобы не дёргать
-/// сериализацию Zellij повторно в одном цикле `dsync-run` (push+pull подряд).
+/// tmux-resurrect повторно в одном цикле `dsync-run` (push+pull подряд).
 /// Ошибки логируются, но не прерывают общий push/pull.
 pub async fn sync_state(cfg: &Config, capture: bool) -> Vec<String> {
     let mut out = Vec::new();
@@ -581,66 +481,105 @@ fn batches(items: Vec<StateItem>) -> Vec<Vec<StateItem>> {
 }
 
 // ---------------------------------------------------------------------------
-// Хелперы: Zellij
+// Хелперы: tmux
 // ---------------------------------------------------------------------------
 
-/// Имя сессии Zellij, чью раскладку синхронизируем. По умолчанию — `main`
-/// (единая постоянная сессия, см. ~/.zshrc). Если `dsync` запущен внутри
-/// другой сессии — берём её имя из окружения.
-fn zellij_session_name() -> Option<String> {
-    if let Ok(name) = std::env::var("ZELLIJ_SESSION_NAME") {
-        if !name.is_empty() {
-            return Some(name);
+fn tmux_resurrect_dir() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let xdg = home.join(".local/share/tmux/resurrect");
+    let legacy = home.join(".tmux/resurrect");
+    if xdg.is_dir() {
+        Some(xdg)
+    } else if legacy.is_dir() {
+        Some(legacy)
+    } else {
+        Some(xdg)
+    }
+}
+
+fn newest_resurrect_file(dir: &Path) -> Option<(PathBuf, i64)> {
+    let mut best: Option<(PathBuf, i64)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("tmux_resurrect_") || !name.ends_with(".txt") {
+            continue;
+        }
+        let Ok(md) = entry.metadata() else { continue };
+        let Ok(modified) = md.modified() else {
+            continue;
+        };
+        let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH) else {
+            continue;
+        };
+        let mtime = since.as_secs() as i64;
+        if best.as_ref().map(|(_, m)| mtime > *m).unwrap_or(true) {
+            best = Some((entry.path(), mtime));
         }
     }
-    Some("main".to_string())
+    best
 }
 
-fn zellij_running() -> bool {
-    Command::new("zellij")
-        .args(["list-sessions", "-s", "-n"])
+fn tmux_running() -> bool {
+    Command::new("tmux")
+        .args(["list-sessions"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
-fn trigger_zellij_save(session: &str) {
-    if !zellij_running() {
+fn trigger_tmux_save(dir: &Path, prev_mtime: i64) {
+    if !tmux_running() {
         return;
     }
-    let _ = Command::new("zellij")
-        .args(["action", "save-session"])
-        .env("ZELLIJ_SESSION_NAME", session)
+    let Some(script) = tmux_resurrect_script("save.sh") else {
+        return;
+    };
+    let _ = Command::new("tmux")
+        .args(["run-shell", &script.display().to_string()])
         .output();
+    // Сохранение из run-shell асинхронное — недолго ждём новый файл.
+    for _ in 0..15 {
+        if newest_resurrect_file(dir)
+            .map(|(_, m)| m > prev_mtime)
+            .unwrap_or(false)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
-/// Восстанавливает раскладку в живой сессии: пересоздаёт её из сохранённых
-/// файлов. Best-effort: если сессия занята клиентом — пропускаем.
-fn trigger_zellij_restore(session: &str) -> bool {
-    if !zellij_running() {
+fn trigger_tmux_restore() -> bool {
+    if !tmux_running() {
         return false;
     }
-    // Только если сессия не запущена (иначе attach оживит уже живой сервер).
-    let attached = Command::new("zellij")
-        .args(["list-sessions", "-s", "-n"])
-        .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .any(|l| l.trim() == session)
-        })
-        .unwrap_or(false);
-    if attached {
+    let Some(script) = tmux_resurrect_script("restore.sh") else {
         return false;
-    }
-    // Сессия не запущена, но её файлы на диске — `attach -c` поднимет её из
-    // сериализованного состояния; сразу отсоединяемся, чтобы не висеть.
-    Command::new("zellij")
-        .args(["attach", "--create", session])
-        .env("ZELLIJ_SESSION_NAME", session)
+    };
+    Command::new("tmux")
+        .args(["run-shell", &script.display().to_string()])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+fn tmux_resurrect_script(name: &str) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let p = home.join(".tmux/plugins/tmux-resurrect/scripts").join(name);
+    p.is_file().then_some(p)
+}
+
+#[cfg(unix)]
+fn update_last_symlink(dir: &Path, target: &str) -> Result<()> {
+    let last = dir.join("last");
+    let _ = std::fs::remove_file(&last);
+    std::os::unix::fs::symlink(target, &last)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn update_last_symlink(_dir: &Path, _target: &str) -> Result<()> {
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -795,7 +734,7 @@ mod tests {
 
     #[test]
     fn batches_single_when_small() {
-        let b = batches(vec![item("zellij", "latest", 1, 10)]);
+        let b = batches(vec![item("tmux", "latest", 1, 10)]);
         assert_eq!(b.len(), 1);
     }
 
@@ -823,7 +762,7 @@ mod tests {
             state: None,
         };
         assert!(collect(&cfg).is_empty());
-        assert!(apply(&cfg, vec![item("zellij", "latest", 1, 3)]).0.is_empty());
+        assert!(apply(&cfg, vec![item("tmux", "latest", 1, 3)]).0.is_empty());
     }
 
     #[test]

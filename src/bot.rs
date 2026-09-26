@@ -81,7 +81,7 @@ enum Command {
     Models,
     #[command(description = "выбрать модель")]
     Model(String),
-    #[command(description = "интерактивный терминал (zellij)")]
+    #[command(description = "интерактивный терминал (tmux)")]
     Shell,
     #[command(description = "выйти из режима")]
     Stop,
@@ -256,7 +256,7 @@ async fn handle_command(
                 /list — список машин\n\
                 /oc — режим opencode (промт → текст)\n\
                 /models — список моделей\n/model <имя> — выбрать модель\n\
-                /shell — интерактивный терминал (zellij, кнопки)\n\
+                /shell — интерактивный терминал (tmux, кнопки)\n\
                 /stop — выйти из режима\n\
                 /help — помощь",
             )
@@ -352,7 +352,7 @@ async fn handle_command(
             };
             let session = format!("dsync-bot-{}", msg.chat.id.0);
             let _ = ssh(&r.host, r.port, &r.user,
-                &format!("TERM=xterm-256color zellij attach --create-background {session} 2>&1 || true")).await;
+                &format!("TERM=xterm-256color tmux new-session -d -x 100 -y 30 -s {session} 2>&1 || true")).await;
             s.mode = Mode::Shell;
             let ctrl = bot
                 .send_message(msg.chat.id, "✓ shell режим (кнопки внизу)")
@@ -371,7 +371,7 @@ async fn handle_command(
                             &r.host,
                             r.port,
                             &r.user,
-                            &format!("zellij kill-session {session} 2>/dev/null || true"),
+                            &format!("tmux kill-session -t {session} 2>/dev/null || true"),
                         )
                         .await;
                     }
@@ -434,16 +434,14 @@ async fn handle_callback(
                 &remote.host,
                 remote.port,
                 &remote.user,
-                &format!("ZELLIJ_SESSION_NAME={session} zellij action send-keys {key}"),
+                &format!("tmux send-keys -t {session} {key}"),
             )
             .await;
             let out = ssh(
                 &remote.host,
                 remote.port,
                 &remote.user,
-                &format!(
-                    "sleep 0.3 && ZELLIJ_SESSION_NAME={session} zellij action dump-screen --pane-id terminal_0"
-                ),
+                &format!("sleep 0.3 && tmux capture-pane -t {session} -p -S -50"),
             )
             .await
             .unwrap_or_default();
@@ -584,7 +582,7 @@ async fn handle_text(
             let session = format!("dsync-bot-{}", msg.chat.id.0);
             let escaped = sh_escape(text);
             let cmd = format!(
-                "ZELLIJ_SESSION_NAME={session} zellij action write-chars {escaped} && ZELLIJ_SESSION_NAME={session} zellij action send-keys enter && sleep 0.5 && ZELLIJ_SESSION_NAME={session} zellij action dump-screen --pane-id terminal_0"
+                "tmux send-keys -t {session} {escaped} Enter && sleep 0.5 && tmux capture-pane -t {session} -p -S -50"
             );
             let ctrl_id = sessions
                 .lock()

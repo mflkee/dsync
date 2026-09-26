@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - *State tab*: read-only `state_status` hub request (new protocol message)
     summarizing the state store per channel (item count, last updated/origin,
     last sync error) plus the local `[state]` config; toggles for
-    `zellij`/`zellij_restore` (with confirmation) and an editor for the
+    `tmux`/`tmux_restore` (with confirmation) and an editor for the
     `[state.opencode] projects` list — all saved through the safe patch path.
     Old hubs answer an error envelope → the tab shows "unavailable".
 - **Auto-project discovery** (`auto-projects`): dsync watches a root directory

@@ -27,7 +27,7 @@ pub struct Config {
     /// Захват live-правок dotfiles в их репозитории (см. `src/client/capture.rs`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture: Option<CaptureConfig>,
-    /// Синхронизация не-git состояния флота: раскладка Zellij и сессии opencode.
+    /// Синхронизация не-git состояния флота: tmux-раскладка и сессии opencode.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<StateConfig>,
 }
@@ -36,8 +36,8 @@ pub struct Config {
 ///
 /// ```toml
 /// [state]
-/// zellij = true            # синхронизировать раскладку сессии Zellij
-/// zellij_restore = false   # после применения — восстанавливать сессию Zellij
+/// tmux = true            # синхронизировать tmux-resurrect снапшот
+/// tmux_restore = false   # после применения — запускать resurrect restore
 ///
 /// [state.opencode]
 /// # каталоги проектов, чьи сессии синхронизируем (по умолчанию — все [projects.*])
@@ -45,14 +45,14 @@ pub struct Config {
 /// ```
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct StateConfig {
-    /// Синхронизировать раскладку сессии Zellij.
+    /// Синхронизировать снапшот tmux-resurrect.
     #[serde(default)]
-    pub zellij: bool,
-    /// После применения чужой раскладки восстанавливать её в уже запущенной
-    /// сессии Zellij. По умолчанию выключено: восстановление в живую сессию
-    /// может насаждать вкладки/панели, если делать это слишком часто.
+    pub tmux: bool,
+    /// После применения чужого снапшота запускать `tmux-resurrect` restore
+    /// (в уже запущенном tmux). По умолчанию выключено: восстановление
+    /// в живую сессию может насаждать окна, если делать это слишком часто.
     #[serde(default)]
-    pub zellij_restore: bool,
+    pub tmux_restore: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opencode: Option<OpencodeStateConfig>,
 }
@@ -501,15 +501,15 @@ mod tests {
         let cfg: Config = toml::from_str(
             "machine = { name = 'x' }\n\
              [state]\n\
-             zellij = true\n\
-             zellij_restore = true\n\
+             tmux = true\n\
+             tmux_restore = true\n\
              [state.opencode]\n\
              projects = ['~/projects/mushroomwars']\n",
         )
         .unwrap();
         let st = cfg.state.expect("state present");
-        assert!(st.zellij);
-        assert!(st.zellij_restore);
+        assert!(st.tmux);
+        assert!(st.tmux_restore);
         assert_eq!(
             st.opencode.unwrap().projects.unwrap()[0],
             PathBuf::from("~/projects/mushroomwars")
