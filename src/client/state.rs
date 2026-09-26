@@ -383,8 +383,11 @@ fn apply_opencode(item: &StateItem) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 /// Отправляет локальные изменения состояния и применяет чужие.
+/// `capture` = собирать ли локальные изменения (tmux-сейв, экспорт сессий).
+/// Пуш — собирает; pull — только применяет чужие, чтобы не дёргать
+/// tmux-resurrect повторно в одном цикле `dsync-run` (push+pull подряд).
 /// Ошибки логируются, но не прерывают общий push/pull.
-pub async fn sync_state(cfg: &Config) -> Vec<String> {
+pub async fn sync_state(cfg: &Config, capture: bool) -> Vec<String> {
     let mut out = Vec::new();
     if cfg.state.is_none() {
         return out;
@@ -393,7 +396,7 @@ pub async fn sync_state(cfg: &Config) -> Vec<String> {
     // Сначала (возможно, долгий) сбор — экспорт сессий opencode занимает
     // десятки секунд. Делаем это ДО подключения: иначе QUIC-соединение
     // простаивает и рвётся по idle-таймауту.
-    let changed = collect(cfg);
+    let changed = if capture { collect(cfg) } else { Vec::new() };
     if !changed.is_empty() {
         info!("state: {} item(s) to upload", changed.len());
     }

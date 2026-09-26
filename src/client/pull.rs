@@ -36,7 +36,10 @@ pub async fn pull(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
     }
 
     // Не-git состояние флота (tmux-снапшот, сессии opencode) — best-effort.
-    out.extend(crate::client::state::sync_state(&cfg).await);
+    // Только применяем чужие изменения (capture=false): сбор/save уже сделал
+    // push в этом же цикле `dsync-run`, повторный триггер tmux-resurrect
+    // плодил бы лишние снапшоты.
+    out.extend(crate::client::state::sync_state(&cfg, false).await);
 
     Ok(out)
 }
