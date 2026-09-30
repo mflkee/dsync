@@ -147,8 +147,13 @@ fn collect_tmux(idx: &StateIndex, out: &mut Vec<StateItem>) {
     let Some(dir) = tmux_resurrect_dir() else {
         return;
     };
+    // Каталог снапшотов мог ещё не появиться (свежая машина, или continuum не
+    // успел сохранить из-за порядка загрузки плагинов). Раньше здесь был ранний
+    // `return`, из-за чего dsync молча не бэкапил tmux, пока кто-то другой не
+    // создаст каталог. Теперь создаём его сами и всё равно просим tmux сохранить
+    // текущую раскладку — бэкап не зависит от tmux-continuum.
     if !dir.is_dir() {
-        return;
+        let _ = std::fs::create_dir_all(&dir);
     }
     // Best-effort: попросить tmux сохранить текущую раскладку.
     let before = newest_resurrect_file(&dir).map(|(_, m)| m).unwrap_or(0);
