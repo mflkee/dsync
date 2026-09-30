@@ -84,6 +84,18 @@ impl StateIndex {
             .map(|u| *u >= item.updated)
             .unwrap_or(false)
     }
+
+    /// Точное совпадение `updated` — для каналов, где `updated` является хешем
+    /// содержимого (tmux-снапшот), а не монотонным счётчиком. Сравнение `>=`
+    /// здесь ошибочно: новый хеш может оказаться численно МЕНЬШЕ прежнего, и
+    /// тогда обновление молча теряется навсегда — в индексе остаётся большое
+    /// «отравленное» значение, которое блокирует все последующие раскладки.
+    fn has_exact(&self, item: &StateItem) -> bool {
+        self.items
+            .get(&Self::key_of(item))
+            .map(|u| *u == item.updated)
+            .unwrap_or(false)
+    }
 }
 
 /// Последний известный seq хаба (для инкрементального pull).
@@ -176,7 +188,7 @@ fn collect_tmux(idx: &StateIndex, out: &mut Vec<StateItem>) {
         ..Default::default()
     };
     let _ = mtime;
-    if !idx.has(&item) {
+    if !idx.has_exact(&item) {
         out.push(item);
     }
 }
