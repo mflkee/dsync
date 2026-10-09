@@ -107,7 +107,11 @@ async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectSt
             match crate::projects::status::discover(&root, &static_names, &excluded) {
                 Ok(found) => {
                     if !found.is_empty() {
-                        info!("auto-discovered {} new project(s) in {}", found.len(), root.display());
+                        info!(
+                            "auto-discovered {} new project(s) in {}",
+                            found.len(),
+                            root.display()
+                        );
                         states.extend(found);
                     }
                 }

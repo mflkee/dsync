@@ -536,12 +536,14 @@ mod tests {
         assert_eq!(ap.sync, Some(false));
 
         // Минимальная секция: всё по умолчанию (None).
-        let cfg: Config = toml::from_str(
-            "machine = { name = 'x' }\n[auto_projects]\n",
-        )
-        .unwrap();
+        let cfg: Config = toml::from_str("machine = { name = 'x' }\n[auto_projects]\n").unwrap();
         let ap = cfg.auto_projects.expect("present");
-        assert!(ap.root.is_none() && ap.branch.is_none() && ap.machines.is_none() && ap.exclude.is_none());
+        assert!(
+            ap.root.is_none()
+                && ap.branch.is_none()
+                && ap.machines.is_none()
+                && ap.exclude.is_none()
+        );
         assert!(ap.sync.is_none(), "sync default = None (означает true)");
 
         // Отсутствует секция — None.

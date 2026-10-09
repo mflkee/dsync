@@ -151,7 +151,8 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         format!(
             "   {}",
             match app.tab {
-                Tab::Dashboard => "[↑↓] select  [P] push selected  [L] pull selected  [e] failed pulls",
+                Tab::Dashboard =>
+                    "[↑↓] select  [P] push selected  [L] pull selected  [e] failed pulls",
                 Tab::Projects => "[↑↓] select  [n] add project  [d] delete",
                 Tab::Machines => "[↑↓] select  [n] add machine  [d] delete  [e] failed pulls",
                 Tab::State => "[t] tmux  [T] auto-restore  [n] opencode projects  [r] refresh",
@@ -597,7 +598,11 @@ fn draw_machines(frame: &mut Frame, app: &mut App, area: Rect) {
 // --- STATE (не-git состояние флота) ---
 
 fn on_off(v: bool) -> &'static str {
-    if v { "on" } else { "off" }
+    if v {
+        "on"
+    } else {
+        "off"
+    }
 }
 
 fn draw_state(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -725,11 +730,19 @@ fn draw_state(frame: &mut Frame, app: &mut App, area: Rect) {
                     "     items: {}   last: {}  by {}",
                     ch.item_count,
                     if ch.last_updated > 0 {
-                        format!("{} ({})", fmt_ago(ch.last_updated), fmt_civil(ch.last_updated))
+                        format!(
+                            "{} ({})",
+                            fmt_ago(ch.last_updated),
+                            fmt_civil(ch.last_updated)
+                        )
                     } else {
                         "—".into()
                     },
-                    if ch.last_origin.is_empty() { "—" } else { &ch.last_origin },
+                    if ch.last_origin.is_empty() {
+                        "—"
+                    } else {
+                        &ch.last_origin
+                    },
                 ),
                 Style::default().fg(Color::DarkGray),
             )));
@@ -782,13 +795,19 @@ fn draw_pull_details(frame: &mut Frame, app: &mut App, area: Rect) {
         for (machine, project, o) in fails.iter().skip(start).take(page_h) {
             let mut spans = vec![Span::styled(
                 format!(" {machine}/{project}"),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             )];
             spans.push(Span::styled(
                 format!(
                     "  ✗ attempts={}  finished {}",
                     o.attempts,
-                    if o.finished_at > 0 { fmt_ago(o.finished_at) } else { "—".into() }
+                    if o.finished_at > 0 {
+                        fmt_ago(o.finished_at)
+                    } else {
+                        "—".into()
+                    }
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
@@ -807,14 +826,16 @@ fn draw_pull_details(frame: &mut Frame, app: &mut App, area: Rect) {
             " Failed pulls ({}) — [e]/[Esc] close  [↑↓/wheel] scroll{} ",
             fails.len(),
             if start > 0 {
-                format!(" [{}..{}]", start, start + text.len().min(page_h.min(fails.len())))
+                format!(
+                    " [{}..{}]",
+                    start,
+                    start + text.len().min(page_h.min(fails.len()))
+                )
             } else {
                 String::new()
             }
         ),
-        Style::default()
-            .fg(Color::Red)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
     ));
     frame.render_widget(Paragraph::new(text).block(block), popup);
 }
@@ -1116,22 +1137,19 @@ fn draw_form(frame: &mut Frame, app: &App, area: Rect) {
                 )]
             };
             lines.push(Line::from(
-                std::iter::once(Span::styled(
-                    arrow,
-                    Style::default().fg(Color::Cyan),
-                ))
-                .chain(std::iter::once(Span::styled(
-                    format!("{}: ", f.label),
-                    if active {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                )))
-                .chain(value)
-                .collect::<Vec<_>>(),
+                std::iter::once(Span::styled(arrow, Style::default().fg(Color::Cyan)))
+                    .chain(std::iter::once(Span::styled(
+                        format!("{}: ", f.label),
+                        if active {
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    )))
+                    .chain(value)
+                    .collect::<Vec<_>>(),
             ));
         }
         lines.push(Line::from(""));

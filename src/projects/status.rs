@@ -144,10 +144,10 @@ mod tests {
     fn discover_finds_git_dirs_and_skips_others() {
         let base = std::env::temp_dir().join(format!("dsync-disc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base.join("alpha")).unwrap();
-        std::fs::create_dir_all(&base.join("beta")).unwrap();
-        std::fs::create_dir_all(&base.join("plain-dir")).unwrap();
-        std::fs::create_dir_all(&base.join("not-repo/file.txt")).unwrap();
+        std::fs::create_dir_all(base.join("alpha")).unwrap();
+        std::fs::create_dir_all(base.join("beta")).unwrap();
+        std::fs::create_dir_all(base.join("plain-dir")).unwrap();
+        std::fs::create_dir_all(base.join("not-repo/file.txt")).unwrap();
 
         // alpha — полноценный git-репо с одним коммитом и remote.
         for d in ["alpha", "beta"] {
@@ -158,12 +158,7 @@ mod tests {
             setup_git_ident(&base.join(d));
             std::fs::write(base.join(d).join("file.txt"), "hello").unwrap();
             std::process::Command::new("git")
-                .args([
-                    "-C",
-                    base.join(d).to_str().unwrap(),
-                    "add",
-                    "-A",
-                ])
+                .args(["-C", base.join(d).to_str().unwrap(), "add", "-A"])
                 .status()
                 .unwrap();
             std::process::Command::new("git")
@@ -183,8 +178,7 @@ mod tests {
             .status()
             .unwrap();
 
-        let static_names =
-            std::collections::HashSet::from(["beta".to_string()]);
+        let static_names = std::collections::HashSet::from(["beta".to_string()]);
         let excluded = std::collections::HashSet::from(["alpha".to_string()]);
         // alpha в exclude — не анонсируется вовсе.
         let states = discover(&base, &static_names, &excluded).unwrap();

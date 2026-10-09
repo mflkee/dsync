@@ -229,7 +229,11 @@ impl FormField {
         if self.cursor == 0 {
             return;
         }
-        let before: String = self.value.chars().take(self.cursor.saturating_sub(1)).collect();
+        let before: String = self
+            .value
+            .chars()
+            .take(self.cursor.saturating_sub(1))
+            .collect();
         let after: String = self.value.chars().skip(self.cursor).collect();
         self.value = format!("{before}{after}");
         self.cursor -= 1;
@@ -504,6 +508,9 @@ mod tests {
         assert_eq!(char_pos_to_byte("abc", 99), "abc".len());
         assert_eq!(char_pos_to_byte("", 2), 0);
         // граница по символам, а не по байтам
-        assert_eq!(char_pos_to_byte("абв", 2), "абв".char_indices().nth(2).unwrap().0);
+        assert_eq!(
+            char_pos_to_byte("абв", 2),
+            "абв".char_indices().nth(2).unwrap().0
+        );
     }
 }

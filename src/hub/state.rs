@@ -735,7 +735,11 @@ mod tests {
             assert!(tmux.last_updated > 0 && tmux.last_updated < 1_000_000_000_000);
             assert!(tmux.error.is_none());
 
-            let oc = resp.channels.iter().find(|c| c.channel == "opencode").unwrap();
+            let oc = resp
+                .channels
+                .iter()
+                .find(|c| c.channel == "opencode")
+                .unwrap();
             assert_eq!(oc.item_count, 2);
             assert_eq!(oc.last_origin, "desktop");
             // ms → s

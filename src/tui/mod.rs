@@ -17,7 +17,9 @@ use crossterm::event::{
     KeyModifiers, MouseEventKind,
 };
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::DefaultTerminal;
 
@@ -425,10 +427,22 @@ fn submit_form(app: &mut App, form: &Form) {
     if let Some(action) = &form.action {
         match action.clone() {
             ConfirmAction::RemoveProject(name) => {
-                route_config_cmd(app, Cmd::RemoveProject { name, use_template: false });
+                route_config_cmd(
+                    app,
+                    Cmd::RemoveProject {
+                        name,
+                        use_template: false,
+                    },
+                );
             }
             ConfirmAction::RemoveRemote(name) => {
-                route_config_cmd(app, Cmd::RemoveRemote { name, use_template: false });
+                route_config_cmd(
+                    app,
+                    Cmd::RemoveRemote {
+                        name,
+                        use_template: false,
+                    },
+                );
             }
             ConfirmAction::ChezmoiApply(mut cmd) => {
                 set_use_template(&mut cmd, true);

@@ -172,7 +172,10 @@ impl ConfigEditor {
             remotes,
             config_path: self.live_path.display().to_string(),
             chezmoi_managed: self.chezmoi_managed,
-            chezmoi_template: self.chezmoi_source.as_ref().map(|p| p.display().to_string()),
+            chezmoi_template: self
+                .chezmoi_source
+                .as_ref()
+                .map(|p| p.display().to_string()),
             state,
         }
     }
@@ -307,16 +310,14 @@ impl ConfigEditor {
             self.apply_chezmoi_apply()?;
             diff
         } else {
-            let content = std::fs::read_to_string(&self.live_path).map_err(|e| {
-                anyhow::anyhow!("read {}: {e}", self.live_path.display())
-            })?;
+            let content = std::fs::read_to_string(&self.live_path)
+                .map_err(|e| anyhow::anyhow!("read {}: {e}", self.live_path.display()))?;
             let mut doc = content.parse::<DocumentMut>().map_err(|e| {
                 anyhow::anyhow!("config parse error ({}): {e}", self.live_path.display())
             })?;
             let diff = apply_doc_patch(&mut doc, patch)?;
-            std::fs::write(&self.live_path, doc.to_string()).map_err(|e| {
-                anyhow::anyhow!("write {}: {e}", self.live_path.display())
-            })?;
+            std::fs::write(&self.live_path, doc.to_string())
+                .map_err(|e| anyhow::anyhow!("write {}: {e}", self.live_path.display()))?;
             diff
         };
         self.apply_in_memory(patch);
@@ -371,10 +372,7 @@ impl ConfigEditor {
                             o.projects = None;
                         }
                     } else {
-                        state
-                            .opencode
-                            .get_or_insert_with(Default::default)
-                            .projects = Some(
+                        state.opencode.get_or_insert_with(Default::default).projects = Some(
                             list.iter()
                                 .map(|s| PathBuf::from(s.trim()))
                                 .filter(|p| !p.as_os_str().is_empty())
@@ -410,9 +408,7 @@ fn apply_doc_patch(doc: &mut DocumentMut, patch: &ConfigPatch) -> Result<Vec<Str
     let mut diff = Vec::new();
     match patch {
         ConfigPatch::UpsertProject { name, proj } => {
-            let projects_item = doc
-                .entry("projects")
-                .or_insert(Item::Table(Table::new()));
+            let projects_item = doc.entry("projects").or_insert(Item::Table(Table::new()));
             let table = projects_item
                 .as_table_mut()
                 .ok_or_else(|| anyhow::anyhow!("[projects] is not a table"))?;
@@ -637,7 +633,12 @@ fn patch_template_text(content: &str, patch: &ConfigPatch) -> Result<(String, Ve
     match patch {
         ConfigPatch::UpsertProject { name, proj } => {
             let block = format!("[projects.{name}]\n{}", project_table(proj));
-            let added = upsert_table(&mut lines, &format!("[projects.{name}]"), &block, "projects.");
+            let added = upsert_table(
+                &mut lines,
+                &format!("[projects.{name}]"),
+                &block,
+                "projects.",
+            );
             if added {
                 diff.push(format!(
                     "+ projects.{name} added (path = {})",
@@ -676,7 +677,13 @@ fn patch_template_text(content: &str, patch: &ConfigPatch) -> Result<(String, Ve
             opencode_projects,
         } => {
             if let Some(v) = tmux {
-                set_key_in_block(&mut lines, "[state]", "tmux", Some(v.to_string()), &mut diff);
+                set_key_in_block(
+                    &mut lines,
+                    "[state]",
+                    "tmux",
+                    Some(v.to_string()),
+                    &mut diff,
+                );
             }
             if let Some(v) = tmux_restore {
                 set_key_in_block(
@@ -699,13 +706,7 @@ fn patch_template_text(content: &str, patch: &ConfigPatch) -> Result<(String, Ve
                             .join(", ")
                     ))
                 };
-                set_key_in_block(
-                    &mut lines,
-                    "[state.opencode]",
-                    "projects",
-                    value,
-                    &mut diff,
-                );
+                set_key_in_block(&mut lines, "[state.opencode]", "projects", value, &mut diff);
             }
         }
     }
@@ -795,7 +796,9 @@ fn set_key_in_block(
         let trimmed = l.trim_start();
         // Строка вида `key = ...` (сохраняем возможные inline-комментарии? нет)
         if let Some(rest) = trimmed.strip_prefix(key) {
-            if rest.starts_with('=') || (rest.starts_with(' ') && rest.trim_start().starts_with('=')) {
+            if rest.starts_with('=')
+                || (rest.starts_with(' ') && rest.trim_start().starts_with('='))
+            {
                 match &value {
                     Some(v) => {
                         let indent = &l[..l.len() - l.trim_start().len()];
@@ -908,7 +911,14 @@ tmux_restore = false
         let content = std::fs::read_to_string(&path).unwrap();
         let mut ed = base_editor(path.clone());
         let diff = ed
-            .add_project("proj-a", "/tmp/proj-a", Some("main"), &["desktop".to_string()], Some("echo hi"), false)
+            .add_project(
+                "proj-a",
+                "/tmp/proj-a",
+                Some("main"),
+                &["desktop".to_string()],
+                Some("echo hi"),
+                false,
+            )
             .unwrap();
         assert!(diff.iter().any(|l| l.contains("+ projects.proj-a added")));
 
@@ -933,8 +943,10 @@ tmux_restore = false
     fn add_remove_roundtrip_keeps_unknown_content() {
         let (path, dir) = tmp_file("roundtrip", WITH_COMMENTS);
         let mut ed = base_editor(path.clone());
-        ed.add_project("p1", "/tmp/p1", None, &[], None, false).unwrap();
-        ed.add_remote("m1", "100.89.0.1", 22, "user", false).unwrap();
+        ed.add_project("p1", "/tmp/p1", None, &[], None, false)
+            .unwrap();
+        ed.add_remote("m1", "100.89.0.1", 22, "user", false)
+            .unwrap();
         ed.remove_project("p1", false).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(out.contains("[unknown_section]"));
@@ -949,18 +961,20 @@ tmux_restore = false
         let mut ed = base_editor(path.clone());
         // Имя проекта и путь с кириллицей/эмодзи — значения пишутся и читаются
         // без потерь, документ остаётся валидным TOML.
-        ed.add_project("архив-2026", "/tmp/архив-📦", None, &["десктоп".into()], None, false)
-            .unwrap();
+        ed.add_project(
+            "архив-2026",
+            "/tmp/архив-📦",
+            None,
+            &["десктоп".into()],
+            None,
+            false,
+        )
+        .unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(out.contains("архив-2026"));
         assert!(out.contains("/tmp/архив-📦"));
         let back: Config = toml::from_str(&out).unwrap();
-        let p = back
-            .projects
-            .unwrap()
-            .get("архив-2026")
-            .unwrap()
-            .clone();
+        let p = back.projects.unwrap().get("архив-2026").unwrap().clone();
         assert_eq!(p.path.display().to_string(), "/tmp/архив-📦");
         assert_eq!(p.machines, vec!["десктоп".to_string()].into());
         ed.remove_project("архив-2026", false).unwrap();
@@ -987,8 +1001,14 @@ tmux_restore = false
         };
         ed.remove_remote("r1", false).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
-        assert!(out.contains("[v2_new_section]"), "unknown section survives: {out}");
-        assert!(out.contains("# top comment survives"), "unrelated comment survives: {out}");
+        assert!(
+            out.contains("[v2_new_section]"),
+            "unknown section survives: {out}"
+        );
+        assert!(
+            out.contains("# top comment survives"),
+            "unrelated comment survives: {out}"
+        );
         assert!(!out.contains("[remote.r1]"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1000,7 +1020,14 @@ tmux_restore = false
         ed.add_project("p1", "/tmp/p1", Some("main"), &["a".into()], None, false)
             .unwrap();
         let diff = ed
-            .add_project("p1", "/tmp/p2", Some("dev"), &["a".into(), "b".into()], Some("x"), false)
+            .add_project(
+                "p1",
+                "/tmp/p2",
+                Some("dev"),
+                &["a".into(), "b".into()],
+                Some("x"),
+                false,
+            )
             .unwrap();
         assert!(diff.iter().any(|l| l.contains("projects.p1.path")));
         assert!(diff.iter().any(|l| l.contains("projects.p1.branch")));
@@ -1015,7 +1042,7 @@ tmux_restore = false
         let (path, dir) = tmp_file("state", WITH_COMMENTS);
         let mut ed = base_editor(path.clone());
         let diff = ed
-            .apply_state(Some(false), Some(true), Some(vec![], ), false)
+            .apply_state(Some(false), Some(true), Some(vec![]), false)
             .unwrap();
         assert!(diff.iter().any(|l| l.contains("state.tmux")));
         assert!(diff.iter().any(|l| l.contains("state.tmux_restore")));
@@ -1073,15 +1100,18 @@ bind = "0.0.0.0:42069"
 
     #[test]
     fn go_template_project_add_and_remove_preserves_blocks() {
-        let (out, diff) = patch_template_text(GO_TMPL, &ConfigPatch::UpsertProject {
-            name: "newp".into(),
-            proj: ProjectConfig {
-                path: "/tmp/newp".into(),
-                branch: Some("main".into()),
-                machines: Some(vec!["notebook".into()]),
-                post_pull: None,
+        let (out, diff) = patch_template_text(
+            GO_TMPL,
+            &ConfigPatch::UpsertProject {
+                name: "newp".into(),
+                proj: ProjectConfig {
+                    path: "/tmp/newp".into(),
+                    branch: Some("main".into()),
+                    machines: Some(vec!["notebook".into()]),
+                    post_pull: None,
+                },
             },
-        })
+        )
         .unwrap();
         assert!(diff.iter().any(|l| l.contains("+ projects.newp added")));
         assert!(out.contains("[projects.newp]"));
@@ -1092,9 +1122,12 @@ bind = "0.0.0.0:42069"
         // Существующие проекты на месте
         assert!(out.contains("[projects.dsync]"));
 
-        let (out2, diff2) = patch_template_text(&out, &ConfigPatch::RemoveProject {
-            name: "newp".into(),
-        })
+        let (out2, diff2) = patch_template_text(
+            &out,
+            &ConfigPatch::RemoveProject {
+                name: "newp".into(),
+            },
+        )
         .unwrap();
         assert!(diff2.iter().any(|l| l.contains("- projects.newp removed")));
         assert!(!out2.contains("[projects.newp]"));
@@ -1123,7 +1156,9 @@ bind = "0.0.0.0:42069"
     fn validation_errors_still_apply() {
         let (path, dir) = tmp_file("valid", "[machine]\nname = \"x\"\n");
         let mut ed = base_editor(path.clone());
-        assert!(ed.add_project("", "/tmp/x", None, &[], None, false).is_err());
+        assert!(ed
+            .add_project("", "/tmp/x", None, &[], None, false)
+            .is_err());
         assert!(ed.add_remote("m2", "1.2.3.4", 0, "u", false).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -178,7 +178,7 @@ async fn handle_connection(
                         let kind = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
                         let resp = match kind {
                             "push" | "pull" | "status" | "state_push" | "state_pull"
-                                | "state_status"
+                            | "state_status"
                                 if authorized(&val, cfg.hub.as_ref()) =>
                             {
                                 match kind {
@@ -438,7 +438,10 @@ fn build_pull_command(
     let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
     let dir = q(&path.display().to_string());
     let dot_git = q(&path.join(".git").display().to_string());
-    let pull = format!("cd {dir} && git pull --rebase --autostash origin {}", q(branch));
+    let pull = format!(
+        "cd {dir} && git pull --rebase --autostash origin {}",
+        q(branch)
+    );
     let mut cmd = if url.trim().is_empty() {
         pull.clone()
     } else {
@@ -1041,18 +1044,15 @@ mod tests {
     fn pull_command_clones_when_dir_missing_else_pulls() {
         let path = std::path::Path::new("/home/mflkee/projects/newproj");
         // Есть url — bootstrap-клон для машин без каталога.
-        let cmd = build_pull_command(
-            path,
-            "main",
-            "git@github.com:mflkee/mycelium.git",
-            None,
-        );
+        let cmd = build_pull_command(path, "main", "git@github.com:mflkee/mycelium.git", None);
         assert!(
             cmd.contains("if [ -d '/home/mflkee/projects/newproj/.git' ]; then"),
             "clone-if-missing guard expected, got: {cmd}"
         );
         assert!(
-            cmd.contains("git clone 'git@github.com:mflkee/mycelium.git' '/home/mflkee/projects/newproj'"),
+            cmd.contains(
+                "git clone 'git@github.com:mflkee/mycelium.git' '/home/mflkee/projects/newproj'"
+            ),
             "clone with url expected, got: {cmd}"
         );
         assert!(cmd.contains("git checkout 'main'"));
@@ -1067,7 +1067,9 @@ mod tests {
     fn pull_command_pull_only_without_url_and_appends_post_pull() {
         let path = std::path::Path::new("/home/mflkee/projects/localonly");
         let cmd = build_pull_command(path, "dev", "", Some("bash ./deploy.sh"));
-        assert!(cmd.starts_with("cd '/home/mflkee/projects/localonly' && git pull --rebase --autostash origin 'dev'"));
+        assert!(cmd.starts_with(
+            "cd '/home/mflkee/projects/localonly' && git pull --rebase --autostash origin 'dev'"
+        ));
         assert!(cmd.ends_with("&& bash ./deploy.sh"));
         assert!(!cmd.contains("git clone"));
     }
