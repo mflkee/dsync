@@ -678,11 +678,9 @@ pub async fn sync_state(cfg: &Config, capture: bool) -> Vec<String> {
             token: super::connect::hub_token(cfg),
             state_seq: since,
             max_bytes: PAGE_BYTES,
-            channels: if channels.is_empty() {
-                None
-            } else {
-                Some(channels.clone())
-            },
+            // Всегда явный список (возможно пустой): машина с полностью
+            // выключенным состоянием не должна получать чужие каналы.
+            channels: Some(channels.clone()),
         };
         let resp =
             match tokio::time::timeout(STATE_TIMEOUT, super::connect::send_state_pull(&conn, &req))
