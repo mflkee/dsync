@@ -7,10 +7,16 @@ use serde::{Deserialize, Serialize};
 /// было видно, а не угадывалось по таймаутам.
 pub const PROTOCOL_VERSION: u32 = 2;
 
-/// Человекочитаемая версия бинаря: `0.1.0 (proto 2)`.
-/// Сравнение строк в `doctor` показывает, одинаковы ли бинари на флоте.
+/// Человекочитаемая версия бинаря: `0.1.0+abc1234 (proto 2)`.
+/// Git-хеш приходит из `build.rs`; без него (сборка из tarball) — просто версия.
+/// Сравнение строк в `doctor`/`status` показывает, одинаковы ли бинари на флоте.
 pub fn version_string() -> String {
-    format!("{} (proto {})", env!("CARGO_PKG_VERSION"), PROTOCOL_VERSION)
+    match option_env!("DSYNC_GIT_SHA") {
+        Some(sha) if !sha.is_empty() && sha != "unknown" => {
+            format!("{}+{sha} (proto {PROTOCOL_VERSION})", env!("CARGO_PKG_VERSION"))
+        }
+        _ => format!("{} (proto {PROTOCOL_VERSION})", env!("CARGO_PKG_VERSION")),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,6 +30,10 @@ pub struct PushRequest {
     /// Restrict hub SSH-pulls to this machine (default: all in project config)
     #[serde(default)]
     pub target: Option<String>,
+    /// Версия клиента (`version_string()`, с git-хешем) — хаб копит её в
+    /// `MachineState`, чтобы дрейф сборок по флоту был виден в `status`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,6 +73,9 @@ pub struct MachineState {
     /// Last SSH-pull outcome per project (see `hub-pull-orchestration`).
     #[serde(default)]
     pub pulls: HashMap<String, PullOutcome>,
+    /// Версия клиента, присланная последним push (для контроля дрейфа).
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// Outcome of a hub-initiated SSH pull for one (machine, project) pair.
@@ -141,6 +154,9 @@ pub struct MachineStatus {
     /// Last SSH-pull outcome per project (see `hub-pull-orchestration`).
     #[serde(default)]
     pub pulls: HashMap<String, PullOutcome>,
+    /// Версия dsync на машине (последний push).
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
