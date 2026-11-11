@@ -78,12 +78,21 @@ impl Default for StateConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct OpencodeStateConfig {
     /// Каталоги проектов, сессии которых синхронизируем. Если не задано —
-    /// берутся пути всех `[projects.*]`.
+    /// берутся пути всех `[projects.*]`. Пустой список (`projects = []`) —
+    /// явное отключение канала: машина не экспортирует сессии и не применяет
+    /// чужие (так настроен сервер без opencode V2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub projects: Option<Vec<PathBuf>>,
+}
+
+impl OpencodeStateConfig {
+    /// Канал включён? `projects = []` — явное отключение (см. выше).
+    pub fn enabled(&self) -> bool {
+        self.projects.as_ref().map(|p| !p.is_empty()).unwrap_or(true)
+    }
 }
 
 /// Настройка авто-захвата правок живых dotfiles-файлов при `dsync push`.

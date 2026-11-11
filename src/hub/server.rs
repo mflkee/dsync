@@ -650,8 +650,14 @@ async fn handle_state_pull(
         } else {
             req.max_bytes.min(hub_page)
         };
-        let (items, seq, next_seq, has_more) =
-            state.state_since_page(req.state_seq, &req.machine, max_bytes).await;
+        let (items, seq, next_seq, has_more) = state
+            .state_since_page(
+                req.state_seq,
+                &req.machine,
+                max_bytes,
+                req.channels.as_deref(),
+            )
+            .await;
         info!(
             "state pull from {}: {} item(s){}",
             req.machine,

@@ -210,6 +210,12 @@ pub struct StatePullRequest {
     pub state_seq: i64,
     #[serde(default)]
     pub max_bytes: u64,
+    /// Какие каналы нужны этой машине (`None` = все, поведение старых
+    /// клиентов). Хаб пропускает ненужные каналы, но курсор через них
+    /// продвигает — иначе машина с выключенным `opencode` качала бы десятки
+    /// мегабайт чужих сессий на каждом цикле.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channels: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

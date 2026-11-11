@@ -294,7 +294,9 @@ impl HubState {
     /// используется тестами.
     #[cfg(test)]
     pub async fn state_since(&self, since: i64, exclude_origin: &str) -> (Vec<StateItem>, i64) {
-        let (items, cur, _, _) = self.state_since_page(since, exclude_origin, 0).await;
+        let (items, cur, _, _) = self
+            .state_since_page(since, exclude_origin, 0, None)
+            .await;
         (items, cur)
     }
 
@@ -310,6 +312,7 @@ impl HubState {
         since: i64,
         exclude_origin: &str,
         max_bytes: u64,
+        channels: Option<&[String]>,
     ) -> (Vec<StateItem>, i64, i64, bool) {
         let (selected, cur): (Vec<StoredStateItem>, i64) = {
             let idx = self.state_index.read().await;
@@ -332,9 +335,17 @@ impl HubState {
         let mut cursor = since;
         let mut has_more = false;
         for it in selected {
+            // Чужие origin и каналы, которые машине не нужны, не отправляем,
+            // но курсор через них двигаем — иначе пагинация застрянет на них.
             if it.origin == exclude_origin {
                 cursor = it.seq;
                 continue;
+            }
+            if let Some(wanted) = channels {
+                if !wanted.iter().any(|c| c == &it.channel) {
+                    cursor = it.seq;
+                    continue;
+                }
             }
             let path = state_dir.join(&it.file);
             let size = tokio::fs::metadata(&path)
@@ -914,13 +925,13 @@ mod tests {
                 .await;
             }
 
-            let (items, cur, next, more) = state.state_since_page(0, "desktop", 250).await;
+            let (items, cur, next, more) = state.state_since_page(0, "desktop", 250, None).await;
             assert_eq!(items.len(), 2, "two 100-byte payloads fit into 250");
             assert_eq!(cur, 3, "hub seq is reported in full");
             assert_eq!(next, 2, "cursor at the last included item");
             assert!(more, "third item remains");
 
-            let (items2, _, next2, more2) = state.state_since_page(next, "desktop", 250).await;
+            let (items2, _, next2, more2) = state.state_since_page(next, "desktop", 250, None).await;
             assert_eq!(items2.len(), 1);
             assert_eq!(items2[0].key, "k3");
             assert!(!more2);
@@ -940,7 +951,7 @@ mod tests {
             let state = HubState::new(Some(dir.clone()), 30);
             push_item(&state, "opencode", "big", 1, "notebook", &"x".repeat(500)).await;
 
-            let (items, _, next, more) = state.state_since_page(0, "desktop", 10).await;
+            let (items, _, next, more) = state.state_since_page(0, "desktop", 10, None).await;
             assert_eq!(items.len(), 1, "item bigger than the page limit is sent");
             assert!(!more, "no endless loop on an oversized item");
             assert_eq!(next, 1);
@@ -960,7 +971,7 @@ mod tests {
             push_item(&state, "opencode", "mine", 1, "notebook", "{}").await;
             push_item(&state, "opencode", "theirs", 2, "desktop", "{}").await;
 
-            let (items, _, next, _) = state.state_since_page(0, "notebook", 0).await;
+            let (items, _, next, _) = state.state_since_page(0, "notebook", 0, None).await;
             assert_eq!(items.len(), 1, "own item is not echoed back");
             assert_eq!(items[0].key, "theirs");
             assert_eq!(next, 2, "cursor moved past the own item");

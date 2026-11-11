@@ -274,7 +274,25 @@ pub fn collect(cfg: &Config) -> Vec<StateItem> {
         collect_tmux(&idx, &mut out);
     }
     if let Some(oc) = &st.opencode {
-        collect_opencode(cfg, oc, &idx, &mut out);
+        if oc.enabled() {
+            collect_opencode(cfg, oc, &idx, &mut out);
+        }
+    }
+    out
+}
+
+/// Каналы, которые эта машина реально синхронизирует. Отправляется хабу,
+/// чтобы он не присылал мегабайты чужих сессий машине с выключенным каналом.
+fn wanted_channels(cfg: &Config) -> Vec<String> {
+    let Some(st) = cfg.state.as_ref() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if st.tmux {
+        out.push(TMUX_CHANNEL.to_string());
+    }
+    if st.opencode.as_ref().map(|oc| oc.enabled()).unwrap_or(false) {
+        out.push(OPENCODE_CHANNEL.to_string());
     }
     out
 }
@@ -392,7 +410,7 @@ pub fn apply(cfg: &Config, items: Vec<StateItem>) -> ApplyReport {
     for item in items {
         let wanted = match item.channel.as_str() {
             TMUX_CHANNEL => st.tmux,
-            OPENCODE_CHANNEL => st.opencode.is_some(),
+            OPENCODE_CHANNEL => st.opencode.as_ref().map(|oc| oc.enabled()).unwrap_or(false),
             other => {
                 // Неизвестный канал (например, устаревший `zellij`) — не шумим
                 // warn'ом на каждом цикле, просто не применяем.
