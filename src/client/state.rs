@@ -310,10 +310,10 @@ fn collect_tmux(idx: &StateIndex, out: &mut Vec<StateItem>) {
         let _ = std::fs::create_dir_all(&dir);
     }
     // Best-effort: попросить tmux сохранить текущую раскладку.
-    let before = newest_resurrect_file(&dir).map(|(_, m)| m).unwrap_or(0);
+    let before = newest_resurrect_file(&dir).map(|(_, m)| m);
     trigger_tmux_save(&dir, before);
 
-    let Some((path, mtime)) = newest_resurrect_file(&dir) else {
+    let Some((path, _)) = newest_resurrect_file(&dir) else {
         return;
     };
     let Ok(data) = std::fs::read_to_string(&path) else {
@@ -329,7 +329,6 @@ fn collect_tmux(idx: &StateIndex, out: &mut Vec<StateItem>) {
         data,
         ..Default::default()
     };
-    let _ = mtime;
     if !idx.has_exact(&item) {
         out.push(item);
     }
@@ -800,8 +799,14 @@ fn tmux_resurrect_dir() -> Option<PathBuf> {
     }
 }
 
-fn newest_resurrect_file(dir: &Path) -> Option<(PathBuf, i64)> {
-    let mut best: Option<(PathBuf, i64)> = None;
+/// Самый свежий снапшот resurrect: (путь, время модификации).
+///
+/// Сравнение идёт по `SystemTime` (наносекунды), а не по секундам эпохи:
+/// при секундной точности новый снапшот, записанный в ту же секунду, что и
+/// предыдущий, не считался новее — и `trigger_tmux_save` каждый раз ждал
+/// полный таймаут (3 с) на каждом push.
+fn newest_resurrect_file(dir: &Path) -> Option<(PathBuf, std::time::SystemTime)> {
+    let mut best: Option<(PathBuf, std::time::SystemTime)> = None;
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if !name.starts_with("tmux_resurrect_") || !name.ends_with(".txt") {
@@ -811,12 +816,8 @@ fn newest_resurrect_file(dir: &Path) -> Option<(PathBuf, i64)> {
         let Ok(modified) = md.modified() else {
             continue;
         };
-        let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH) else {
-            continue;
-        };
-        let mtime = since.as_secs() as i64;
-        if best.as_ref().map(|(_, m)| mtime > *m).unwrap_or(true) {
-            best = Some((entry.path(), mtime));
+        if best.as_ref().map(|(_, m)| modified > *m).unwrap_or(true) {
+            best = Some((entry.path(), modified));
         }
     }
     best
@@ -830,7 +831,7 @@ fn tmux_running() -> bool {
         .unwrap_or(false)
 }
 
-fn trigger_tmux_save(dir: &Path, prev_mtime: i64) {
+fn trigger_tmux_save(dir: &Path, prev_mtime: Option<std::time::SystemTime>) {
     if !tmux_running() {
         return;
     }
@@ -840,15 +841,16 @@ fn trigger_tmux_save(dir: &Path, prev_mtime: i64) {
     let _ = Command::new("tmux")
         .args(["run-shell", &script.display().to_string()])
         .output();
-    // Сохранение из run-shell асинхронное — недолго ждём новый файл.
-    for _ in 0..15 {
+    // Сохранение из run-shell асинхронное — недолго ждём новый файл
+    // (обычно один-два тика по 100 мс).
+    for _ in 0..12 {
         if newest_resurrect_file(dir)
-            .map(|(_, m)| m > prev_mtime)
+            .map(|(_, m)| prev_mtime.map(|p| m > p).unwrap_or(true))
             .unwrap_or(false)
         {
             break;
         }
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
