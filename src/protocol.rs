@@ -2,6 +2,17 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+/// Версия протокола hub↔client. Растёт при изменении семантики сообщений;
+/// обе стороны показывают её в `dsync status`/`doctor`, чтобы дрейф версий
+/// было видно, а не угадывалось по таймаутам.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Человекочитаемая версия бинаря: `0.1.0 (proto 2)`.
+/// Сравнение строк в `doctor` показывает, одинаковы ли бинари на флоте.
+pub fn version_string() -> String {
+    format!("{} (proto {})", env!("CARGO_PKG_VERSION"), PROTOCOL_VERSION)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PushRequest {
     pub machine: String,
@@ -116,6 +127,10 @@ pub struct StatusRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub machines: HashMap<String, MachineStatus>,
+    /// Версия хаба (`version_string()`). Старый хаб поля не шлёт (None) —
+    /// клиент тогда честно показывает «unknown».
+    #[serde(default)]
+    pub hub_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -181,6 +196,11 @@ pub struct StatePushResponse {
 }
 
 /// Client → hub: fetch state items newer than `state_seq`, excluding own origin.
+///
+/// `max_bytes` — мягкий лимит размера страницы (0 = без лимита, поведение
+/// старых клиентов). Хаб отдаёт не больше одной страницы и сообщает в ответе
+/// `next_seq`/`has_more`, чтобы клиент догнал стор несколькими запросами:
+/// 66 МБ одним JSON-сообщением — это пик RSS хаба и риск OOM.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatePullRequest {
     pub machine: String,
@@ -188,6 +208,8 @@ pub struct StatePullRequest {
     pub token: String,
     #[serde(default)]
     pub state_seq: i64,
+    #[serde(default)]
+    pub max_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -197,6 +219,13 @@ pub struct StatePullResponse {
     /// Hub's current global state sequence (store it for the next pull).
     #[serde(default)]
     pub state_seq: i64,
+    /// Курсор страницы: следующий запрос идёт с `state_seq = next_seq`.
+    /// 0 у старых хабов — тогда страница считается последней.
+    #[serde(default)]
+    pub next_seq: i64,
+    /// Остались элементы после этой страницы.
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 /// Client → hub: read-only summary of the state store (State tab in the TUI).
@@ -213,6 +242,9 @@ pub struct ChannelStatus {
     pub channel: String,
     #[serde(default)]
     pub item_count: usize,
+    /// Суммарный размер payload'ов канала на хабе (байты).
+    #[serde(default)]
+    pub bytes: u64,
     /// Seconds since epoch of the newest item in the channel.
     #[serde(default)]
     pub last_updated: i64,

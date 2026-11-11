@@ -55,6 +55,16 @@ pub struct StateConfig {
     pub tmux_restore: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opencode: Option<OpencodeStateConfig>,
+    /// Сколько раз повторять применение элемента состояния, прежде чем
+    /// отправить его в dead-letter (по умолчанию 3). Раньше один «ядовитый»
+    /// элемент (например, `opencode session import` на машине со старым
+    /// opencode) откатывал seq назад и блокировал канал навсегда.
+    #[serde(default = "default_state_retry_limit")]
+    pub retry_limit: u32,
+}
+
+pub(crate) fn default_state_retry_limit() -> u32 {
+    3
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -147,6 +157,21 @@ pub struct HubConfig {
     /// DEFAULT_SSH_TIMEOUT (30s), only the exec stage uses this.
     #[serde(default = "default_pull_timeout_secs")]
     pub pull_timeout_secs: u64,
+    /// Пулить проект на машине только если его `commit_hash` изменился с
+    /// последнего успешного пулла (по умолчанию true). Без этого каждый push
+    /// каждого клиента дёргал SSH-пулл всех проектов на всех машинах — ~1700
+    /// пуллов в сутки и `post_pull` (cargo build/chezmoi apply) на каждый.
+    #[serde(default = "default_pull_only_on_change")]
+    pub pull_only_on_change: bool,
+    /// Не пулить машины, не подававшие признаков жизни дольше этого времени
+    /// (секунды; 0 = пулить всегда). Офлайн-машина раньше получала 3 попытки
+    /// SSH с backoff на каждый проект каждые 15 минут.
+    #[serde(default = "default_offline_skip_after_secs")]
+    pub offline_skip_after_secs: u64,
+    /// Размер страницы `state_pull` (байты): хаб отдаёт состояние порциями,
+    /// чтобы 66 МБ opencode-сессий не уезжали одним сообщением в память.
+    #[serde(default = "default_state_pull_page_bytes")]
+    pub state_pull_page_bytes: u64,
 }
 
 pub(crate) fn default_max_message_size() -> u64 {
@@ -167,6 +192,18 @@ pub(crate) fn default_pull_retries() -> u32 {
 
 pub(crate) fn default_pull_timeout_secs() -> u64 {
     300
+}
+
+pub(crate) fn default_pull_only_on_change() -> bool {
+    true
+}
+
+pub(crate) fn default_offline_skip_after_secs() -> u64 {
+    45 * 60
+}
+
+pub(crate) fn default_state_pull_page_bytes() -> u64 {
+    6 * 1024 * 1024
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
