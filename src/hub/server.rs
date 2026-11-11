@@ -352,6 +352,11 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
         .map(|h| h.pull_only_on_change)
         .unwrap_or_else(crate::config::default_pull_only_on_change);
     let now = unix_now();
+    // Сводка «сколько реально пулим» — иначе экономия невидима (debug-строки
+    // в проде не пишутся).
+    let mut started = 0usize;
+    let mut unchanged = 0usize;
+    let mut offline = 0usize;
 
     for project in &req.projects {
         let static_cfg = projects_cfg.and_then(|p| p.get(&project.name));
@@ -430,9 +435,15 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                 deployed.as_deref(),
                 &project.commit_hash,
             ) {
+                if reason.starts_with("no push") {
+                    offline += 1;
+                } else {
+                    unchanged += 1;
+                }
                 tracing::debug!("skipping pull {} → {machine_name}: {reason}", project.name);
                 continue;
             }
+            started += 1;
 
             let host = remote.host.clone();
             let port = remote.port;
@@ -489,6 +500,13 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                 }
             });
         }
+    }
+
+    if started + unchanged + offline > 0 {
+        info!(
+            "pull plan from {}: {started} started, {unchanged} unchanged, {offline} offline",
+            req.machine
+        );
     }
 }
 
