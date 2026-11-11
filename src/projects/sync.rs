@@ -23,6 +23,17 @@ pub fn commit_and_push(name: &str, path: &Path) -> Result<bool> {
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
 
+    // Быстрый путь: рабочее дерево чистое, и по локальным ref'ам нечего
+    // отправлять/подтягивать — не идём в сеть. `git fetch origin` стоит
+    // ~3 с на проект (GitHub), а push выполняется каждые 15 минут на каждой
+    // машине: 4 проекта × 3 с ≈ 10 с из 11 с всего цикла.
+    if !dirty {
+        let (ahead_local, behind_local) = diverged(path, &branch);
+        if ahead_local == 0 && behind_local == 0 {
+            return Ok(false);
+        }
+    }
+
     if dirty {
         let add = run_git(path, &["add", "-A"]);
         if !add.status.success() {
