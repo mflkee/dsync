@@ -165,7 +165,14 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for FileWriter {
 /// Печатает строки результата (push/pull/status возвращают линии вместо
 /// печати в stdout — так те же функции безопасно вызываются из TUI).
 fn print_lines(lines: Vec<String>) {
+    // Не паникуем на `dsync status | head` (EPIPE): закрытый stdout — это
+    // нормальное завершение для CLI, а `println!` на broken pipe паникует.
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
     for l in lines {
-        println!("{l}");
+        if writeln!(out, "{l}").is_err() {
+            return;
+        }
     }
 }

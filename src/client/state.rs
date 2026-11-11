@@ -613,6 +613,22 @@ fn apply_opencode(item: &StateItem) -> Result<String> {
 // Оркестрация (вызывается из push/pull)
 // ---------------------------------------------------------------------------
 
+/// Убирает из локального индекса dead-letter и счётчики каналов, которые
+/// машина больше не синхронизирует (`[state.opencode] projects = []` и т.п.):
+/// они никогда не будут повторены, но засоряют `dsync status`/`doctor`.
+fn prune_unwanted_index(channels: &[String]) {
+    let mut idx = StateIndex::load();
+    let keep = |key: &str| channels.iter().any(|c| key.starts_with(&format!("{c}:")));
+    let before = idx.failures.len() + idx.dead.len();
+    idx.failures.retain(|k, _| keep(k));
+    idx.dead.retain(|k, _| keep(k));
+    if idx.failures.len() + idx.dead.len() != before {
+        if let Err(e) = idx.save() {
+            warn!("can't save state index: {e:#}");
+        }
+    }
+}
+
 /// Отправляет локальные изменения состояния и применяет чужие.
 /// `capture` = собирать ли локальные изменения (tmux-сейв, экспорт сессий).
 /// Пуш — собирает; pull — только применяет чужие, чтобы не дёргать
@@ -672,6 +688,7 @@ pub async fn sync_state(cfg: &Config, capture: bool) -> Vec<String> {
         .max(1);
     let mut since = get_seq();
     let channels = wanted_channels(cfg);
+    prune_unwanted_index(&channels);
     for _page in 0..MAX_PAGES {
         let req = StatePullRequest {
             machine: cfg.machine.name.clone(),
@@ -1102,6 +1119,45 @@ mod tests {
             wanted_channels(&cfg).is_empty(),
             "хабу не запрашиваем каналы"
         );
+    }
+
+    #[test]
+    fn prune_unwanted_index_drops_disabled_channel_state() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("dsync-state-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DSYNC_STATE_PATH", dir.join("state.json"));
+
+        let mut idx = StateIndex::default();
+        let bad = StateItem {
+            seq: 5,
+            ..item("opencode", "ses_x", 100, 1)
+        };
+        for _ in 0..3 {
+            record_failures(&mut idx, &[], std::slice::from_ref(&bad), 3);
+        }
+        idx.failures.insert(
+            "tmux:latest".into(),
+            Failure {
+                attempts: 1,
+                updated: 1,
+                seq: 6,
+            },
+        );
+        idx.save().unwrap();
+
+        prune_unwanted_index(&["tmux".to_string()]);
+        let h = health();
+        assert!(h.dead.is_empty(), "disabled channel dead letters dropped");
+        assert_eq!(h.failures.len(), 1, "enabled channel kept");
+        assert!(
+            h.failures.iter().any(|(k, _)| k == "tmux:latest"),
+            "enabled channel kept"
+        );
+
+        std::env::remove_var("DSYNC_STATE_PATH");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
