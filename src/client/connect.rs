@@ -358,6 +358,9 @@ fn machine_status_lines(name: &str, status: &MachineStatus) -> Vec<String> {
     )];
     let mut pulls: Vec<_> = status.pulls.iter().collect();
     pulls.sort_by_key(|(p, _)| (*p).clone());
+    if let Some(v) = &status.version {
+        lines.push(format!("      version: {v}"));
+    }
     for (project, outcome) in pulls {
         let res = if outcome.ok {
             "ok".to_string()
@@ -403,6 +406,7 @@ mod tests {
             last_seen: 1_700_000_000,
             last_push: 1_700_000_000,
             pulls,
+            version: Some("0.1.0+deadbee (proto 2)".into()),
         };
         let lines = machine_status_lines("desktop", &status);
         assert!(lines[0].contains("desktop: online=true"));
@@ -421,6 +425,7 @@ mod tests {
             last_seen: 0,
             last_push: 0,
             pulls: std::collections::HashMap::new(),
+            version: None,
         };
         let lines = machine_status_lines("notebook", &status);
         assert_eq!(lines.len(), 1);

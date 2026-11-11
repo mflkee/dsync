@@ -566,6 +566,7 @@ impl HubState {
                     last_seen: state.last_push,
                     last_push: state.last_push,
                     pulls: state.pulls.clone(),
+                    version: state.version.clone(),
                 },
             );
         }
@@ -646,6 +647,7 @@ mod tests {
             last_push,
             projects: Vec::<ProjectState>::new(),
             pulls: HashMap::new(),
+            version: None,
         }
     }
 

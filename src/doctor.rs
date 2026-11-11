@@ -124,8 +124,23 @@ pub async fn run(cfg: Config) -> Result<()> {
             let local_v = crate::protocol::version_string();
             let mut names: Vec<&String> = resp.machines.keys().collect();
             names.sort();
-            for name in names {
-                println!("    {name}: online={}", resp.machines[name].online);
+            for name in &names {
+                let m = &resp.machines[*name];
+                let v = m.version.as_deref().unwrap_or("unknown");
+                let mark = if m.version.as_deref() == Some(local_v.as_str()) {
+                    "✓"
+                } else {
+                    "✗"
+                };
+                println!("    {mark} {name}: online={}, version={v}", m.online);
+            }
+            if names
+                .iter()
+                .any(|n| resp.machines[*n].version.as_deref() != Some(local_v.as_str()))
+            {
+                println!(
+                    "      (✗ = другая сборка; флот обновится на следующем cycle через post_pull)"
+                );
             }
             println!("\nhub version:");
             if resp.hub_version.as_deref() == Some(local_v.as_str()) {

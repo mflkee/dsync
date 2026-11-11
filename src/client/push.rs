@@ -69,6 +69,7 @@ fn build_push_request(
             .as_secs() as i64,
         projects,
         target: machine,
+        version: Some(crate::protocol::version_string()),
     })
 }
 

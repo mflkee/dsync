@@ -13,7 +13,10 @@ pub const PROTOCOL_VERSION: u32 = 2;
 pub fn version_string() -> String {
     match option_env!("DSYNC_GIT_SHA") {
         Some(sha) if !sha.is_empty() && sha != "unknown" => {
-            format!("{}+{sha} (proto {PROTOCOL_VERSION})", env!("CARGO_PKG_VERSION"))
+            format!(
+                "{}+{sha} (proto {PROTOCOL_VERSION})",
+                env!("CARGO_PKG_VERSION")
+            )
         }
         _ => format!("{} (proto {PROTOCOL_VERSION})", env!("CARGO_PKG_VERSION")),
     }

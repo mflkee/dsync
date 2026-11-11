@@ -296,6 +296,7 @@ async fn handle_push(
                 last_push: unix_now(),
                 projects: req.projects.clone(),
                 pulls: std::collections::HashMap::new(),
+                version: req.version.clone(),
             })
             .await;
         info!("push from {machine} accepted");
@@ -1020,6 +1021,7 @@ mod tests {
             timestamp: unix_now(),
             projects: vec![],
             target: None,
+            version: None,
         };
         crate::client::connect::send_push(conn, &req).await
     }
@@ -1094,6 +1096,7 @@ mod tests {
             timestamp: unix_now(),
             projects: vec![],
             target: None,
+            version: None,
         };
         let mut msg = serde_json::to_value(&req).unwrap();
         msg["type"] = serde_json::json!("push");
