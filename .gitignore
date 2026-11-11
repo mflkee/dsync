@@ -23,3 +23,8 @@ uv.lock
 .ruff_cache/
 # Internal session handoff notes (не для публичного репо)
 SESSION-HANDOFF*.md
+
+# Legacy Python v1 artifacts (repo is Rust now)
+src/dsync/
+src/dsync.egg-info/
+/dist/

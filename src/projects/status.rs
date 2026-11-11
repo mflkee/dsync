@@ -77,13 +77,7 @@ pub fn discover_entries(
     Ok(out)
 }
 
-/// Обходит `root` на глубину 1 и собирает состояния git-репозиториев
-/// (каталогов с `.git`), которых нет в `static_names` (явные `[projects.*]`)
-/// и в `excluded` (скретч/учёба из `[auto_projects] exclude`).
-/// Используется авто-обнаружением новых проектов флота (`[auto_projects]`).
-// (Публичная обёртка `discover()` удалена: push сканирует параллельно через
-// `discover_entries()` + `scan_parallel()`.)
-
+/// Состояние одного репозитория (ветка, dirty, ahead/behind, url, коммит).
 pub fn scan_one(name: &str, path: &Path) -> ProjectState {
     let branch = git_output(path, &["rev-parse", "--abbrev-ref", "HEAD"]);
     let dirty = git_output(path, &["status", "--porcelain"])
@@ -226,8 +220,8 @@ mod tests {
         assert!(entries.is_empty(), "excluded repo must not be announced");
 
         // beta исключён как явный проект; alpha сканируется.
-        let entries = discover_entries(&base, &static_names, &std::collections::HashSet::new())
-            .unwrap();
+        let entries =
+            discover_entries(&base, &static_names, &std::collections::HashSet::new()).unwrap();
         assert_eq!(entries.len(), 1, "beta excluded by static names");
         let states = scan_parallel(entries);
         assert_eq!(states[0].name, "alpha");

@@ -294,9 +294,7 @@ impl HubState {
     /// используется тестами.
     #[cfg(test)]
     pub async fn state_since(&self, since: i64, exclude_origin: &str) -> (Vec<StateItem>, i64) {
-        let (items, cur, _, _) = self
-            .state_since_page(since, exclude_origin, 0, None)
-            .await;
+        let (items, cur, _, _) = self.state_since_page(since, exclude_origin, 0, None).await;
         (items, cur)
     }
 
@@ -931,7 +929,8 @@ mod tests {
             assert_eq!(next, 2, "cursor at the last included item");
             assert!(more, "third item remains");
 
-            let (items2, _, next2, more2) = state.state_since_page(next, "desktop", 250, None).await;
+            let (items2, _, next2, more2) =
+                state.state_since_page(next, "desktop", 250, None).await;
             assert_eq!(items2.len(), 1);
             assert_eq!(items2[0].key, "k3");
             assert!(!more2);
@@ -955,6 +954,28 @@ mod tests {
             assert_eq!(items.len(), 1, "item bigger than the page limit is sent");
             assert!(!more, "no endless loop on an oversized item");
             assert_eq!(next, 1);
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn state_pull_filters_channels_the_machine_does_not_want() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tmp_dir("channels");
+            let state = HubState::new(Some(dir.clone()), 30);
+            push_item(&state, "tmux", "latest", 1, "notebook", "layout").await;
+            push_item(&state, "opencode", "ses_a", 2, "notebook", "{}").await;
+
+            let want = vec!["tmux".to_string()];
+            let (items, _, next, more) = state.state_since_page(0, "desktop", 0, Some(&want)).await;
+            assert_eq!(items.len(), 1, "only the requested channel is sent");
+            assert_eq!(items[0].channel, "tmux");
+            assert_eq!(next, 2, "cursor still advanced past the skipped item");
+            assert!(!more);
             let _ = std::fs::remove_dir_all(&dir);
         });
     }
@@ -1050,7 +1071,8 @@ mod tests {
     }
 
     #[test]
-    fn state_status_summarizes_channels_with_error() {        let rt = tokio::runtime::Builder::new_current_thread()
+    fn state_status_summarizes_channels_with_error() {
+        let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();

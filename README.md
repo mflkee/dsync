@@ -60,8 +60,10 @@ dsync tui
 | `dsync push [machine]` | Commit local changes, push to git origin, notify hub. Also captures live dotfile edits (see `dsync capture`) |
 | `dsync capture <path>...` | Instant capture of chezmoi-managed live files (or `~/dotfiles` source edits) into dotfiles repo, then push fleet state — no `chezmoi edit` needed |
 | `dsync pull [machine]` | Fetch fleet state from the hub |
-| `dsync status` | Show online/offline machines, their sync state, and last per-project SSH-pull outcomes |
-| `dsync doctor` | Diagnose config, SSH keys, hub auth token, SSH host trust, network, hub reachability |
+| `dsync status` | Show online/offline machines, their sync state, last per-project SSH-pull outcomes, hub version and local state (seq/failing/dead-letter). `--json` for monitoring |
+| `dsync state list` | Local non-git state index: seq, failing items, dead letters |
+| `dsync state retry [channel:key]` | Re-queue dead-letter items for the next pull |
+| `dsync doctor` | Diagnose config, SSH keys, hub auth token, SSH host trust, network, hub reachability, hub/client version drift, state store, orphan tmp files, opencode V1/V2 |
 | `dsync tui` | Full TUI: dashboard, projects, machines, doctor, log, config editor |
 | `dsync hub` | Run the hub daemon (QUIC server + SSH-pull coordinator) |
 | `dsync watch` | Background sync loop (poll+push+pull on an interval) |
@@ -95,7 +97,8 @@ post_pull = "chezmoi apply --force"
 path = "~/projects/dsync"
 branch = "main"
 machines = ["desktop", "notebook", "server"]
-post_pull = "cargo build --release && cp target/release/dsync ~/.local/bin/dsync"
+# rebuild the client and (if this machine runs the hub) schedule a hub restart
+post_pull = "bash ~/projects/dsync/scripts/post-pull.sh"
 
 # Auto-discovery: любая новая папка с .git в root анонсируется флоту при push —
 # hub клонирует её на машины без каталога (bootstrap), дальше обычный pull.
@@ -123,6 +126,38 @@ max_concurrency = 32              # in-flight pulls/tasks bound
 retention_days = 30               # prune machines not seen for N days (0 = never)
 pull_retries = 2                  # extra SSH-pull attempts after the first (backoff 5s·2ⁿ, cap 60s)
 pull_timeout_secs = 300           # exec window for `git pull && post_pull` (builds!) — connect stays 30s
+pull_only_on_change = true        # skip a pull when that commit is already deployed there
+offline_skip_after_secs = 2700    # don't SSH into machines silent for >45 min (0 = always)
+state_pull_page_bytes = 6291456   # page size for state_pull (6 MiB)
+
+# Non-git fleet state (tmux snapshot + opencode sessions) — synced via the hub.
+[state]
+tmux = true
+tmux_restore = true
+retry_limit = 3                   # apply attempts before an item goes to dead-letter
+# [state.opencode]
+# projects = ["~/projects/mushroomwars"]  # default: all [projects.*]
+# projects = []                           # explicit off: neither export nor apply
+```
+
+### State sync troubleshooting
+
+The hub stores non-git state as immutable payloads with a global `seq`; each
+client keeps its own cursor in `~/.local/share/dsync/state.json`. Pulls are
+paginated by bytes, and already-applied items are skipped, so retries cannot
+re-trigger a `tmux-resurrect restore` or re-import a session.
+
+If an item cannot be applied (e.g. `opencode session import` is unavailable —
+opencode **V1** at `/usr/bin/opencode` instead of V2 in `~/.opencode/bin`), it
+is attempted `retry_limit` times and then parked in a dead-letter list — one
+poison item no longer blocks the whole channel or forces re-downloading the
+store every cycle.
+
+```bash
+dsync state list            # seq, applied, failing, dead-letter items + reasons
+dsync state retry           # re-queue all dead letters
+dsync state retry opencode:ses_abc   # or a single item
+dsync doctor                # also checks the opencode binary for `session import`
 ```
 
 Each project's git `origin` is where content actually lives (your GitHub/Gitea

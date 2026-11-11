@@ -671,28 +671,33 @@ pub async fn sync_state(cfg: &Config, capture: bool) -> Vec<String> {
         .unwrap_or_else(crate::config::default_state_retry_limit)
         .max(1);
     let mut since = get_seq();
+    let channels = wanted_channels(cfg);
     for _page in 0..MAX_PAGES {
         let req = StatePullRequest {
             machine: cfg.machine.name.clone(),
             token: super::connect::hub_token(cfg),
             state_seq: since,
             max_bytes: PAGE_BYTES,
+            channels: if channels.is_empty() {
+                None
+            } else {
+                Some(channels.clone())
+            },
         };
-        let resp = match tokio::time::timeout(STATE_TIMEOUT, super::connect::send_state_pull(
-            &conn, &req,
-        ))
-        .await
-        {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(e)) => {
-                warn!("state pull failed: {e:#}");
-                break;
-            }
-            Err(_) => {
-                warn!("state pull timed out (hub too old?)");
-                break;
-            }
-        };
+        let resp =
+            match tokio::time::timeout(STATE_TIMEOUT, super::connect::send_state_pull(&conn, &req))
+                .await
+            {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => {
+                    warn!("state pull failed: {e:#}");
+                    break;
+                }
+                Err(_) => {
+                    warn!("state pull timed out (hub too old?)");
+                    break;
+                }
+            };
 
         let page_len = resp.items.len();
         let report = apply(cfg, resp.items);
@@ -1079,6 +1084,26 @@ mod tests {
         assert!(apply(&cfg, vec![item("tmux", "latest", 1, 3)])
             .messages
             .is_empty());
+    }
+
+    #[test]
+    fn disabled_opencode_channel_is_skipped() {
+        // `[state.opencode] projects = []` — явное отключение канала: машина
+        // без opencode V2 не должна пытаться применять чужие сессии.
+        let mut cfg = state_cfg();
+        let st = cfg.state.as_mut().unwrap();
+        st.tmux = false;
+        st.opencode = Some(crate::config::OpencodeStateConfig {
+            projects: Some(Vec::new()),
+        });
+        let report = apply(&cfg, vec![item("opencode", "ses_a", 1, 2)]);
+        assert!(report.applied.is_empty());
+        assert!(report.failed.is_empty(), "не пытаемся применять вовсе");
+        assert_eq!(report.skipped, 1);
+        assert!(
+            wanted_channels(&cfg).is_empty(),
+            "хабу не запрашиваем каналы"
+        );
     }
 
     #[test]

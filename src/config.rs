@@ -91,7 +91,10 @@ pub struct OpencodeStateConfig {
 impl OpencodeStateConfig {
     /// Канал включён? `projects = []` — явное отключение (см. выше).
     pub fn enabled(&self) -> bool {
-        self.projects.as_ref().map(|p| !p.is_empty()).unwrap_or(true)
+        self.projects
+            .as_ref()
+            .map(|p| !p.is_empty())
+            .unwrap_or(true)
     }
 }
 

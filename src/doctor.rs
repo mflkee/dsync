@@ -173,7 +173,10 @@ pub async fn run(cfg: Config) -> Result<()> {
             println!("  ✗ {key}: {}", d.error);
         }
         for (key, f) in &health.failures {
-            println!("  ∼ {key}: {} неудачн. попыт(ки), будет повторено", f.attempts);
+            println!(
+                "  ∼ {key}: {} неудачн. попыт(ки), будет повторено",
+                f.attempts
+            );
         }
     }
 
@@ -191,11 +194,18 @@ pub async fn run(cfg: Config) -> Result<()> {
     }
 
     // opencode: без `session import` (V1) канал состояния не может применяться.
-    if cfg.state.as_ref().and_then(|s| s.opencode.as_ref()).is_some() {
+    if cfg
+        .state
+        .as_ref()
+        .and_then(|s| s.opencode.as_ref())
+        .map(|oc| oc.enabled())
+        .unwrap_or(false)
+    {
         check("opencode state", || {
             let Some(bin) = crate::client::state::opencode_binary() else {
                 return Status::Warn(
-                    "opencode не найден — сессии не будут ни экспортироваться, ни импортироваться".into(),
+                    "opencode не найден — сессии не будут ни экспортироваться, ни импортироваться"
+                        .into(),
                 );
             };
             match std::process::Command::new(&bin)

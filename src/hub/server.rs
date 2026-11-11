@@ -80,7 +80,10 @@ pub async fn run_server(cfg: Config) -> Result<()> {
     let server_config = make_server_config(cert, key)?;
     let endpoint = Endpoint::server(server_config, bind)?;
 
-    let state = Arc::new(HubState::new(Some(data_dir.clone()), hub_cfg.retention_days));
+    let state = Arc::new(HubState::new(
+        Some(data_dir.clone()),
+        hub_cfg.retention_days,
+    ));
     if state.prune_stale().await {
         info!("pruned stale machines at startup");
     }
@@ -90,7 +93,10 @@ pub async fn run_server(cfg: Config) -> Result<()> {
     let removed_tmp =
         crate::hub::state::cleanup_stale_temp_files(&data_dir, Duration::from_secs(3600));
     if removed_tmp > 0 {
-        info!("removed {removed_tmp} stale tmp file(s) from {}", data_dir.display());
+        info!(
+            "removed {removed_tmp} stale tmp file(s) from {}",
+            data_dir.display()
+        );
     }
     // Мусор от каналов, которых больше нет в коде/конфиге (например `zellij`,
     // поддержка которого удалена): применяться всё равно некому.
@@ -424,10 +430,7 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                 deployed.as_deref(),
                 &project.commit_hash,
             ) {
-                tracing::debug!(
-                    "skipping pull {} → {machine_name}: {reason}",
-                    project.name
-                );
+                tracing::debug!("skipping pull {} → {machine_name}: {reason}", project.name);
                 continue;
             }
 
@@ -1119,6 +1122,7 @@ mod tests {
             token: "tn".into(),
             state_seq: 0,
             max_bytes: 0,
+            channels: None,
         };
         let r = crate::client::connect::send_state_pull(&conn, &pull)
             .await
@@ -1135,6 +1139,7 @@ mod tests {
             token: "td".into(),
             state_seq: 0,
             max_bytes: 0,
+            channels: None,
         };
         assert!(crate::client::connect::send_state_pull(&conn, &own)
             .await
@@ -1148,6 +1153,7 @@ mod tests {
             token: "wrong".into(),
             state_seq: 0,
             max_bytes: 0,
+            channels: None,
         };
         let err = crate::client::connect::send_state_pull(&conn, &bad).await;
         assert!(err.is_err(), "bad token must be rejected");

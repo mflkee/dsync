@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **State sync hardening** (`state-sync-hardening`), по итогам аудита 11.11.2026:
+  - *Pagination*: `state_pull` отдаёт состояние страницами (`max_bytes`,
+    `next_seq`, `has_more`). Раньше весь стор (61 элемент ≈ 66 МБ
+    opencode-сессий) уезжал одним JSON-сообщением: пик RSS хаба 512 МБ и
+    риск OOM. Старые клиенты (`max_bytes = 0`) получают всё как раньше.
+  - *Channel filter*: клиент сообщает нужные каналы, хаб не присылает чужие
+    (машина с выключенным `opencode` не скачивает мегабайты сессий).
+  - *Idempotent apply*: уже применённые элементы пропускаются, поэтому
+    повторная страница/ретрай не перезапускает `tmux-resurrect restore`
+    (наблюдалось раз в 15 минут на сервере).
+  - *Dead-letter вместо вечного блока*: один сбойный элемент больше не
+    откатывает seq и не держит канал в цикле «скачать 66 МБ → 60 ошибок».
+    `state.retry_limit` (по умолчанию 3) попытки → dead-letter; смотреть
+    `dsync state list`, повторять `dsync state retry [channel:key]`.
+  - `[state.opencode] projects = []` теперь действительно отключает канал
+    (раньше отключал только экспорт, а применение чужих сессий продолжалось).
+- **Pull economy** (`pull-economy`): хаб пропускает SSH-пулл, если
+  `commit_hash` проекта совпадает с уже развёрнутым на машине
+  (`pull_only_on_change`, состояние в `deployed.json`), и не трогает машины,
+  не выходившие на связь дольше `offline_skip_after_secs` (по умолчанию 45 мин).
+  Ошибки уровня сети/аутентификации (`No route to host`, `Connection refused`,
+  `Permission denied`) больше не ретраятся трижды. Было ~1700 пуллов в сутки,
+  из них ~1000 — в офлайн-машину.
+- **Hub self-update**: `scripts/post-pull.sh` собирает бинарь, обновляет
+  клиент и, если на машине запущен хаб, планирует его перезапуск
+  detached-таймером (`systemd-run --on-active=3`), чтобы не убить текущую
+  SSH-сессию пулла.
+- **Version visibility**: `PROTOCOL_VERSION` + `hub_version` в `status`;
+  `dsync status` показывает версию хаба, локальный state (seq/applied/failing/
+  dead-letter), `dsync status --json` — для мониторинга.
+- **`dsync state`**: `list` (счётчики, сбойные и dead-letter элементы) и
+  `retry [channel:key]`.
+- **`dsync doctor`**: версия хаба vs клиента, сводка state-стора (элементы,
+  байты, последний origin), локальные сбои/dead-letter, осиротевшие tmp-файлы,
+  поддержка `opencode session import` (V1 vs V2).
+- **Hub hygiene**: при старте хаб удаляет осиротевшие `*.tmp-*` старше часа
+  (наблюдалось 571 файл) и элементы каналов, которых больше нет в конфиге
+  (например `zellij` после удаления поддержки); в `state_status` добавлен
+  размер канала в байтах.
+- **Push speed**: авто-обнаружение проектов сканирует репозитории параллельно
+  (29 репо × ~5 git-вызовов последовательно = 8–11 с на push); лог пишет
+  только реально новые проекты (было «auto-discovered 29 new» каждый цикл).
+
 - **TUI improvements** (`tui-improvements`):
   - *Config-safe editor*: config mutations from the TUI now go through
     `toml_edit` patches (`ConfigEditor::apply_patch`) — comments, unknown
