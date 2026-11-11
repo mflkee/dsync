@@ -291,7 +291,8 @@ impl HubState {
 
     /// Элементы состояния с `seq > since`, записанные не этой машиной.
     /// Возвращает (элементы, текущий seq хаба). Без ограничения размера —
-    /// используется тестами и старым протоколом.
+    /// используется тестами.
+    #[cfg(test)]
     pub async fn state_since(&self, since: i64, exclude_origin: &str) -> (Vec<StateItem>, i64) {
         let (items, cur, _, _) = self.state_since_page(since, exclude_origin, 0).await;
         (items, cur)
