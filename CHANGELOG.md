@@ -36,9 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   клиент и, если на машине запущен хаб, планирует его перезапуск
   detached-таймером (`systemd-run --on-active=3`), чтобы не убить текущую
   SSH-сессию пулла.
-- **Version visibility**: `PROTOCOL_VERSION` + `hub_version` в `status`;
-  `dsync status` показывает версию хаба, локальный state (seq/applied/failing/
-  dead-letter), `dsync status --json` — для мониторинга.
+- **Version visibility**: `PROTOCOL_VERSION` + `version_string()` с git-хешем
+  (`build.rs`: `0.1.0+535cf06 (proto 2)`); каждый push несёт версию клиента,
+  хаб копит её в `MachineState`, `dsync status`/`doctor` показывают версию хаба
+  и **каждой машины** — дрейф сборок виден сразу (раньше четыре машины с
+  разными бинарями дружно назывались `0.1.0`). `dsync status --json` — для
+  мониторинга; в статусе также локальный state (seq/applied/failing/dead-letter).
 - **`dsync state`**: `list` (счётчики, сбойные и dead-letter элементы) и
   `retry [channel:key]`.
 - **`dsync doctor`**: версия хаба vs клиента, сводка state-стора (элементы,
