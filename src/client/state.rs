@@ -29,6 +29,10 @@ const TMUX_CHANNEL: &str = "tmux";
 const OPENCODE_CHANNEL: &str = "opencode";
 /// Не приближаемся к hub `max_message_size` (8 MB по умолчанию).
 const MAX_BATCH_BYTES: usize = 6 * 1024 * 1024;
+/// Размер страницы при pull состояния: хаб отдаёт стор порциями.
+const PAGE_BYTES: u64 = 6 * 1024 * 1024;
+/// Предохранитель от бесконечной пагинации (баг/старый хаб).
+const MAX_PAGES: usize = 64;
 /// Таймаут одной state-операции: загрузка/выгрузка может быть многомегабайтной.
 const STATE_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -36,12 +40,39 @@ const STATE_TIMEOUT: Duration = Duration::from_secs(180);
 // Локальный индекс
 // ---------------------------------------------------------------------------
 
+/// Счётчик неудачных применений элемента (для retry/backoff).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Failure {
+    pub attempts: u32,
+    pub updated: i64,
+    /// hub-seq элемента — чтобы вернуться к нему на следующем pull.
+    pub seq: i64,
+}
+
+/// Элемент, который не применился `retry_limit` раз. Больше не блокирует
+/// канал: следующие элементы применяются, а этот ждёт нового `updated`
+/// (тогда origin пришлёт новую версию) или `dsync state retry`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadItem {
+    pub updated: i64,
+    pub seq: i64,
+    pub error: String,
+    /// Когда элемент попал в dead-letter (сек. эпохи).
+    pub at: i64,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct StateIndex {
     #[serde(default)]
     seq: i64,
     #[serde(default)]
     items: HashMap<String, i64>,
+    /// Ключ `channel:key` → счётчик неудач.
+    #[serde(default)]
+    failures: HashMap<String, Failure>,
+    /// Ключ `channel:key` → окончательно сбойный элемент.
+    #[serde(default)]
+    dead: HashMap<String, DeadItem>,
 }
 
 fn index_path() -> PathBuf {
@@ -96,6 +127,99 @@ impl StateIndex {
             .map(|u| *u == item.updated)
             .unwrap_or(false)
     }
+
+    /// Элемент уже применён (не нужно применять повторно)?
+    ///
+    /// Критично для ретраев: раньше seq откатывался назад при любой ошибке,
+    /// и вместе с упавшим элементом заново применялись все успешные — включая
+    /// tmux-снапшот, из-за чего `tmux-resurrect restore` дёргался каждые
+    /// 15 минут. Проверка перед `apply_one` это исключает.
+    fn is_known(&self, item: &StateItem) -> bool {
+        if item.channel == TMUX_CHANNEL {
+            self.has_exact(item)
+        } else {
+            self.has(item)
+        }
+    }
+}
+
+/// Публичная сводка локального state-индекса (для `doctor`/`state list`).
+pub struct StateHealth {
+    pub seq: i64,
+    pub applied: usize,
+    pub failures: Vec<(String, Failure)>,
+    pub dead: Vec<(String, DeadItem)>,
+}
+
+pub fn health() -> StateHealth {
+    let idx = StateIndex::load();
+    let mut failures: Vec<_> = idx.failures.into_iter().collect();
+    failures.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut dead: Vec<_> = idx.dead.into_iter().collect();
+    dead.sort_by(|a, b| a.0.cmp(&b.0));
+    StateHealth {
+        seq: idx.seq,
+        applied: idx.items.len(),
+        failures,
+        dead,
+    }
+}
+
+/// Человекочитаемая сводка локального state-индекса (`dsync state list`).
+pub fn describe() -> Vec<String> {
+    let h = health();
+    let mut out = vec![format!(
+        "state index: seq={}, applied={}, failing={}, dead-letter={}",
+        h.seq,
+        h.applied,
+        h.failures.len(),
+        h.dead.len()
+    )];
+    for (key, f) in &h.failures {
+        out.push(format!(
+            "  failing  {key}: {} attempt(s), updated={}",
+            f.attempts, f.updated
+        ));
+    }
+    for (key, d) in &h.dead {
+        out.push(format!(
+            "  dead     {key}: {} (seq={}, updated={})",
+            d.error, d.seq, d.updated
+        ));
+    }
+    out
+}
+
+/// Убирает элементы из dead-letter (все или один `channel:key`) и откатывает
+/// seq к самому раннему из них, чтобы хаб выдал их снова.
+pub fn retry_dead(only: Option<&str>) -> usize {
+    let mut idx = StateIndex::load();
+    let keys: Vec<String> = match only {
+        Some(want) => idx
+            .dead
+            .keys()
+            .filter(|k| k.as_str() == want)
+            .cloned()
+            .collect(),
+        None => idx.dead.keys().cloned().collect(),
+    };
+    if keys.is_empty() {
+        return 0;
+    }
+    let mut min_seq: Option<i64> = None;
+    for k in &keys {
+        if let Some(d) = idx.dead.remove(k) {
+            min_seq = Some(min_seq.map_or(d.seq, |m: i64| m.min(d.seq)));
+            idx.failures.remove(k);
+        }
+    }
+    if let Some(seq) = min_seq {
+        idx.seq = (seq - 1).max(0);
+    }
+    if let Err(e) = idx.save() {
+        warn!("can't save state index: {e:#}");
+    }
+    keys.len()
 }
 
 /// Последний известный seq хаба (для инкрементального pull).
@@ -242,52 +366,69 @@ fn collect_opencode(
 // Применение чужих изменений
 // ---------------------------------------------------------------------------
 
-/// Применяет полученные от хаба элементы. Возвращает (строки, минимальный
-/// `seq` неудачного элемента) — второй нужен, чтобы не терять сбойные элементы
-/// при продвижении локального seq.
-pub fn apply(cfg: &Config, items: Vec<StateItem>) -> (Vec<String>, Option<i64>) {
+/// Результат применения чужих элементов: сообщения для пользователя,
+/// успешно применённые и сбойные элементы (по ним ведётся retry/dead-letter).
+#[derive(Default)]
+pub struct ApplyReport {
+    pub messages: Vec<String>,
+    pub applied: Vec<StateItem>,
+    pub failed: Vec<StateItem>,
+    /// Пропущено: уже применено ранее / канал выключен / неизвестный канал.
+    pub skipped: usize,
+}
+
+/// Применяет полученные от хаба элементы.
+///
+/// Уже применённые элементы (по локальному индексу) пропускаются — это делает
+/// ретраи безопасными: повторная страница состояния не перезапускает
+/// `tmux-resurrect restore` и не переимпортирует сессии.
+pub fn apply(cfg: &Config, items: Vec<StateItem>) -> ApplyReport {
+    let mut report = ApplyReport::default();
     let Some(st) = cfg.state.as_ref() else {
-        return (Vec::new(), None);
+        return report;
     };
-    let mut messages = Vec::new();
-    let mut applied: Vec<StateItem> = Vec::new();
-    let mut failed_min: Option<i64> = None;
+    let idx = StateIndex::load();
     let mut refresh_projects: Vec<PathBuf> = Vec::new();
     for item in items {
         let wanted = match item.channel.as_str() {
             TMUX_CHANNEL => st.tmux,
             OPENCODE_CHANNEL => st.opencode.is_some(),
             other => {
-                warn!("state: неизвестный канал {other}");
+                // Неизвестный канал (например, устаревший `zellij`) — не шумим
+                // warn'ом на каждом цикле, просто не применяем.
+                tracing::debug!("state: канал {other} не поддерживается — пропуск");
                 false
             }
         };
         if !wanted {
+            report.skipped += 1;
+            continue;
+        }
+        if idx.is_known(&item) {
+            report.skipped += 1;
             continue;
         }
         match apply_one(cfg, &item) {
             Ok(msg) => {
-                messages.push(msg);
+                report.messages.push(msg);
                 if item.channel == OPENCODE_CHANNEL {
                     if let Some(m) = &item.meta {
                         refresh_projects.push(PathBuf::from(m));
                     }
                 }
-                applied.push(item);
+                report.applied.push(item);
             }
             Err(e) => {
                 warn!(
                     "state: не удалось применить {}/{}: {e:#}",
                     item.channel, item.key
                 );
-                if item.seq > 0 {
-                    failed_min = Some(failed_min.map_or(item.seq, |m| m.min(item.seq)));
-                }
+                report.failed.push(item);
             }
         }
     }
-    if !applied.is_empty() {
-        mark_synced(&applied);
+    if !report.applied.is_empty() {
+        mark_synced(&report.applied);
     }
     // Импорт opencode бампает локальный `updated` сессии, из-за чего её
     // тут же захотелось бы отправить обратно (эхо-петля). Освежаем индекс
@@ -297,7 +438,62 @@ pub fn apply(cfg: &Config, items: Vec<StateItem>) -> (Vec<String>, Option<i64>) 
         refresh_projects.dedup();
         refresh_opencode_index(&refresh_projects);
     }
-    (messages, failed_min)
+    report
+}
+
+/// Обновляет учёт неудач и возвращает seq самого раннего элемента, у которого
+/// ещё остались попытки (курсор pull'а должен остаться перед ним), либо None.
+///
+/// После `retry_limit` неудач элемент уходит в dead-letter: канал больше не
+/// блокируется, а элемент ждёт новой версии от origin или `dsync state retry`.
+fn record_failures(
+    idx: &mut StateIndex,
+    applied: &[StateItem],
+    failed: &[StateItem],
+    retry_limit: u32,
+) -> Option<i64> {
+    for it in applied {
+        let k = StateIndex::key_of(it);
+        idx.failures.remove(&k);
+        idx.dead.remove(&k);
+    }
+    let mut blocked: Option<i64> = None;
+    for it in failed {
+        let k = StateIndex::key_of(it);
+        let f = idx.failures.entry(k.clone()).or_insert(Failure {
+            attempts: 0,
+            updated: it.updated,
+            seq: it.seq,
+        });
+        if f.updated != it.updated {
+            // Пришла новая версия сбойного элемента — считаем попытки заново.
+            f.attempts = 0;
+            f.updated = it.updated;
+            idx.dead.remove(&k);
+        }
+        f.attempts += 1;
+        f.seq = it.seq;
+        if f.attempts >= retry_limit {
+            let error = format!(
+                "не удалось применить за {} попыт(ки) (канал {})",
+                f.attempts, it.channel
+            );
+            warn!("state: {}/{} → dead-letter", it.channel, it.key);
+            idx.dead.insert(
+                k.clone(),
+                DeadItem {
+                    updated: it.updated,
+                    seq: it.seq,
+                    error,
+                    at: now_secs(),
+                },
+            );
+            idx.failures.remove(&k);
+        } else if it.seq > 0 {
+            blocked = Some(blocked.map_or(it.seq, |m: i64| m.min(it.seq)));
+        }
+    }
+    blocked
 }
 
 /// Обновляет `updated` уже известных (синхронизированных) сессий до
@@ -448,25 +644,77 @@ pub async fn sync_state(cfg: &Config, capture: bool) -> Vec<String> {
         }
     }
 
-    // 2. Загрузка чужих изменений.
-    let req = StatePullRequest {
-        machine: cfg.machine.name.clone(),
-        token: super::connect::hub_token(cfg),
-        state_seq: get_seq(),
-    };
-    match tokio::time::timeout(STATE_TIMEOUT, super::connect::send_state_pull(&conn, &req)).await {
-        Ok(Ok(resp)) => {
-            let (msgs, failed_min) = apply(cfg, resp.items);
-            out.extend(msgs);
-            // Не теряем сбойные элементы: если что-то не применилось, не
-            // продвигаем seq за них — на следующем pull повторим.
-            match failed_min {
-                Some(min) => set_seq_force(min - 1),
-                None => set_seq(resp.state_seq),
+    // 2. Загрузка чужих изменений — страницами, чтобы не тянуть весь стор
+    //    (сейчас ~66 МБ opencode-сессий) одним сообщением.
+    let retry_limit = cfg
+        .state
+        .as_ref()
+        .map(|s| s.retry_limit)
+        .unwrap_or_else(crate::config::default_state_retry_limit)
+        .max(1);
+    let mut since = get_seq();
+    for _page in 0..MAX_PAGES {
+        let req = StatePullRequest {
+            machine: cfg.machine.name.clone(),
+            token: super::connect::hub_token(cfg),
+            state_seq: since,
+            max_bytes: PAGE_BYTES,
+        };
+        let resp = match tokio::time::timeout(STATE_TIMEOUT, super::connect::send_state_pull(
+            &conn, &req,
+        ))
+        .await
+        {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => {
+                warn!("state pull failed: {e:#}");
+                break;
+            }
+            Err(_) => {
+                warn!("state pull timed out (hub too old?)");
+                break;
+            }
+        };
+
+        let page_len = resp.items.len();
+        let report = apply(cfg, resp.items);
+        out.extend(report.messages);
+
+        // Учёт неудач: после `retry_limit` попыток элемент уходит в dead-letter
+        // и перестаёт блокировать канал (иначе один сломанный импорт заставлял
+        // перекачивать и переприменять всё состояние каждый цикл — навсегда).
+        let mut idx = StateIndex::load();
+        let blocked = record_failures(&mut idx, &report.applied, &report.failed, retry_limit);
+        if let Err(e) = idx.save() {
+            warn!("can't save state index: {e:#}");
+        }
+
+        match blocked {
+            // Есть сбойные элементы с остатком попыток: держим курсор перед
+            // самым ранним из них и повторим на следующем цикле. Успешные
+            // элементы повторно не применяются (см. `apply`).
+            Some(min_seq) => {
+                set_seq_force(min_seq - 1);
+                break;
+            }
+            None => {
+                // Старый хаб не умеет страницы (next_seq = 0) — он отдал всё,
+                // дальше идти некуда.
+                let next = if resp.next_seq > 0 {
+                    resp.next_seq
+                } else {
+                    resp.state_seq
+                };
+                set_seq(next);
+                since = next;
+                if !resp.has_more || resp.next_seq <= 0 {
+                    break;
+                }
             }
         }
-        Ok(Err(e)) => warn!("state pull failed: {e:#}"),
-        Err(_) => warn!("state pull timed out (hub too old?)"),
+        if page_len == 0 && !resp.has_more {
+            break;
+        }
     }
 
     super::connect::close_conn(&conn);
@@ -608,6 +856,11 @@ struct SessionRow {
     id: String,
     #[serde(default)]
     updated: i64,
+}
+
+/// Публичный доступ к найденному бинарю opencode (для `doctor`).
+pub fn opencode_binary() -> Option<PathBuf> {
+    opencode_bin()
 }
 
 fn opencode_bin() -> Option<PathBuf> {
@@ -762,6 +1015,28 @@ mod tests {
         assert!(content_hash("abc") >= 0);
     }
 
+    fn state_cfg() -> Config {
+        Config {
+            config_version: 1,
+            machine: crate::config::MachineConfig {
+                name: "t".into(),
+                ssh_key: None,
+            },
+            hub: None,
+            hub_connect: None,
+            projects: None,
+            auto_projects: None,
+            remote: None,
+            capture: None,
+            state: Some(crate::config::StateConfig {
+                tmux: true,
+                tmux_restore: false,
+                opencode: None,
+                retry_limit: 3,
+            }),
+        }
+    }
+
     #[test]
     fn collect_without_state_config_is_empty() {
         let cfg = Config {
@@ -779,7 +1054,113 @@ mod tests {
             state: None,
         };
         assert!(collect(&cfg).is_empty());
-        assert!(apply(&cfg, vec![item("tmux", "latest", 1, 3)]).0.is_empty());
+        assert!(apply(&cfg, vec![item("tmux", "latest", 1, 3)])
+            .messages
+            .is_empty());
+    }
+
+    #[test]
+    fn apply_skips_already_applied_items() {
+        // Ретрай страницы состояния не должен повторно писать tmux-снапшот
+        // (и запускать restore): уже применённый элемент пропускается.
+        let dir = std::env::temp_dir().join(format!("dsync-state-skip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DSYNC_STATE_PATH", dir.join("state.json"));
+
+        let cfg = state_cfg();
+        let tmux = item("tmux", "latest", 42, 3);
+        mark_synced(std::slice::from_ref(&tmux));
+
+        let report = apply(&cfg, vec![tmux]);
+        assert!(report.applied.is_empty(), "nothing re-applied");
+        assert_eq!(report.skipped, 1);
+        assert!(report.failed.is_empty());
+
+        std::env::remove_var("DSYNC_STATE_PATH");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn record_failures_moves_item_to_dead_letter_after_limit() {
+        let mut idx = StateIndex::default();
+        let bad = item("opencode", "ses_x", 100, 1);
+        assert_eq!(
+            record_failures(&mut idx, &[], std::slice::from_ref(&bad), 3),
+            Some(100),
+            "first failure keeps the cursor before the item"
+        );
+        assert_eq!(
+            record_failures(&mut idx, &[], std::slice::from_ref(&bad), 3),
+            Some(100)
+        );
+        assert_eq!(
+            record_failures(&mut idx, &[], std::slice::from_ref(&bad), 3),
+            None,
+            "after the limit the channel is no longer blocked"
+        );
+        assert_eq!(idx.dead.len(), 1, "dead-letter recorded");
+        assert!(idx.failures.is_empty(), "counter cleared after dead-letter");
+    }
+
+    #[test]
+    fn record_failures_returns_earliest_pending_seq() {
+        let mut idx = StateIndex::default();
+        let a = StateItem {
+            seq: 30,
+            ..item("opencode", "ses_a", 1, 1)
+        };
+        let b = StateItem {
+            seq: 10,
+            ..item("opencode", "ses_b", 1, 1)
+        };
+        let blocked = record_failures(&mut idx, &[], &[a, b], 5);
+        assert_eq!(blocked, Some(10), "cursor must stop before the earliest");
+        assert_eq!(idx.failures.len(), 2);
+    }
+
+    #[test]
+    fn new_version_resets_failure_counter() {
+        let mut idx = StateIndex::default();
+        let old = item("opencode", "ses_x", 100, 1);
+        for _ in 0..2 {
+            record_failures(&mut idx, &[], std::slice::from_ref(&old), 3);
+        }
+        assert_eq!(idx.failures["opencode:ses_x"].attempts, 2);
+        let new = item("opencode", "ses_x", 200, 1);
+        record_failures(&mut idx, &[], std::slice::from_ref(&new), 3);
+        assert_eq!(
+            idx.failures["opencode:ses_x"].attempts, 1,
+            "new updated — fresh budget"
+        );
+    }
+
+    #[test]
+    fn retry_dead_rolls_seq_back_and_clears() {
+        let dir = std::env::temp_dir().join(format!("dsync-state-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DSYNC_STATE_PATH", dir.join("state.json"));
+
+        let mut idx = StateIndex::default();
+        let bad = StateItem {
+            seq: 77,
+            ..item("opencode", "ses_x", 100, 1)
+        };
+        for _ in 0..3 {
+            record_failures(&mut idx, &[], std::slice::from_ref(&bad), 3);
+        }
+        idx.seq = 120;
+        idx.save().unwrap();
+        assert_eq!(health().dead.len(), 1);
+
+        assert_eq!(retry_dead(None), 1);
+        let h = health();
+        assert!(h.dead.is_empty());
+        assert_eq!(h.seq, 76, "seq rolled back before the failed item");
+
+        std::env::remove_var("DSYNC_STATE_PATH");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

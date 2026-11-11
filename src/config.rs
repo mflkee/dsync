@@ -43,7 +43,7 @@ pub struct Config {
 /// # каталоги проектов, чьи сессии синхронизируем (по умолчанию — все [projects.*])
 /// projects = ["~/projects/mushroomwars"]
 /// ```
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StateConfig {
     /// Синхронизировать снапшот tmux-resurrect.
     #[serde(default)]
@@ -65,6 +65,17 @@ pub struct StateConfig {
 
 pub(crate) fn default_state_retry_limit() -> u32 {
     3
+}
+
+impl Default for StateConfig {
+    fn default() -> Self {
+        Self {
+            tmux: false,
+            tmux_restore: false,
+            opencode: None,
+            retry_limit: default_state_retry_limit(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -445,6 +456,9 @@ mod tests {
         assert_eq!(hub.max_concurrency, 32);
         assert_eq!(hub.retention_days, 30);
         assert_eq!(hub.pull_retries, 2);
+        assert!(hub.pull_only_on_change, "change-driven pulls by default");
+        assert_eq!(hub.offline_skip_after_secs, 45 * 60);
+        assert_eq!(hub.state_pull_page_bytes, 6 * 1024 * 1024);
         assert!(hub.tokens.is_empty(), "no tokens configured");
     }
 

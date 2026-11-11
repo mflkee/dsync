@@ -292,23 +292,59 @@ fn fmt_civil(ts: i64) -> String {
 }
 
 pub async fn status(cfg: Config) -> Result<Vec<String>> {
-    let conn = connect_with_retry(&cfg).await?;
-    let req = StatusRequest {
-        machine: cfg.machine.name.clone(),
-        token: hub_token(&cfg),
-    };
-    let resp = send_status(&conn, &req).await?;
-    close_conn(&conn);
+    let resp = status_response(&cfg).await?;
 
-    let mut out = vec!["Sync Status:".to_string()];
-    for (name, status) in &resp.machines {
+    let mut out = vec![format!(
+        "Sync Status: hub {}",
+        resp.hub_version
+            .as_deref()
+            .unwrap_or("unknown (old hub — обновите dsync-hub)")
+    )];
+    let mut names: Vec<&String> = resp.machines.keys().collect();
+    names.sort();
+    for name in names {
+        let status = &resp.machines[name];
         out.extend(machine_status_lines(name, status));
         if status.pulls.is_empty() && resp.machines.len() > 1 {
             out.push("      (no pulls yet)".to_string());
         }
     }
 
+    // Локальное состояние: сколько применено, что сбойно/в dead-letter.
+    let health = crate::client::state::health();
+    out.push(format!(
+        "  local state: seq={}, applied={}, failing={}, dead-letter={}",
+        health.seq,
+        health.applied,
+        health.failures.len(),
+        health.dead.len()
+    ));
+    for (key, dead) in &health.dead {
+        out.push(format!(
+            "      dead {key}: {} (since {})",
+            dead.error,
+            fmt_civil(dead.at)
+        ));
+    }
+
     Ok(out)
+}
+
+/// JSON-вывод статуса для мониторинга/скриптов (`dsync status --json`).
+pub async fn status_json(cfg: Config) -> Result<String> {
+    let resp = status_response(&cfg).await?;
+    Ok(serde_json::to_string_pretty(&resp)?)
+}
+
+async fn status_response(cfg: &Config) -> Result<StatusResponse> {
+    let conn = connect_with_retry(cfg).await?;
+    let req = StatusRequest {
+        machine: cfg.machine.name.clone(),
+        token: hub_token(cfg),
+    };
+    let resp = send_status(&conn, &req).await?;
+    close_conn(&conn);
+    Ok(resp)
 }
 
 /// Строки статуса одной машины, включая исходы последних SSH-пуллов хаба

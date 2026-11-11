@@ -41,13 +41,30 @@ pub enum Commands {
         action: TrustAction,
     },
     /// Show sync status
-    Status,
+    Status {
+        /// Machine-readable JSON (for monitoring/scripts)
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect/repair local non-git state (tmux/opencode) sync
+    State {
+        #[command(subcommand)]
+        action: StateAction,
+    },
     /// Run diagnostics
     Doctor,
     /// Start Telegram bot
     Bot,
     /// Start interactive TUI
     Tui,
+}
+
+#[derive(Subcommand)]
+pub enum StateAction {
+    /// Show local state index (seq, failing items, dead letters)
+    List,
+    /// Retry dead-letter items (all, or a single `channel:key`)
+    Retry { key: Option<String> },
 }
 
 #[derive(Subcommand)]

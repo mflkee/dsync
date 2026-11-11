@@ -69,7 +69,10 @@ pub async fn run_server(cfg: Config) -> Result<()> {
     cfg.hub.as_mut().unwrap().tokens = hub_tokens;
     let hub_cfg = cfg.hub.as_ref().unwrap();
 
-    info!("starting dsync hub on {bind}");
+    info!(
+        "starting dsync hub {} on {bind}",
+        crate::protocol::version_string()
+    );
 
     let data_dir = cfg.hub_data_dir();
 
@@ -77,9 +80,34 @@ pub async fn run_server(cfg: Config) -> Result<()> {
     let server_config = make_server_config(cert, key)?;
     let endpoint = Endpoint::server(server_config, bind)?;
 
-    let state = Arc::new(HubState::new(Some(data_dir), hub_cfg.retention_days));
+    let state = Arc::new(HubState::new(Some(data_dir.clone()), hub_cfg.retention_days));
     if state.prune_stale().await {
         info!("pruned stale machines at startup");
+    }
+    // Гигиена: осиротевшие tmp-файлы атомарных записей (`tmp` + `rename`)
+    // остаются, если процесс убили между create и rename. Наблюдались сотни
+    // таких файлов в каталоге хаба — чистим всё старше часа.
+    let removed_tmp =
+        crate::hub::state::cleanup_stale_temp_files(&data_dir, Duration::from_secs(3600));
+    if removed_tmp > 0 {
+        info!("removed {removed_tmp} stale tmp file(s) from {}", data_dir.display());
+    }
+    // Мусор от каналов, которых больше нет в коде/конфиге (например `zellij`,
+    // поддержка которого удалена): применяться всё равно некому.
+    if let Some(st) = cfg.state.as_ref() {
+        let mut keep = std::collections::HashSet::new();
+        if st.tmux {
+            keep.insert("tmux".to_string());
+        }
+        if st.opencode.is_some() {
+            keep.insert("opencode".to_string());
+        }
+        if !keep.is_empty() {
+            let pruned = state.prune_state_channels(&keep).await;
+            if pruned > 0 {
+                warn!("pruned {pruned} state item(s) from unknown channels");
+            }
+        }
     }
 
     let max_message_size = hub_cfg.max_message_size;
@@ -185,7 +213,7 @@ async fn handle_connection(
                                     "push" => handle_push(val, &state, &cfg).await,
                                     "pull" => handle_pull(val, &state).await,
                                     "state_push" => handle_state_push(val, &state).await,
-                                    "state_pull" => handle_state_pull(val, &state).await,
+                                    "state_pull" => handle_state_pull(val, &state, &cfg).await,
                                     "state_status" => handle_state_status(val, &state).await,
                                     _ => handle_status(&state).await,
                                 }
@@ -305,6 +333,19 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
         .unwrap_or_else(crate::config::default_pull_timeout_secs);
     let store_path = crate::ssh::trust::SshHostTrustStore::path(&cfg.hub_data_dir());
     let ssh_key = cfg.machine.ssh_key_path();
+    // Экономика пуллов: не дёргать машины, которые давно не выходили на связь,
+    // и не пулить проект, чей commit уже развёрнут на этой машине.
+    let offline_skip = cfg
+        .hub
+        .as_ref()
+        .map(|h| h.offline_skip_after_secs)
+        .unwrap_or_else(crate::config::default_offline_skip_after_secs);
+    let only_on_change = cfg
+        .hub
+        .as_ref()
+        .map(|h| h.pull_only_on_change)
+        .unwrap_or_else(crate::config::default_pull_only_on_change);
+    let now = unix_now();
 
     for project in &req.projects {
         let static_cfg = projects_cfg.and_then(|p| p.get(&project.name));
@@ -370,10 +411,41 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                 continue;
             };
 
+            // Офлайн-машина: SSH-пулл всё равно упадёт, но с retry+backoff это
+            // десятки секунд и запись «failed» каждый цикл. Пропускаем целиком.
+            if offline_skip > 0 {
+                let last = state.last_push(&machine_name).await;
+                if let Some(last) = last {
+                    if last > 0 && now.saturating_sub(last) > offline_skip as i64 {
+                        tracing::debug!(
+                            "skipping pull {} → {machine_name}: no push for {}s",
+                            project.name,
+                            now - last
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            // Ничего не изменилось с прошлого успешного пулла — не гоняем
+            // git pull + post_pull (chezmoi apply / cargo build) впустую.
+            if only_on_change && !project.commit_hash.is_empty() {
+                let deployed = state.deployed_commit(&machine_name, &project.name).await;
+                if deployed.as_deref() == Some(project.commit_hash.as_str()) {
+                    tracing::debug!(
+                        "skipping pull {} → {machine_name}: already at {}",
+                        project.name,
+                        &project.commit_hash[..project.commit_hash.len().min(8)]
+                    );
+                    continue;
+                }
+            }
+
             let host = remote.host.clone();
             let port = remote.port;
             let user = remote.user.clone();
             let project_name = project.name.clone();
+            let commit = project.commit_hash.clone();
             let machine_name = machine_name.clone();
             let cmd = cmd.clone();
             let state = state.clone();
@@ -411,6 +483,9 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
                     .await;
                 match &outcome {
                     PullOutcome { ok: true, .. } => {
+                        state
+                            .record_deployed(&machine_name, &project_name, &commit)
+                            .await;
                         info!("SSH pull {machine_name}/{project_name}: OK")
                     }
                     PullOutcome { ok: false, .. } => error!(
@@ -464,6 +539,10 @@ fn build_pull_command(
 /// Retry-обёртка для SSH-пулла: первая попытка + `pull_retries` повторных,
 /// backoff `5s·2^n` с потолком 60 с. Возвращает итоговый `PullOutcome`
 /// (см. `hub-pull-orchestration`); тестируется с pause-time.
+///
+/// Ошибки уровня сети/аутентификации (`No route to host`, `Connection
+/// refused`, `Permission denied`, …) повторять бессмысленно — хост оживёт не
+/// от третьей попытки за 15 секунд.
 async fn retry_pull<F, Fut>(pull_retries: u32, mut attempt: F) -> PullOutcome
 where
     F: FnMut() -> Fut,
@@ -476,7 +555,7 @@ where
         match attempt().await {
             Ok(()) => return PullOutcome::success(attempts),
             Err(err) => {
-                if attempts > pull_retries {
+                if attempts > pull_retries || !is_transient_error(&err) {
                     return PullOutcome::failure(err, attempts);
                 }
                 let wait = backoff.min(Duration::from_secs(60));
@@ -487,6 +566,19 @@ where
             }
         }
     }
+}
+
+/// Стоит ли повторять SSH-пулл после такой ошибки.
+fn is_transient_error(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    !e.contains("no route to host")
+        && !e.contains("connection refused")
+        && !e.contains("network is unreachable")
+        && !e.contains("nosuchhost")
+        && !e.contains("name or service not known")
+        && !e.contains("permission denied")
+        && !e.contains("host key mismatch")
+        && !e.contains("authentication failed")
 }
 
 async fn handle_pull(val: serde_json::Value, state: &HubState) -> serde_json::Value {
@@ -519,13 +611,40 @@ async fn handle_state_push(val: serde_json::Value, state: &Arc<HubState>) -> ser
     }
 }
 
-async fn handle_state_pull(val: serde_json::Value, state: &HubState) -> serde_json::Value {
+async fn handle_state_pull(
+    val: serde_json::Value,
+    state: &HubState,
+    cfg: &Config,
+) -> serde_json::Value {
     if let Ok(req) = serde_json::from_value::<StatePullRequest>(val) {
-        let (items, seq) = state.state_since(req.state_seq, &req.machine).await;
-        info!("state pull from {}: {} item(s)", req.machine, items.len());
+        // Старый клиент не шлёт max_bytes → 0 (без лимита): иначе он получил бы
+        // одну страницу и, проигнорировав курсор, потерял остальное.
+        // Новому клиенту дополнительно ограничиваем страницу конфигом хаба.
+        let hub_page = cfg
+            .hub
+            .as_ref()
+            .map(|h| h.state_pull_page_bytes)
+            .unwrap_or(0);
+        let max_bytes = if req.max_bytes == 0 {
+            0
+        } else if hub_page == 0 {
+            req.max_bytes
+        } else {
+            req.max_bytes.min(hub_page)
+        };
+        let (items, seq, next_seq, has_more) =
+            state.state_since_page(req.state_seq, &req.machine, max_bytes).await;
+        info!(
+            "state pull from {}: {} item(s){}",
+            req.machine,
+            items.len(),
+            if has_more { ", more pages" } else { "" }
+        );
         serde_json::to_value(StatePullResponse {
             items,
             state_seq: seq,
+            next_seq,
+            has_more,
         })
         .unwrap_or_default()
     } else {
@@ -549,7 +668,10 @@ async fn handle_state_status(val: serde_json::Value, state: &HubState) -> serde_
 async fn handle_status(state: &HubState) -> serde_json::Value {
     state.prune_stale().await;
     match state.status().await {
-        Ok(resp) => serde_json::to_value(resp).unwrap_or_default(),
+        Ok(mut resp) => {
+            resp.hub_version = Some(crate::protocol::version_string());
+            serde_json::to_value(resp).unwrap_or_default()
+        }
         Err(_) => serde_json::Value::Null,
     }
 }

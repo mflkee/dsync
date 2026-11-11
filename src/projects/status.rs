@@ -8,25 +8,59 @@ use crate::config::ProjectConfig;
 use crate::protocol::ProjectState;
 
 pub fn scan(projects: &HashMap<String, ProjectConfig>) -> Result<Vec<ProjectState>> {
-    let mut states = Vec::new();
-    for (name, config) in projects {
-        let path = expand_user_path(&config.path);
-        let state = scan_one(name, &path);
-        states.push(state);
-    }
-    Ok(states)
+    let entries: Vec<(String, std::path::PathBuf)> = projects
+        .iter()
+        .map(|(name, config)| (name.clone(), expand_user_path(&config.path)))
+        .collect();
+    Ok(scan_parallel(entries))
 }
 
-/// Обходит `root` на глубину 1 и собирает состояния git-репозиториев
-/// (каталогов с `.git`), которых нет в `static_names` (явные `[projects.*]`)
-/// и в `excluded` (скретч/учёба из `[auto_projects] exclude`).
-/// Используется авто-обнаружением новых проектов флота (`[auto_projects]`).
-pub fn discover(
+/// Сканирует несколько репозиториев параллельно: на каждый репозиторий
+/// приходится ~5 запусков `git`, и 29 авто-проектов последовательно занимали
+/// 8–11 секунд на каждый `dsync push` (раз в 15 минут на каждой машине).
+/// Порядок результата — по имени, чтобы вывод был детерминированным.
+pub fn scan_parallel(entries: Vec<(String, std::path::PathBuf)>) -> Vec<ProjectState> {
+    use std::sync::Mutex;
+    let n = entries.len();
+    if n <= 1 {
+        let mut v: Vec<ProjectState> = entries
+            .iter()
+            .map(|(name, path)| scan_one(name, path))
+            .collect();
+        v.sort_by(|a, b| a.name.cmp(&b.name));
+        return v;
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4)
+        .clamp(2, 8);
+    let out: Mutex<Vec<ProjectState>> = Mutex::new(Vec::with_capacity(n));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..workers.min(n) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some((name, path)) = entries.get(i) else {
+                    break;
+                };
+                let st = scan_one(name, path);
+                out.lock().unwrap().push(st);
+            });
+        }
+    });
+    let mut v = out.into_inner().unwrap();
+    v.sort_by(|a, b| a.name.cmp(&b.name));
+    v
+}
+
+/// Каталоги git-репозиториев для авто-анонса (глубина 1 под `root`), которых
+/// нет в `static_names` и в `excluded`.
+pub fn discover_entries(
     root: &Path,
     static_names: &std::collections::HashSet<String>,
     excluded: &std::collections::HashSet<String>,
-) -> Result<Vec<ProjectState>> {
-    let mut states = Vec::new();
+) -> Result<Vec<(String, std::path::PathBuf)>> {
+    let mut out = Vec::new();
     for entry in std::fs::read_dir(root)? {
         let dir = entry?.path();
         if !dir.is_dir() || !dir.join(".git").exists() {
@@ -38,9 +72,25 @@ pub fn discover(
         if static_names.contains(name) || excluded.contains(name) {
             continue;
         }
-        states.push(scan_one(name, &dir));
+        out.push((name.to_string(), dir));
     }
-    Ok(states)
+    Ok(out)
+}
+
+/// Обходит `root` на глубину 1 и собирает состояния git-репозиториев
+/// (каталогов с `.git`), которых нет в `static_names` (явные `[projects.*]`)
+/// и в `excluded` (скретч/учёба из `[auto_projects] exclude`).
+/// Используется авто-обнаружением новых проектов флота (`[auto_projects]`).
+pub fn discover(
+    root: &Path,
+    static_names: &std::collections::HashSet<String>,
+    excluded: &std::collections::HashSet<String>,
+) -> Result<Vec<ProjectState>> {
+    Ok(scan_parallel(discover_entries(
+        root,
+        static_names,
+        excluded,
+    )?))
 }
 
 pub fn scan_one(name: &str, path: &Path) -> ProjectState {

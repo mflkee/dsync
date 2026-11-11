@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::config::Config;
+use crate::protocol::{StateStatusResponse, StatusResponse};
 
 enum Status {
     Ok,
@@ -114,9 +115,107 @@ pub async fn run(cfg: Config) -> Result<()> {
     }
 
     println!("\nchecking hub connectivity...");
-    match try_ping_hub(&cfg).await {
-        Ok(_) => {}
+    match hub_snapshot(&cfg).await {
+        Ok((resp, state_resp)) => {
+            let hub_v = resp
+                .hub_version
+                .as_deref()
+                .unwrap_or("unknown (old hub — обновите dsync-hub)");
+            let local_v = crate::protocol::version_string();
+            let mut names: Vec<&String> = resp.machines.keys().collect();
+            names.sort();
+            for name in names {
+                println!("    {name}: online={}", resp.machines[name].online);
+            }
+            println!("\nhub version:");
+            if resp.hub_version.as_deref() == Some(local_v.as_str()) {
+                println!("  ✓ hub {hub_v} matches this client");
+            } else {
+                println!("  ✗ hub {hub_v} ≠ client {local_v}");
+                println!("      обновите хаб: git pull && cargo build --release && systemctl --user restart dsync-hub");
+            }
+            if let Some(state) = state_resp {
+                println!("\nstate store (hub):");
+                if state.channels.is_empty() {
+                    println!("  ∼ пусто (каналы ещё не синхронизировались)");
+                }
+                for ch in &state.channels {
+                    let err = ch
+                        .error
+                        .as_deref()
+                        .map(|e| format!(" — last error: {e}"))
+                        .unwrap_or_default();
+                    println!(
+                        "  ✓ {}: {} item(s), {}, last {}{err}",
+                        ch.channel,
+                        ch.item_count,
+                        human_bytes(ch.bytes),
+                        ch.last_origin
+                    );
+                }
+            }
+        }
         Err(e) => println!("  hub: {e}"),
+    }
+
+    // Локальный state-индекс: сбойные и dead-letter элементы.
+    let health = crate::client::state::health();
+    if cfg.state.is_some() {
+        println!("\nstate (local):");
+        println!(
+            "  seq={}, applied={}, failing={}, dead-letter={}",
+            health.seq,
+            health.applied,
+            health.failures.len(),
+            health.dead.len()
+        );
+        for (key, d) in &health.dead {
+            println!("  ✗ {key}: {}", d.error);
+        }
+        for (key, f) in &health.failures {
+            println!("  ∼ {key}: {} неудачн. попыт(ки), будет повторено", f.attempts);
+        }
+    }
+
+    // Мусор атомарных записей хаба (`tmp` без rename).
+    let data_dir = cfg.hub_data_dir();
+    if data_dir.is_dir() {
+        let orphans = count_tmp_files(&data_dir);
+        if orphans > 0 {
+            println!(
+                "\n  ✗ {} осиротевш. tmp-файл(ов) в {} — удалит сам хаб при старте (старше 1 ч)",
+                orphans,
+                data_dir.display()
+            );
+        }
+    }
+
+    // opencode: без `session import` (V1) канал состояния не может применяться.
+    if cfg.state.as_ref().and_then(|s| s.opencode.as_ref()).is_some() {
+        check("opencode state", || {
+            let Some(bin) = crate::client::state::opencode_binary() else {
+                return Status::Warn(
+                    "opencode не найден — сессии не будут ни экспортироваться, ни импортироваться".into(),
+                );
+            };
+            match std::process::Command::new(&bin)
+                .args(["session", "import", "--help"])
+                .output()
+            {
+                Ok(o) => {
+                    let text = String::from_utf8_lossy(&o.stdout);
+                    if text.contains("import") {
+                        Status::Ok
+                    } else {
+                        Status::Warn(format!(
+                            "{} не поддерживает `session import` (opencode V1?) — сессии не применяются; поставьте V2 в ~/.opencode/bin/opencode",
+                            bin.display()
+                        ))
+                    }
+                }
+                Err(e) => Status::Warn(format!("не удалось запустить {}: {e}", bin.display())),
+            }
+        });
     }
 
     // SSH host-key trust: TOFU-якорь хаба, по одной машине флота.
@@ -169,15 +268,46 @@ fn check(label: &str, f: impl FnOnce() -> Status) {
     println!("{sym} {label}{suffix}");
 }
 
-async fn try_ping_hub(cfg: &Config) -> Result<()> {
+async fn hub_snapshot(cfg: &Config) -> Result<(StatusResponse, Option<StateStatusResponse>)> {
     let conn = crate::client::connect::connect_with_retry(cfg).await?;
     let req = crate::protocol::StatusRequest {
         machine: cfg.machine.name.clone(),
         token: crate::client::connect::hub_token(cfg),
     };
     let resp = crate::client::connect::send_status(&conn, &req).await?;
-    for (name, s) in &resp.machines {
-        println!("    {name}: online={}", s.online);
+    // Старый хаб не знает `state_status` — не ошибка, просто пропускаем.
+    let state = crate::client::connect::send_state_status(
+        &conn,
+        &crate::protocol::StateStatusRequest {
+            machine: cfg.machine.name.clone(),
+            token: crate::client::connect::hub_token(cfg),
+        },
+    )
+    .await
+    .ok();
+    crate::client::connect::close_conn(&conn);
+    Ok((resp, state))
+}
+
+fn count_tmp_files(dir: &std::path::Path) -> usize {
+    let mut n = 0;
+    for d in [dir.to_path_buf(), dir.join("state")] {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        n += entries
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
     }
-    Ok(())
+    n
+}
+
+fn human_bytes(b: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    if b as f64 >= MB {
+        format!("{:.1} MB", b as f64 / MB)
+    } else {
+        format!("{:.1} KB", b as f64 / 1024.0)
+    }
 }

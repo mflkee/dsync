@@ -7,11 +7,6 @@ use crate::protocol::PushRequest;
 use super::connect::{close_conn, connect_with_retry, send_push};
 
 pub async fn push(cfg: Config, machine: Option<String>) -> Result<Vec<String>> {
-    info!("starting push from {}", cfg.machine.name);
-    if let Some(m) = &machine {
-        info!("targeting SSH pull to machine {m}");
-    }
-
     // Захват live-правок dotfiles в репы до коммита: приходит сюда любое
     // изменение живых файлов (~/.zshrc, ~/.config/...), откуда бы оно ни было
     // сделано (nvim, bash, sed, скрипты) — см. capture::capture_changed.
@@ -104,16 +99,13 @@ async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectSt
         if root.is_dir() {
             let excluded: std::collections::HashSet<String> =
                 ap.exclude.iter().flatten().cloned().collect();
-            match crate::projects::status::discover(&root, &static_names, &excluded) {
-                Ok(found) => {
-                    if !found.is_empty() {
-                        info!(
-                            "auto-discovered {} new project(s) in {}",
-                            found.len(),
-                            root.display()
-                        );
-                        states.extend(found);
-                    }
+            match crate::projects::status::discover_entries(&root, &static_names, &excluded) {
+                Ok(entries) => {
+                    let names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
+                    log_new_auto_projects(&names);
+                    // Скан в несколько потоков: 29 репо × ~5 git-вызовов
+                    // последовательно — это 8–11 с на каждый push.
+                    states.extend(crate::projects::status::scan_parallel(entries));
                 }
                 Err(e) => tracing::warn!("auto_projects scan of {} failed: {e:#}", root.display()),
             }
@@ -121,6 +113,54 @@ async fn collect_projects(cfg: &Config) -> Result<Vec<crate::protocol::ProjectSt
     }
 
     Ok(states)
+}
+
+/// Путь к списку уже анонсированных авто-проектов (только для честного лога).
+fn auto_projects_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("DSYNC_AUTO_PROJECTS_PATH") {
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    dirs::data_dir()
+        .unwrap_or_default()
+        .join("dsync/auto-projects.json")
+}
+
+/// Логирует только реально новые проекты. Раньше в лог каждый цикл шло
+/// `auto-discovered 29 new project(s)` — это было ложью (29 = все найденные)
+/// и мешало заметить по-настоящему новое.
+fn log_new_auto_projects(names: &[String]) {
+    let path = auto_projects_path();
+    let mut known: std::collections::BTreeSet<String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let fresh: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !known.contains(*n))
+        .collect();
+    if fresh.is_empty() {
+        return;
+    }
+    info!(
+        "auto-discovered {} new project(s): {}",
+        fresh.len(),
+        fresh.join(", ")
+    );
+    known.extend(names.iter().cloned());
+    // Забываем исчезнувшие каталоги, чтобы файл не рос бесконечно.
+    known.retain(|n| names.iter().any(|x| x == n));
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&known).unwrap_or_default(),
+    ) {
+        tracing::warn!("can't save auto-projects list: {e}");
+    }
 }
 
 #[cfg(test)]

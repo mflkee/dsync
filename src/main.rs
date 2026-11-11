@@ -72,8 +72,26 @@ async fn main() -> Result<()> {
             print_lines(client::pull(cfg, machine).await?);
             Ok(())
         }
-        cli::Commands::Status => {
-            print_lines(client::status(cfg).await?);
+        cli::Commands::Status { json } => {
+            if json {
+                println!("{}", client::status_json(cfg).await?);
+            } else {
+                print_lines(client::status(cfg).await?);
+            }
+            Ok(())
+        }
+        cli::Commands::State { action } => {
+            match action {
+                cli::StateAction::List => print_lines(client::state::describe()),
+                cli::StateAction::Retry { key } => {
+                    let n = client::state::retry_dead(key.as_deref());
+                    if n == 0 {
+                        println!("no dead-letter items to retry");
+                    } else {
+                        println!("{n} item(s) queued for retry — run `dsync pull` or wait for the next cycle");
+                    }
+                }
+            }
             Ok(())
         }
         cli::Commands::Doctor => doctor::run(cfg).await,

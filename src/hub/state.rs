@@ -52,6 +52,40 @@ fn expand(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
+/// Ключ карты «развёрнутых» коммитов.
+fn deployed_key(machine: &str, project: &str) -> String {
+    format!("{machine}/{project}")
+}
+
+/// Удаляет осиротевшие `*.tmp-*` файлы старше `max_age` в каталоге хаба и в
+/// `state/`. Атомарная запись (`tmp + rename`) оставляет мусор, если процесс
+/// убили между create и rename; без уборки накапливаются сотни файлов.
+pub fn cleanup_stale_temp_files(dir: &Path, max_age: std::time::Duration) -> usize {
+    let mut removed = 0usize;
+    for d in [dir.to_path_buf(), dir.join("state")] {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.contains(".tmp-") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|m| m.elapsed().ok())
+                .map(|age| age >= max_age)
+                .unwrap_or(false);
+            if stale && std::fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 const ONLINE_TIMEOUT_SECS: i64 = 35 * 60;
 
 fn unix_now() -> i64 {
@@ -86,6 +120,10 @@ pub struct HubState {
     state_dir: Option<PathBuf>,
     /// Последняя ошибка синка по каналу (отдаётся в `state_status`).
     state_errors: RwLock<HashMap<String, String>>,
+    /// Последний успешно развёрнутый commit по ключу `machine/project`.
+    /// Нужен, чтобы не гонять SSH-пулл (и `post_pull`) на каждый push, когда
+    /// на машине-источнике ничего не изменилось.
+    deployed: RwLock<HashMap<String, String>>,
 }
 
 impl HubState {
@@ -100,11 +138,16 @@ impl HubState {
             .as_ref()
             .and_then(|d| Self::load_state_index(d).ok())
             .unwrap_or_default();
+        let deployed = data_dir
+            .as_ref()
+            .and_then(|d| Self::load_deployed(d).ok())
+            .unwrap_or_default();
 
         tracing::info!(
-            "hub state: {} machines, {} state items loaded from disk",
+            "hub state: {} machines, {} state items, {} deployed commits loaded from disk",
             machines.len(),
-            state_index.items.len()
+            state_index.items.len(),
+            deployed.len()
         );
 
         Self {
@@ -115,6 +158,7 @@ impl HubState {
             state_index: RwLock::new(state_index),
             state_dir,
             state_errors: RwLock::new(HashMap::new()),
+            deployed: RwLock::new(deployed),
         }
     }
 
@@ -176,6 +220,11 @@ impl HubState {
     pub async fn all_machines(&self) -> HashMap<String, MachineState> {
         let machines = self.machines.read().await;
         machines.clone()
+    }
+
+    /// Время последнего push машины (секунды эпохи); None — машина неизвестна.
+    pub async fn last_push(&self, machine: &str) -> Option<i64> {
+        self.machines.read().await.get(machine).map(|m| m.last_push)
     }
 
     /// Склеивает присланные элементы состояния (last-write-wins по `updated`),
@@ -241,28 +290,67 @@ impl HubState {
     }
 
     /// Элементы состояния с `seq > since`, записанные не этой машиной.
-    /// Возвращает (элементы, текущий seq хаба).
+    /// Возвращает (элементы, текущий seq хаба). Без ограничения размера —
+    /// используется тестами и старым протоколом.
     pub async fn state_since(&self, since: i64, exclude_origin: &str) -> (Vec<StateItem>, i64) {
+        let (items, cur, _, _) = self.state_since_page(since, exclude_origin, 0).await;
+        (items, cur)
+    }
+
+    /// Страница состояния: не больше `max_bytes` payload'ов (0 = без лимита).
+    ///
+    /// Возвращает `(элементы, текущий seq хаба, курсор следующей страницы,
+    /// остались ли элементы)`. Элементы, чей `origin` — сама запрашивающая
+    /// машина, не отправляются, но курсор через них продвигается (иначе клиент
+    /// навсегда застрял бы на собственных записях). Если один элемент больше
+    /// лимита, он отдаётся отдельной страницей — прогресс важнее размера.
+    pub async fn state_since_page(
+        &self,
+        since: i64,
+        exclude_origin: &str,
+        max_bytes: u64,
+    ) -> (Vec<StateItem>, i64, i64, bool) {
         let (selected, cur): (Vec<StoredStateItem>, i64) = {
             let idx = self.state_index.read().await;
-            (
-                idx.items
-                    .iter()
-                    .filter(|i| i.seq > since && i.origin != exclude_origin)
-                    .cloned()
-                    .collect(),
-                idx.seq,
-            )
+            let mut selected: Vec<StoredStateItem> = idx
+                .items
+                .iter()
+                .filter(|i| i.seq > since)
+                .cloned()
+                .collect();
+            // Индекс не гарантирует порядок (retain + push), а курсор страницы
+            // обязан быть монотонным — иначе часть элементов потеряется.
+            selected.sort_by_key(|i| i.seq);
+            (selected, idx.seq)
         };
         let Some(state_dir) = self.state_dir.clone() else {
-            return (Vec::new(), cur);
+            return (Vec::new(), cur, cur, false);
         };
-        let mut out = Vec::with_capacity(selected.len());
+        let mut out = Vec::with_capacity(selected.len().min(64));
+        let mut used: u64 = 0;
+        let mut cursor = since;
+        let mut has_more = false;
         for it in selected {
+            if it.origin == exclude_origin {
+                cursor = it.seq;
+                continue;
+            }
             let path = state_dir.join(&it.file);
+            let size = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
+            if max_bytes > 0 && !out.is_empty() && used + size > max_bytes {
+                has_more = true;
+                break;
+            }
             let Ok(data) = tokio::fs::read_to_string(&path).await else {
+                // Payload пропал (ручная чистка) — не блокируем курсор.
+                cursor = it.seq;
                 continue;
             };
+            used += size.max(data.len() as u64);
+            cursor = it.seq;
             out.push(StateItem {
                 channel: it.channel,
                 key: it.key,
@@ -273,7 +361,62 @@ impl HubState {
                 data,
             });
         }
-        (out, cur)
+        (out, cur, cursor, has_more)
+    }
+
+    /// Удаляет элементы каналов, которых нет в `keep` (мусор вроде `zellij`,
+    /// поддержка которого убрана из кода). Возвращает число удалённых элементов.
+    pub async fn prune_state_channels(&self, keep: &std::collections::HashSet<String>) -> usize {
+        let Some(state_dir) = self.state_dir.clone() else {
+            return 0;
+        };
+        let dropped: Vec<StoredStateItem> = {
+            let mut idx = self.state_index.write().await;
+            let dropped: Vec<StoredStateItem> = idx
+                .items
+                .iter()
+                .filter(|i| !keep.contains(&i.channel))
+                .cloned()
+                .collect();
+            if dropped.is_empty() {
+                return 0;
+            }
+            idx.items.retain(|i| keep.contains(&i.channel));
+            dropped
+        };
+        let mut dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for it in &dropped {
+            let _ = tokio::fs::remove_file(state_dir.join(&it.file)).await;
+            dirs.insert(sanitize_key(&it.channel));
+        }
+        for d in dirs {
+            // Каталог пуст только если в канале больше ничего не осталось.
+            let _ = tokio::fs::remove_dir(state_dir.join(d)).await;
+        }
+        self.save_state_index().await;
+        dropped.len()
+    }
+
+    /// Последний успешно развёрнутый commit по (машина, проект).
+    pub async fn deployed_commit(&self, machine: &str, project: &str) -> Option<String> {
+        let map = self.deployed.read().await;
+        map.get(&deployed_key(machine, project)).cloned()
+    }
+
+    /// Запоминает commit, развёрнутый на машине (после успешного пулла).
+    pub async fn record_deployed(&self, machine: &str, project: &str, commit: &str) {
+        if commit.is_empty() {
+            return;
+        }
+        {
+            let mut map = self.deployed.write().await;
+            let key = deployed_key(machine, project);
+            if map.get(&key).map(String::as_str) == Some(commit) {
+                return;
+            }
+            map.insert(key, commit.to_string());
+        }
+        self.save_deployed().await;
     }
 
     /// Фиксирует последнюю ошибку синка по каналу (для вкладки State).
@@ -293,6 +436,7 @@ impl HubState {
         }
         let idx = self.state_index.read().await;
         let errors = self.state_errors.read().await;
+        let state_dir = self.state_dir.clone().unwrap();
         let mut by_channel: std::collections::BTreeMap<String, Vec<&StoredStateItem>> =
             Default::default();
         for it in &idx.items {
@@ -308,9 +452,15 @@ impl HubState {
                     None => (0, String::new()),
                 };
                 let error = errors.get(&channel).cloned();
+                let bytes = items
+                    .iter()
+                    .filter_map(|i| std::fs::metadata(state_dir.join(&i.file)).ok())
+                    .map(|m| m.len())
+                    .sum();
                 crate::protocol::ChannelStatus {
                     channel,
                     item_count: items.len(),
+                    bytes,
                     last_updated,
                     last_origin,
                     error,
@@ -364,6 +514,31 @@ impl HubState {
         Ok(serde_json::from_str(&data).unwrap_or_default())
     }
 
+    async fn save_deployed(&self) {
+        let _guard = self.save_lock.lock().await;
+        let Some(dir) = &self.data_dir else {
+            return;
+        };
+        let map = self.deployed.read().await;
+        let Ok(data) = serde_json::to_string_pretty(&*map) else {
+            tracing::error!("failed to serialize deployed commits");
+            return;
+        };
+        drop(map);
+        if let Err(e) = tokio::fs::write(dir.join("deployed.json"), data).await {
+            tracing::error!("failed to save deployed commits: {e}");
+        }
+    }
+
+    fn load_deployed(dir: &Path) -> Result<HashMap<String, String>> {
+        let path = dir.join("deployed.json");
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        let data = std::fs::read_to_string(&path)?;
+        Ok(serde_json::from_str(&data).unwrap_or_default())
+    }
+
     pub async fn status(&self) -> Result<crate::protocol::StatusResponse> {
         let machines = self.machines.read().await;
         let now = unix_now();
@@ -381,7 +556,10 @@ impl HubState {
             );
         }
 
-        Ok(crate::protocol::StatusResponse { machines: resp })
+        Ok(crate::protocol::StatusResponse {
+            machines: resp,
+            hub_version: None,
+        })
     }
 
     async fn save(&self) {

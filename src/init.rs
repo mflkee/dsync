@@ -108,6 +108,9 @@ pub fn run() -> Result<()> {
             retention_days: crate::config::default_retention_days(),
             pull_retries: crate::config::default_pull_retries(),
             pull_timeout_secs: crate::config::default_pull_timeout_secs(),
+            pull_only_on_change: crate::config::default_pull_only_on_change(),
+            offline_skip_after_secs: crate::config::default_offline_skip_after_secs(),
+            state_pull_page_bytes: crate::config::default_state_pull_page_bytes(),
         })
     } else {
         None
