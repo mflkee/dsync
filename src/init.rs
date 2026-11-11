@@ -625,6 +625,9 @@ mod tests {
             retention_days: 7,
             pull_retries: 1,
             pull_timeout_secs: crate::config::default_pull_timeout_secs(),
+            pull_only_on_change: true,
+            offline_skip_after_secs: 0,
+            state_pull_page_bytes: crate::config::default_state_pull_page_bytes(),
         };
         let cfg = Config {
             config_version: 1,

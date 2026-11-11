@@ -526,6 +526,10 @@ impl HubState {
             return;
         };
         drop(map);
+        if let Err(e) = tokio::fs::create_dir_all(dir).await {
+            tracing::error!("failed to create data dir {dir:?}: {e}");
+            return;
+        }
         if let Err(e) = tokio::fs::write(dir.join("deployed.json"), data).await {
             tracing::error!("failed to save deployed commits: {e}");
         }
@@ -854,9 +858,188 @@ mod tests {
         });
     }
 
+    async fn push_item(
+        state: &HubState,
+        channel: &str,
+        key: &str,
+        updated: i64,
+        origin: &str,
+        data: &str,
+    ) -> i64 {
+        state
+            .merge_state(
+                vec![StateItem {
+                    channel: channel.into(),
+                    key: key.into(),
+                    updated,
+                    data: data.into(),
+                    ..Default::default()
+                }],
+                origin,
+            )
+            .await
+    }
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dsync-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
     #[test]
-    fn state_status_summarizes_channels_with_error() {
+    fn state_pull_pages_by_bytes_and_reports_cursor() {
         let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tmp_dir("page");
+            let state = HubState::new(Some(dir.clone()), 30);
+            for i in 1..=3 {
+                push_item(
+                    &state,
+                    "opencode",
+                    &format!("k{i}"),
+                    100 + i,
+                    "notebook",
+                    &"x".repeat(100),
+                )
+                .await;
+            }
+
+            let (items, cur, next, more) = state.state_since_page(0, "desktop", 250).await;
+            assert_eq!(items.len(), 2, "two 100-byte payloads fit into 250");
+            assert_eq!(cur, 3, "hub seq is reported in full");
+            assert_eq!(next, 2, "cursor at the last included item");
+            assert!(more, "third item remains");
+
+            let (items2, _, next2, more2) = state.state_since_page(next, "desktop", 250).await;
+            assert_eq!(items2.len(), 1);
+            assert_eq!(items2[0].key, "k3");
+            assert!(!more2);
+            assert_eq!(next2, 3);
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn state_pull_sends_oversized_item_alone_to_make_progress() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tmp_dir("oversize");
+            let state = HubState::new(Some(dir.clone()), 30);
+            push_item(&state, "opencode", "big", 1, "notebook", &"x".repeat(500)).await;
+
+            let (items, _, next, more) = state.state_since_page(0, "desktop", 10).await;
+            assert_eq!(items.len(), 1, "item bigger than the page limit is sent");
+            assert!(!more, "no endless loop on an oversized item");
+            assert_eq!(next, 1);
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn state_pull_skips_own_origin_but_advances_cursor() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tmp_dir("origin");
+            let state = HubState::new(Some(dir.clone()), 30);
+            push_item(&state, "opencode", "mine", 1, "notebook", "{}").await;
+            push_item(&state, "opencode", "theirs", 2, "desktop", "{}").await;
+
+            let (items, _, next, _) = state.state_since_page(0, "notebook", 0).await;
+            assert_eq!(items.len(), 1, "own item is not echoed back");
+            assert_eq!(items[0].key, "theirs");
+            assert_eq!(next, 2, "cursor moved past the own item");
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn prune_state_channels_drops_items_and_payload_dirs() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tmp_dir("prune");
+            let state = HubState::new(Some(dir.clone()), 30);
+            push_item(&state, "tmux", "latest", 1, "notebook", "layout").await;
+            push_item(&state, "zellij", "latest", 2, "notebook", "layout").await;
+
+            let keep = std::collections::HashSet::from(["tmux".to_string()]);
+            assert_eq!(state.prune_state_channels(&keep).await, 1);
+
+            let status = state.state_status().await.unwrap();
+            assert_eq!(status.channels.len(), 1);
+            assert_eq!(status.channels[0].channel, "tmux");
+            assert!(status.channels[0].bytes > 0, "payload size reported");
+            assert!(!dir.join("state/zellij").exists(), "payload dir removed");
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn cleanup_stale_temp_files_removes_only_tmp_files() {
+        let dir = tmp_dir("tmpfiles");
+        std::fs::create_dir_all(dir.join("state")).unwrap();
+        std::fs::write(dir.join("machines.json"), "{}").unwrap();
+        std::fs::write(dir.join("machines.json.tmp-1-2"), "").unwrap();
+        std::fs::write(dir.join("state/index.json.tmp-3-4"), "").unwrap();
+
+        let removed = cleanup_stale_temp_files(&dir, std::time::Duration::ZERO);
+        assert_eq!(removed, 2);
+        assert!(dir.join("machines.json").exists(), "real state kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deployed_commits_persist_and_dedupe() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tmp_dir("deployed");
+            let state = HubState::new(Some(dir.clone()), 30);
+            assert!(state.deployed_commit("notebook", "dsync").await.is_none());
+            state.record_deployed("notebook", "dsync", "abc123").await;
+            assert_eq!(
+                state.deployed_commit("notebook", "dsync").await.as_deref(),
+                Some("abc123")
+            );
+
+            // Перечитываем с диска.
+            let state2 = HubState::new(Some(dir.clone()), 30);
+            assert_eq!(
+                state2.deployed_commit("notebook", "dsync").await.as_deref(),
+                Some("abc123")
+            );
+            // Пустой commit не затирает запись.
+            state2.record_deployed("notebook", "dsync", "").await;
+            assert_eq!(
+                state2.deployed_commit("notebook", "dsync").await.as_deref(),
+                Some("abc123")
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn state_status_summarizes_channels_with_error() {        let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();

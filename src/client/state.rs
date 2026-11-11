@@ -971,6 +971,10 @@ fn now_secs() -> i64 {
 mod tests {
     use super::*;
 
+    /// Тесты, трогающие `DSYNC_STATE_PATH`, идут последовательно: переменная
+    /// окружения общая на процесс, а cargo гоняет тесты параллельно.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn item(channel: &str, key: &str, updated: i64, data_len: usize) -> StateItem {
         StateItem {
             channel: channel.into(),
@@ -1061,6 +1065,7 @@ mod tests {
 
     #[test]
     fn apply_skips_already_applied_items() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Ретрай страницы состояния не должен повторно писать tmux-снапшот
         // (и запускать restore): уже применённый элемент пропускается.
         let dir = std::env::temp_dir().join(format!("dsync-state-skip-{}", std::process::id()));
@@ -1084,7 +1089,10 @@ mod tests {
     #[test]
     fn record_failures_moves_item_to_dead_letter_after_limit() {
         let mut idx = StateIndex::default();
-        let bad = item("opencode", "ses_x", 100, 1);
+        let bad = StateItem {
+            seq: 100,
+            ..item("opencode", "ses_x", 100, 1)
+        };
         assert_eq!(
             record_failures(&mut idx, &[], std::slice::from_ref(&bad), 3),
             Some(100),
@@ -1137,6 +1145,7 @@ mod tests {
 
     #[test]
     fn retry_dead_rolls_seq_back_and_clears() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("dsync-state-retry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1165,6 +1174,7 @@ mod tests {
 
     #[test]
     fn index_roundtrip_marks_and_skips() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("dsync-state-idx-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

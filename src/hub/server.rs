@@ -413,32 +413,22 @@ async fn trigger_remote_pulls(req: &PushRequest, cfg: &Config, state: &Arc<HubSt
 
             // Офлайн-машина: SSH-пулл всё равно упадёт, но с retry+backoff это
             // десятки секунд и запись «failed» каждый цикл. Пропускаем целиком.
-            if offline_skip > 0 {
-                let last = state.last_push(&machine_name).await;
-                if let Some(last) = last {
-                    if last > 0 && now.saturating_sub(last) > offline_skip as i64 {
-                        tracing::debug!(
-                            "skipping pull {} → {machine_name}: no push for {}s",
-                            project.name,
-                            now - last
-                        );
-                        continue;
-                    }
-                }
-            }
-
-            // Ничего не изменилось с прошлого успешного пулла — не гоняем
-            // git pull + post_pull (chezmoi apply / cargo build) впустую.
-            if only_on_change && !project.commit_hash.is_empty() {
-                let deployed = state.deployed_commit(&machine_name, &project.name).await;
-                if deployed.as_deref() == Some(project.commit_hash.as_str()) {
-                    tracing::debug!(
-                        "skipping pull {} → {machine_name}: already at {}",
-                        project.name,
-                        &project.commit_hash[..project.commit_hash.len().min(8)]
-                    );
-                    continue;
-                }
+            // Плюс change-detection: не пулим проект, чей commit уже развёрнут.
+            let last_push = state.last_push(&machine_name).await;
+            let deployed = state.deployed_commit(&machine_name, &project.name).await;
+            if let Some(reason) = pull_skip_reason(
+                only_on_change,
+                offline_skip,
+                now,
+                last_push,
+                deployed.as_deref(),
+                &project.commit_hash,
+            ) {
+                tracing::debug!(
+                    "skipping pull {} → {machine_name}: {reason}",
+                    project.name
+                );
+                continue;
             }
 
             let host = remote.host.clone();
@@ -566,6 +556,34 @@ where
             }
         }
     }
+}
+
+/// Стоит ли пропустить SSH-пулл (и почему). `None` — пулить.
+///
+/// Две экономии, без которых каждый push каждого клиента дёргал все проекты на
+/// всех машинах (~1700 пуллов в сутки, из них ~1000 в офлайн-машину):
+/// * машина давно не выходила на связь (`last_push` старше `offline_skip`);
+/// * её `commit` уже развёрнут (change-driven pull).
+fn pull_skip_reason(
+    only_on_change: bool,
+    offline_skip: u64,
+    now: i64,
+    last_push: Option<i64>,
+    deployed: Option<&str>,
+    source_commit: &str,
+) -> Option<String> {
+    if offline_skip > 0 {
+        if let Some(last) = last_push {
+            if last > 0 && now.saturating_sub(last) > offline_skip as i64 {
+                return Some(format!("no push for {}s", now - last));
+            }
+        }
+    }
+    if only_on_change && !source_commit.is_empty() && deployed == Some(source_commit) {
+        let short = &source_commit[..source_commit.len().min(8)];
+        return Some(format!("already at {short}"));
+    }
+    None
 }
 
 /// Стоит ли повторять SSH-пулл после такой ошибки.
@@ -888,6 +906,9 @@ mod tests {
                 retention_days: 30,
                 pull_retries: 2,
                 pull_timeout_secs: crate::config::default_pull_timeout_secs(),
+                pull_only_on_change: true,
+                offline_skip_after_secs: 0,
+                state_pull_page_bytes: crate::config::default_state_pull_page_bytes(),
             }),
             hub_connect: None,
             projects: Some(
@@ -1091,6 +1112,7 @@ mod tests {
             machine: "notebook".into(),
             token: "tn".into(),
             state_seq: 0,
+            max_bytes: 0,
         };
         let r = crate::client::connect::send_state_pull(&conn, &pull)
             .await
@@ -1106,6 +1128,7 @@ mod tests {
             machine: "desktop".into(),
             token: "td".into(),
             state_seq: 0,
+            max_bytes: 0,
         };
         assert!(crate::client::connect::send_state_pull(&conn, &own)
             .await
@@ -1118,6 +1141,7 @@ mod tests {
             machine: "notebook".into(),
             token: "wrong".into(),
             state_seq: 0,
+            max_bytes: 0,
         };
         let err = crate::client::connect::send_state_pull(&conn, &bad).await;
         assert!(err.is_err(), "bad token must be rejected");
@@ -1160,6 +1184,44 @@ mod tests {
         assert!(!outcome.ok);
         assert_eq!(outcome.attempts, 1);
         assert_eq!(outcome.error.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn pull_skip_reason_offline_and_unchanged() {
+        let now = 1_000_000;
+        // Машина офлайн дольше порога — не пулим.
+        assert!(pull_skip_reason(true, 2700, now, Some(now - 3600), None, "abc").is_some());
+        // Недавний push и новый commit — пулим.
+        assert!(pull_skip_reason(true, 2700, now, Some(now - 60), None, "abc").is_none());
+        // Этот commit уже развёрнут — не пулим.
+        assert!(pull_skip_reason(true, 2700, now, Some(now - 60), Some("abc"), "abc").is_some());
+        // Change-detection выключен — пулим даже тот же commit.
+        assert!(pull_skip_reason(false, 0, now, Some(now - 60), Some("abc"), "abc").is_none());
+        // Репо без коммитов — определять нечего, пулим.
+        assert!(pull_skip_reason(true, 2700, now, Some(now - 60), Some(""), "").is_none());
+        // Машина ещё ни разу не пушила — не считаем офлайн.
+        assert!(pull_skip_reason(true, 2700, now, None, None, "abc").is_none());
+    }
+
+    #[test]
+    fn non_transient_errors_are_not_retried() {
+        assert!(!is_transient_error("No route to host (os error 113)"));
+        assert!(!is_transient_error("Connection refused"));
+        assert!(!is_transient_error("Permission denied (publickey)"));
+        assert!(is_transient_error("ssh handshake timed out"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_stops_immediately_on_non_transient_error() {
+        let mut calls = 0u32;
+        let outcome = retry_pull(5, || {
+            calls += 1;
+            async move { Err("No route to host (os error 113)".to_string()) }
+        })
+        .await;
+        assert!(!outcome.ok);
+        assert_eq!(outcome.attempts, 1, "no retries for an unreachable host");
+        assert_eq!(calls, 1);
     }
 
     #[test]
