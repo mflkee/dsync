@@ -898,6 +898,28 @@ mod tests {
         });
     }
 
+    async fn push_item(
+        state: &HubState,
+        channel: &str,
+        key: &str,
+        updated: i64,
+        origin: &str,
+        data: &str,
+    ) -> i64 {
+        state
+            .merge_state(
+                vec![StateItem {
+                    channel: channel.into(),
+                    key: key.into(),
+                    updated,
+                    data: data.into(),
+                    ..Default::default()
+                }],
+                origin,
+            )
+            .await
+    }
+
     fn tmp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "dsync-{tag}-{}-{}",
@@ -909,6 +931,33 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn legacy_tmux_latest_item_is_rejected() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tmp_dir("legacytmux");
+            let state = HubState::new(Some(dir.clone()), 30);
+            // Старый клиент пишет общий `latest` — игнорируем.
+            assert_eq!(
+                push_item(&state, "tmux", "latest", 1, "notebook", "layout").await,
+                0,
+                "legacy shared tmux item is not stored"
+            );
+            // Актуальный клиент — ключ = имя машины.
+            assert_eq!(
+                push_item(&state, "tmux", "notebook", 2, "notebook", "layout").await,
+                1
+            );
+            let (items, ..) = state.state_since_page(0, "desktop", 0, None).await;
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].key, "notebook");
+            let _ = std::fs::remove_dir_all(&dir);
+        });
     }
 
     #[test]
@@ -976,7 +1025,7 @@ mod tests {
         rt.block_on(async {
             let dir = tmp_dir("channels");
             let state = HubState::new(Some(dir.clone()), 30);
-            push_item(&state, "tmux", "latest", 1, "notebook", "layout").await;
+            push_item(&state, "tmux", "notebook", 1, "notebook", "layout").await;
             push_item(&state, "opencode", "ses_a", 2, "notebook", "{}").await;
 
             let want = vec!["tmux".to_string()];
@@ -1025,7 +1074,7 @@ mod tests {
         rt.block_on(async {
             let dir = tmp_dir("prune");
             let state = HubState::new(Some(dir.clone()), 30);
-            push_item(&state, "tmux", "latest", 1, "notebook", "layout").await;
+            push_item(&state, "tmux", "notebook", 1, "notebook", "layout").await;
             push_item(&state, "zellij", "latest", 2, "notebook", "layout").await;
 
             let keep = std::collections::HashSet::from(["tmux".to_string()]);
@@ -1102,7 +1151,7 @@ mod tests {
                 .merge_state(
                     vec![StateItem {
                         channel: "tmux".into(),
-                        key: "latest".into(),
+                        key: "notebook".into(),
                         updated: unix_now() - 120,
                         data: "{}".into(),
                         ..Default::default()
