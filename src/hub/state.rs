@@ -240,6 +240,13 @@ impl HubState {
                 if item.key.is_empty() || item.channel.is_empty() {
                     continue;
                 }
+                // Совместимость: клиенты до 21.11.2026 пишут общий tmux-элемент
+                // `latest`, смешивая раскладки всех машин. Не принимаем его —
+                // актуальные клиенты присылают `tmux:<имя машины>`.
+                if item.channel == "tmux" && item.key == "latest" {
+                    tracing::debug!("ignoring legacy tmux item keyed 'latest' from {origin}");
+                    continue;
+                }
                 // LWW: не откатываем более свежее чужое значение старым.
                 if let Some(existing) = idx
                     .items
@@ -889,28 +896,6 @@ mod tests {
 
             let _ = std::fs::remove_dir_all(&dir);
         });
-    }
-
-    async fn push_item(
-        state: &HubState,
-        channel: &str,
-        key: &str,
-        updated: i64,
-        origin: &str,
-        data: &str,
-    ) -> i64 {
-        state
-            .merge_state(
-                vec![StateItem {
-                    channel: channel.into(),
-                    key: key.into(),
-                    updated,
-                    data: data.into(),
-                    ..Default::default()
-                }],
-                origin,
-            )
-            .await
     }
 
     fn tmp_dir(tag: &str) -> std::path::PathBuf {
