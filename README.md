@@ -131,9 +131,11 @@ offline_skip_after_secs = 2700    # don't SSH into machines silent for >45 min (
 state_pull_page_bytes = 6291456   # page size for state_pull (6 MiB)
 
 # Non-git fleet state (tmux snapshot + opencode sessions) — synced via the hub.
+# tmux layouts are per machine (the item key is the machine name): a machine
+# never applies another machine's snapshot to its live tmux.
 [state]
 tmux = true
-tmux_restore = true
+tmux_restore = false              # auto-restore into the LIVE tmux — off; use prefix+Ctrl-r
 retry_limit = 3                   # apply attempts before an item goes to dead-letter
 # [state.opencode]
 # projects = ["~/projects/mushroomwars"]  # default: all [projects.*]

@@ -336,8 +336,15 @@ impl HubState {
             // Чужие origin и каналы, которые машине не нужны, не отправляем,
             // но курсор через них двигаем — иначе пагинация застрянет на них.
             if it.origin == exclude_origin {
-                cursor = it.seq;
-                continue;
+                // Исключение — tmux-снапшот самой машины (ключ = имя машины):
+                // это её бэкап раскладки, нужный для восстановления после
+                // переустановки/потери локального state.json. Клиент применит
+                // его только если локального индекса по нему ещё нет.
+                let own_tmux = it.channel == "tmux" && it.key == exclude_origin;
+                if !own_tmux {
+                    cursor = it.seq;
+                    continue;
+                }
             }
             if let Some(wanted) = channels {
                 if !wanted.iter().any(|c| c == &it.channel) {
@@ -992,12 +999,19 @@ mod tests {
             let dir = tmp_dir("origin");
             let state = HubState::new(Some(dir.clone()), 30);
             push_item(&state, "opencode", "mine", 1, "notebook", "{}").await;
-            push_item(&state, "opencode", "theirs", 2, "desktop", "{}").await;
+            push_item(&state, "tmux", "notebook", 2, "notebook", "layout").await;
+            push_item(&state, "opencode", "theirs", 3, "desktop", "{}").await;
 
             let (items, _, next, _) = state.state_since_page(0, "notebook", 0, None).await;
-            assert_eq!(items.len(), 1, "own item is not echoed back");
-            assert_eq!(items[0].key, "theirs");
-            assert_eq!(next, 2, "cursor moved past the own item");
+            assert_eq!(
+                items.len(),
+                2,
+                "own opencode is not echoed; own tmux snapshot is (backup restore)"
+            );
+            assert_eq!(items[0].channel, "tmux");
+            assert_eq!(items[0].key, "notebook");
+            assert_eq!(items[1].key, "theirs");
+            assert_eq!(next, 3, "cursor moved past the own opencode item");
             let _ = std::fs::remove_dir_all(&dir);
         });
     }

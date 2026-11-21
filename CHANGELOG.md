@@ -122,6 +122,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions CI matrix (Linux/macOS/Windows).
 - Config schema versioning (`config_version` field).
 
+### Fixed
+
+- **tmux-раскладки машин больше не смешиваются** (21.11.2026). Канал `tmux`
+  хранил один общий элемент с ключом `latest`, а hub сравнивал его версии по
+  хешу содержимого как по «времени»: побеждала раскладка с численно большим
+  хешем, независимо от свежести. Каждый push `mkair-server-tmn` с новым хешем
+  перезаписывал элемент, его забирал ноутбук, писал в свой resurrect-каталог,
+  переставлял `last`-симлинк и (при `tmux_restore = true`) запускал
+  `tmux-resurrect restore` в живом tmux. Итог: удалённые окна возвращались,
+  фокус прыгал в чужую сессию, а `continuum` при следующем старте поднимал
+  чужую раскладку. Теперь ключ элемента — имя машины: каждая машина пишет и
+  применяет только свой снапшот (чужие пропускаются), hub отдаёт машине её
+  собственный снапшот для восстановления после переустановки/потери
+  `state.json`, а `tmux_restore` в конфиге флота выключен (восстановление —
+  вручную `prefix + Ctrl-r`).
+
 ### Changed
 
 - Repository cleaned: legacy Python v1 implementation removed (see git history).

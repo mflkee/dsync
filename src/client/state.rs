@@ -1,7 +1,10 @@
 //! Синхронизация не-git состояния флота: tmux-раскладка и сессии opencode.
 //!
 //! Транспорт — хаб (`protocol::StateItem`, `hub::state`). Каналы:
-//! * `tmux` — последний снапшот `tmux-resurrect` (один элемент `latest`);
+//! * `tmux` — последний снапшот `tmux-resurrect` **этой** машины (один элемент,
+//!   ключ = имя машины). Раскладки машин не смешиваются: чужие снапшоты не
+//!   применяются, иначе живой tmux одной машины перезаписывался бы раскладкой
+//!   другой (и `tmux-resurrect restore` уводил бы фокус в чужую сессию);
 //! * `opencode` — экспортированные сессии (`opencode session export`), по
 //!   элементу на сессию (ключ — id сессии, `meta` — каталог проекта).
 //!
@@ -271,7 +274,7 @@ pub fn collect(cfg: &Config) -> Vec<StateItem> {
     let idx = StateIndex::load();
     let mut out = Vec::new();
     if st.tmux {
-        collect_tmux(&idx, &mut out);
+        collect_tmux(cfg, &idx, &mut out);
     }
     if let Some(oc) = &st.opencode {
         if oc.enabled() {
@@ -297,7 +300,7 @@ fn wanted_channels(cfg: &Config) -> Vec<String> {
     out
 }
 
-fn collect_tmux(idx: &StateIndex, out: &mut Vec<StateItem>) {
+fn collect_tmux(cfg: &Config, idx: &StateIndex, out: &mut Vec<StateItem>) {
     let Some(dir) = tmux_resurrect_dir() else {
         return;
     };
@@ -321,9 +324,16 @@ fn collect_tmux(idx: &StateIndex, out: &mut Vec<StateItem>) {
     };
     // `updated` = хеш содержимого: неизменённую раскладку повторно не гоним
     // (mtime меняется от каждого save, содержимое — нет).
+    //
+    // Ключ — имя машины, а не общий `latest`: раньше все машины писали один
+    // элемент, и hub отдавал «победившую» (по численно большему хешу) раскладку
+    // всем. На приёмнике она подменяла `last`-симлинк и, если включён
+    // `tmux_restore`, переписывала живой tmux: удалённые окна возвращались,
+    // фокус прыгал в чужую сессию. Теперь у каждой машины свой элемент, и
+    // применяется только он (см. `apply`).
     let item = StateItem {
         channel: TMUX_CHANNEL.into(),
-        key: "latest".into(),
+        key: cfg.machine.name.clone(),
         updated: content_hash(&data),
         meta: path.file_name().map(|s| s.to_string_lossy().to_string()),
         data,
@@ -408,7 +418,10 @@ pub fn apply(cfg: &Config, items: Vec<StateItem>) -> ApplyReport {
     let mut refresh_projects: Vec<PathBuf> = Vec::new();
     for item in items {
         let wanted = match item.channel.as_str() {
-            TMUX_CHANNEL => st.tmux,
+            // tmux: только собственный снапшот (ключ = имя машины). Чужая
+            // раскладка не должна трогать локальный resurrect-каталог и живой
+            // tmux — это и возвращало удалённые окна и перекидывало сессии.
+            TMUX_CHANNEL => st.tmux && item.key == cfg.machine.name,
             OPENCODE_CHANNEL => st.opencode.as_ref().map(|oc| oc.enabled()).unwrap_or(false),
             other => {
                 // Неизвестный канал (например, устаревший `zellij`) — не шумим
@@ -1173,13 +1186,36 @@ mod tests {
         std::env::set_var("DSYNC_STATE_PATH", dir.join("state.json"));
 
         let cfg = state_cfg();
-        let tmux = item("tmux", "latest", 42, 3);
+        let tmux = item("tmux", "t", 42, 3);
         mark_synced(std::slice::from_ref(&tmux));
 
         let report = apply(&cfg, vec![tmux]);
         assert!(report.applied.is_empty(), "nothing re-applied");
         assert_eq!(report.skipped, 1);
         assert!(report.failed.is_empty());
+
+        std::env::remove_var("DSYNC_STATE_PATH");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn foreign_tmux_snapshot_is_never_applied() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Раскладка другой машины не должна ни писаться в локальный
+        // resurrect-каталог, ни (тем более) восстанавливаться в живой tmux.
+        let dir = std::env::temp_dir().join(format!("dsync-state-foreign-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DSYNC_STATE_PATH", dir.join("state.json"));
+
+        let mut cfg = state_cfg();
+        cfg.state.as_mut().unwrap().tmux_restore = true;
+        let foreign = item("tmux", "mkair-server-tmn", 7, 4);
+        let report = apply(&cfg, vec![foreign]);
+        assert!(report.applied.is_empty(), "foreign layout is skipped");
+        assert!(report.failed.is_empty());
+        assert_eq!(report.skipped, 1);
+        assert!(report.messages.is_empty(), "no restore was triggered");
 
         std::env::remove_var("DSYNC_STATE_PATH");
         let _ = std::fs::remove_dir_all(&dir);
