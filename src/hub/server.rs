@@ -114,6 +114,12 @@ pub async fn run_server(cfg: Config) -> Result<()> {
                 warn!("pruned {pruned} state item(s) from unknown channels");
             }
         }
+        // Общий tmux-элемент (`latest`) после перехода на ключ «имя машины»
+        // никому не нужен, а его payload — чужая раскладка.
+        let legacy = state.prune_legacy_tmux().await;
+        if legacy > 0 {
+            warn!("pruned {legacy} legacy tmux item(s) keyed 'latest'");
+        }
     }
 
     let max_message_size = hub_cfg.max_message_size;

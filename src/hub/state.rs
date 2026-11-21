@@ -384,6 +384,21 @@ impl HubState {
     /// Удаляет элементы каналов, которых нет в `keep` (мусор вроде `zellij`,
     /// поддержка которого убрана из кода). Возвращает число удалённых элементов.
     pub async fn prune_state_channels(&self, keep: &std::collections::HashSet<String>) -> usize {
+        self.drop_state_items(|i| !keep.contains(&i.channel)).await
+    }
+
+    /// Удаляет устаревший общий tmux-элемент (`key = "latest"`). До 21.11.2026
+    /// все машины писали раскладку в один элемент, из-за чего снапшоты
+    /// смешивались; теперь ключ — имя машины, а `latest` применять некому.
+    pub async fn prune_legacy_tmux(&self) -> usize {
+        self.drop_state_items(|i| i.channel == "tmux" && i.key == "latest")
+            .await
+    }
+
+    async fn drop_state_items<F>(&self, should_drop: F) -> usize
+    where
+        F: Fn(&StoredStateItem) -> bool,
+    {
         let Some(state_dir) = self.state_dir.clone() else {
             return 0;
         };
@@ -392,13 +407,13 @@ impl HubState {
             let dropped: Vec<StoredStateItem> = idx
                 .items
                 .iter()
-                .filter(|i| !keep.contains(&i.channel))
+                .filter(|i| should_drop(i))
                 .cloned()
                 .collect();
             if dropped.is_empty() {
                 return 0;
             }
-            idx.items.retain(|i| keep.contains(&i.channel));
+            idx.items.retain(|i| !should_drop(i));
             dropped
         };
         let mut dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
