@@ -34,6 +34,7 @@ use crate::protocol::{
     StatePullRequest, StatePullResponse, StatePushRequest, StatePushResponse, StateStatusRequest,
 };
 
+use super::error::HubError;
 use super::state::HubState;
 use super::token_matches;
 
@@ -157,13 +158,14 @@ pub async fn run_server(cfg: Config) -> Result<()> {
 fn make_server_config(
     cert_chain: Vec<rustls::pki_types::CertificateDer<'static>>,
     priv_key: rustls::pki_types::PrivateKeyDer<'static>,
-) -> Result<ServerConfig> {
-    let mut config =
-        ServerConfig::with_crypto(Arc::new(quinn::crypto::rustls::QuicServerConfig::try_from(
-            rustls::ServerConfig::builder()
-                .with_no_client_auth()
-                .with_single_cert(cert_chain, priv_key)?,
-        )?));
+) -> std::result::Result<ServerConfig, HubError> {
+    let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, priv_key)?,
+    )
+    .map_err(|e| HubError::Config(format!("quic tls: {e}")))?;
+    let mut config = ServerConfig::with_crypto(Arc::new(crypto));
     config.transport = Arc::new(quinn::TransportConfig::default());
     Ok(config)
 }
@@ -171,10 +173,13 @@ fn make_server_config(
 fn load_or_generate_certs(
     cfg: &Config,
     data_dir: &std::path::Path,
-) -> Result<(
-    Vec<rustls::pki_types::CertificateDer<'static>>,
-    rustls::pki_types::PrivateKeyDer<'static>,
-)> {
+) -> std::result::Result<
+    (
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    ),
+    HubError,
+> {
     // 1. Явно заданные через [hub] cert/key — приоритет.
     if let Some(hub) = &cfg.hub {
         if let (Some(cert_path), Some(key_path)) = (&hub.cert, &hub.key) {
@@ -199,7 +204,9 @@ fn load_or_generate_certs(
         if let Some(key) = rustls_pemfile::private_key(&mut key.as_slice())? {
             return Ok((certs, key));
         }
-        anyhow::bail!("server_key.pem in {data_dir:?} contains no private key");
+        return Err(HubError::Config(format!(
+            "server_key.pem in {data_dir:?} contains no private key"
+        )));
     }
 
     // 3. Генерируем новый и сохраняем на диск.

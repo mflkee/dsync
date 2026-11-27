@@ -937,6 +937,7 @@ dependencies = [
  "sha2",
  "subtle",
  "teloxide",
+ "thiserror 2.0.19",
  "tokio",
  "toml",
  "toml_edit",
