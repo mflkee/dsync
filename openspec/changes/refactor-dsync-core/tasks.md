@@ -10,9 +10,9 @@
 
 ## 2. Hub state: индекс, payload, merge, статус
 
-- [ ] 2.1 Вынести `state/{index,payload}.rs`, оставив `HubState` фасадом; файлы payload'ов и `index.json` пишутся только своими модулями. Проверка: тесты `hub::state` зелёные, grep по записи `index.json` — одно место.
-- [ ] 2.2 Вынести `state/merge.rs` (LWW, seq, ретеншн) и `state/status.rs`; LWW тестируется на in-memory индексе без ФС. Проверка: тесты LWW/статуса зелёные, новые тесты без tempdir.
-- [ ] 2.3 Перенести тестовый модуль `hub/state.rs` в `hub/state/tests.rs` (или соседний `tests`-модуль), не меняя количество проверок. Проверка: `cargo test --all-targets` показывает то же число тестов, «боевой» файл < 700 строк.
+- [x] 2.1 Вынести `state/{index,payload}.rs`, оставив `HubState` фасадом; файлы payload'ов и `index.json` пишутся только своими модулями. Проверка: тесты `hub::state` зелёные, grep по записи `index.json` — одно место.
+- [x] 2.2 Вынести `state/merge.rs` (LWW, seq, ретеншн) и `state/status.rs`; LWW тестируется на in-memory индексе без ФС. Проверка: тесты LWW/статуса зелёные, новые тесты без tempdir.
+- [x] 2.3 Перенести тестовый модуль `hub/state.rs` в `hub/state/tests.rs` (или соседний `tests`-модуль), не меняя количество проверок. Проверка: `cargo test --all-targets` показывает то же число тестов, «боевой» файл < 700 строк.
 
 ## 3. Hub server: serve, dispatch, pull
 
