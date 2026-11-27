@@ -400,6 +400,12 @@ impl Config {
 
 /// Путь к конфигу в том же порядке, что и `Config::load`.
 pub fn find_config_path() -> Option<PathBuf> {
+    // Явный путь (тесты/e2e и нестандартные установки) важнее поиска.
+    if let Ok(p) = std::env::var("DSYNC_CONFIG") {
+        if !p.is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
     config_paths().into_iter().find(|p| p.exists())
 }
 

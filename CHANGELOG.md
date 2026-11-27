@@ -152,6 +152,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Зависимости: прямой `dirs` убран (транзитивно остаётся через `russh-keys`
+  до апгрейда `russh`); дубли `base64`/`bitflags`/`reqwest` — транзитивные от
+  `teloxide 0.12` и уйдут вместе с его обновлением.
 - Внутренняя инфраструктура сведена в `src/infra/`: атомарная запись,
   time-хелперы, общий retry/backoff, POSIX-shell quoting и единое
   TOFU-хранилище отпечатков (hub-сертификат и SSH host-key). Поведение
