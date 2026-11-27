@@ -1,3 +1,9 @@
+// teloxide 0.12 `BotCommands` генерирует рядом с enum код с недостижимой
+// веткой; rustc 1.100+ ругается на это внутри derive (`unreachable_code`).
+// Код чужой, поэтому глушим линт на весь модуль: `#[allow]` на самом enum
+// сгенерированные sibling-элементы не покрывает.
+#![allow(unreachable_code)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
