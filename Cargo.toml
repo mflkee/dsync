@@ -28,7 +28,6 @@ russh-keys = "0.44"
 directories = "6"
 rcgen = "0.13"
 uuid = { version = "1", features = ["v4"] }
-dirs = "5"
 chrono = { version = "0.4", features = ["clock"] }
 async-trait = "0.1"
 sha2 = "0.10"

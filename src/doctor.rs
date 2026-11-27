@@ -59,7 +59,7 @@ async fn run_text(cfg: &Config) -> Result<()> {
         }
         // Резолв через sidecar tokens.toml: секреты не живут в главном конфиге
         // (chezmoi-managed), см. config::read_secret_tokens.
-        let token = crate::client::connect::hub_token(&cfg);
+        let token = crate::client::connect::hub_token(cfg);
         if token.is_empty() {
             return Status::Warn(
                 "hub token is empty — hub will reject requests; set it in the config or in the sidecar ~/.config/dsync/dsync/tokens.toml ([hub_connect] token)"
@@ -335,9 +335,7 @@ async fn json_report(cfg: &Config) -> DoctorReport {
     push_status(&mut checks, "config", "config", Status::Ok);
     push_status(&mut checks, "hub_connect", "hub_connect", {
         match &cfg.hub_connect {
-            Some(h) if h.address.is_empty() => {
-                Status::Warn("hub_connect.address is empty".into())
-            }
+            Some(h) if h.address.is_empty() => Status::Warn("hub_connect.address is empty".into()),
             Some(_) => Status::Ok,
             None => Status::Skip("no hub_connect in config"),
         }
@@ -403,12 +401,7 @@ async fn json_report(cfg: &Config) -> DoctorReport {
             } else {
                 Status::Ok
             };
-            push_status(
-                &mut checks,
-                &format!("projects.{name}"),
-                name,
-                status,
-            );
+            push_status(&mut checks, &format!("projects.{name}"), name, status);
         }
     }
     if let Some(ap) = &cfg.auto_projects {
@@ -430,8 +423,8 @@ async fn json_report(cfg: &Config) -> DoctorReport {
                 .as_deref()
                 .unwrap_or("unknown (old hub — обновите dsync-hub)");
             let local_v = crate::protocol::version_string();
-            let reachable = Check::new("hub.reachable", "hub", CheckStatus::Ok)
-                .detail(format!("hub {hub_v}"));
+            let reachable =
+                Check::new("hub.reachable", "hub", CheckStatus::Ok).detail(format!("hub {hub_v}"));
             checks.push(reachable);
 
             let mut names: Vec<&String> = resp.machines.keys().collect();
@@ -444,7 +437,11 @@ async fn json_report(cfg: &Config) -> DoctorReport {
                     Check::new(
                         format!("hub.machine.{name}"),
                         name,
-                        if matches { CheckStatus::Ok } else { CheckStatus::Warn },
+                        if matches {
+                            CheckStatus::Ok
+                        } else {
+                            CheckStatus::Warn
+                        },
                     )
                     .detail(format!("online={}, version={v}", m.online)),
                 );
@@ -465,7 +462,11 @@ async fn json_report(cfg: &Config) -> DoctorReport {
 
             if let Some(state) = state_resp {
                 for ch in &state.channels {
-                    let status = if ch.error.is_some() { CheckStatus::Warn } else { CheckStatus::Ok };
+                    let status = if ch.error.is_some() {
+                        CheckStatus::Warn
+                    } else {
+                        CheckStatus::Ok
+                    };
                     let mut check = Check::new(
                         format!("state.store.{}", ch.channel),
                         format!("state store: {}", ch.channel),
@@ -486,8 +487,7 @@ async fn json_report(cfg: &Config) -> DoctorReport {
         }
         Err(e) => {
             checks.push(
-                Check::new("hub.reachable", "hub", CheckStatus::Fail)
-                    .error(format!("{e:#}")),
+                Check::new("hub.reachable", "hub", CheckStatus::Fail).error(format!("{e:#}")),
             );
         }
     }
@@ -516,8 +516,10 @@ async fn json_report(cfg: &Config) -> DoctorReport {
         }
         for (key, f) in &health.failures {
             checks.push(
-                Check::new(format!("state.failure.{key}"), key, CheckStatus::Warn)
-                    .detail(format!("{} неудачн. попыт(ки), будет повторено", f.attempts)),
+                Check::new(format!("state.failure.{key}"), key, CheckStatus::Warn).detail(format!(
+                    "{} неудачн. попыт(ки), будет повторено",
+                    f.attempts
+                )),
             );
         }
     }
@@ -543,7 +545,10 @@ async fn json_report(cfg: &Config) -> DoctorReport {
         .unwrap_or(false)
     {
         let status = match crate::client::state::opencode_binary() {
-            None => Status::Warn("opencode не найден — сессии не будут ни экспортироваться, ни импортироваться".into()),
+            None => Status::Warn(
+                "opencode не найден — сессии не будут ни экспортироваться, ни импортироваться"
+                    .into(),
+            ),
             Some(bin) => match std::process::Command::new(&bin)
                 .args(["session", "import", "--help"])
                 .output()

@@ -243,10 +243,7 @@ mod tests {
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], SCHEMA_VERSION);
         assert_eq!(v["machines"]["notebook"]["online"], true);
-        assert_eq!(
-            v["machines"]["notebook"]["pulls"]["dotfiles"]["ok"],
-            false
-        );
+        assert_eq!(v["machines"]["notebook"]["pulls"]["dotfiles"]["ok"], false);
         assert_eq!(v["local_state"]["seq"], 5);
         assert!(v.get("token").is_none());
     }

@@ -90,7 +90,7 @@ pub fn run() -> Result<()> {
         let data_dir: String = Input::new()
             .with_prompt("Hub data dir (state + persisted TLS cert)")
             .default(
-                dirs::data_dir()
+                crate::infra::paths::data_dir()
                     .unwrap_or_else(|| PathBuf::from("./.dsync-data"))
                     .join("dsync-hub")
                     .display()
@@ -255,7 +255,7 @@ fn hostname() -> String {
 
 /// SSH-ключ: используем существующий или генерируем ed25519.
 fn ssh_key_setup() -> Result<PathBuf> {
-    let default_key = dirs::home_dir()
+    let default_key = crate::infra::paths::home_dir()
         .unwrap_or_default()
         .join(".ssh")
         .join("id_ed25519");
@@ -455,14 +455,16 @@ fn scheduler_setup() -> Result<Option<String>> {
 /// (каждые 15 минут). Возвращает true при успехе.
 #[cfg(target_os = "linux")]
 fn install_systemd_timer() -> Result<bool> {
-    let unit_dir = dirs::config_dir()
+    let unit_dir = crate::infra::paths::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
         .join("systemd")
         .join("user");
     let service = unit_dir.join("dsync-watch.service");
     let timer = unit_dir.join("dsync-watch.timer");
 
-    let data_dir = dirs::data_dir().unwrap_or_default().join("dsync");
+    let data_dir = crate::infra::paths::data_dir()
+        .unwrap_or_default()
+        .join("dsync");
     let binary = std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("dsync"))
         .display()
@@ -511,7 +513,7 @@ fn default_config_path() -> PathBuf {
     directories::ProjectDirs::from("com", "mflkee", "dsync")
         .map(|d| d.config_dir().join("dsync/config.toml"))
         .unwrap_or_else(|| {
-            dirs::config_dir()
+            crate::infra::paths::config_dir()
                 .unwrap_or_else(|| PathBuf::from("~/.config"))
                 .join("dsync/dsync/config.toml")
         })

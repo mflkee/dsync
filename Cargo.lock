@@ -925,7 +925,6 @@ dependencies = [
  "crossterm",
  "dialoguer",
  "directories",
- "dirs",
  "quinn",
  "ratatui",
  "rcgen",

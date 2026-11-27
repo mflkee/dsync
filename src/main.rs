@@ -1,17 +1,4 @@
-mod bot;
-mod cli;
-mod client;
-mod config;
-mod diagnostics;
-mod doctor;
-mod hub;
-mod infra;
-mod init;
-mod projects;
-mod protocol;
-mod ssh;
-mod trust;
-mod tui;
+use dsync::{bot, cli, client, config, doctor, hub, init, ssh, trust, tui};
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -42,7 +29,11 @@ async fn main() -> Result<()> {
             cli::TrustAction::Ssh(sub) => {
                 let data_dir = config::Config::load()
                     .map(|c| c.hub_data_dir())
-                    .unwrap_or_else(|_| dirs::data_dir().unwrap_or_default().join("dsync"));
+                    .unwrap_or_else(|_| {
+                        dsync::infra::paths::data_dir()
+                            .unwrap_or_default()
+                            .join("dsync")
+                    });
                 match sub {
                     cli::TrustSshAction::List => {
                         print_lines(ssh::trust::ssh_trust_list(&data_dir));
@@ -128,7 +119,7 @@ fn init_tracing(tui_mode: bool) {
         return;
     }
 
-    let dir = dirs::data_dir()
+    let dir = dsync::infra::paths::data_dir()
         .map(|d| d.join("dsync"))
         .unwrap_or_else(|| PathBuf::from("/tmp/dsync"));
     let open = || {

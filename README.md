@@ -142,6 +142,31 @@ retry_limit = 3                   # apply attempts before an item goes to dead-l
 # projects = []                           # explicit off: neither export nor apply
 ```
 
+### Machine-readable output (`--json`)
+
+Diagnostic commands emit exactly one JSON document on stdout; logs go to
+stderr, so pipes stay parseable. Every document has an integer
+`schema_version` (currently `1`); fields may be added within a schema version,
+while removals/renames bump it.
+
+```bash
+dsync status --json | jq -r '.machines | to_entries[] | "\(.key) \(.value.online) \(.value.version)"'
+dsync doctor --json | jq -r '.checks[] | select(.status != "ok") | "\(.id): \(.status)"'
+dsync state list --json | jq '.dead_letters'
+```
+
+- `status --json`: `client_version`, `hub_version`, `machines` (online, last
+  push/seen, version, per-project pull outcomes) and `local_state`
+  (`seq`, `applied`, `failing`, `dead_letter`).
+- `doctor --json`: `checks[]` with stable `id`, `label`, `status`
+  (`ok|warn|fail|skip`), optional `detail`/`error`; exit code is non-zero only
+  when at least one check is `fail`.
+- `state list --json`: local index `seq`, `applied`, `failures[]`,
+  `dead_letters[]` — metadata only, never payloads or secrets.
+
+On failure stdout stays empty, the reason goes to stderr, and the exit code is
+non-zero.
+
 ### State sync troubleshooting
 
 The hub stores non-git state as immutable payloads with a global `seq`; each

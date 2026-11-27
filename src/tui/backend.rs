@@ -467,7 +467,7 @@ async fn run_doctor(cfg: Config, info: CfgSummary, ev: Sender<Event>) {
     }
 
     // ssh key
-    let ssh_key = dirs::home_dir()
+    let ssh_key = crate::infra::paths::home_dir()
         .map(|h| h.join(".ssh/id_ed25519"))
         .unwrap_or_default();
     items.push(CheckItem {

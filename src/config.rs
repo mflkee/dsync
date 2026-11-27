@@ -135,7 +135,7 @@ pub struct MachineConfig {
 impl MachineConfig {
     /// SSH key path with `~` expansion; falls back to `~/.ssh/id_ed25519`.
     pub fn ssh_key_path(&self) -> PathBuf {
-        let default = || dirs::home_dir().map(|h| h.join(".ssh/id_ed25519"));
+        let default = || crate::infra::paths::home_dir().map(|h| h.join(".ssh/id_ed25519"));
         match &self.ssh_key {
             Some(p) => expand_tilde(p).unwrap_or_else(|| p.clone()),
             None => default().unwrap_or_else(|| PathBuf::from(".ssh/id_ed25519")),
@@ -146,7 +146,7 @@ impl MachineConfig {
 fn expand_tilde(p: &Path) -> Option<PathBuf> {
     let s = p.to_string_lossy();
     let rest = s.strip_prefix("~/")?;
-    dirs::home_dir().map(|h| h.join(rest))
+    crate::infra::paths::home_dir().map(|h| h.join(rest))
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -390,7 +390,11 @@ impl Config {
         self.hub
             .as_ref()
             .and_then(|h| h.data_dir.clone())
-            .unwrap_or_else(|| dirs::data_dir().unwrap_or_default().join("dsync"))
+            .unwrap_or_else(|| {
+                crate::infra::paths::data_dir()
+                    .unwrap_or_default()
+                    .join("dsync")
+            })
     }
 }
 
@@ -421,7 +425,7 @@ mod tests {
             ssh_key: None,
         };
         let p = m.ssh_key_path();
-        let home = dirs::home_dir().expect("home in tests");
+        let home = crate::infra::paths::home_dir().expect("home in tests");
         assert_eq!(p, home.join(".ssh/id_ed25519"));
     }
 
@@ -431,7 +435,7 @@ mod tests {
             name: "test".into(),
             ssh_key: Some("~/keys/mykey".into()),
         };
-        let home = dirs::home_dir().expect("home in tests");
+        let home = crate::infra::paths::home_dir().expect("home in tests");
         assert_eq!(m.ssh_key_path(), home.join("keys/mykey"));
     }
 

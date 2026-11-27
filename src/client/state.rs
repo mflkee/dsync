@@ -85,7 +85,7 @@ fn index_path() -> PathBuf {
             return PathBuf::from(p);
         }
     }
-    dirs::data_dir()
+    crate::infra::paths::data_dir()
         .unwrap_or_default()
         .join("dsync/state.json")
 }
@@ -833,7 +833,7 @@ fn batches(items: Vec<StateItem>) -> Vec<Vec<StateItem>> {
 // ---------------------------------------------------------------------------
 
 fn tmux_resurrect_dir() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::infra::paths::home_dir()?;
     let xdg = home.join(".local/share/tmux/resurrect");
     let legacy = home.join(".tmux/resurrect");
     if xdg.is_dir() {
@@ -915,7 +915,7 @@ fn trigger_tmux_restore() -> bool {
 }
 
 fn tmux_resurrect_script(name: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::infra::paths::home_dir()?;
     let p = home.join(".tmux/plugins/tmux-resurrect/scripts").join(name);
     p.is_file().then_some(p)
 }
@@ -950,7 +950,7 @@ pub fn opencode_binary() -> Option<PathBuf> {
 }
 
 fn opencode_bin() -> Option<PathBuf> {
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::infra::paths::home_dir() {
         let p = home.join(".opencode/bin/opencode");
         if p.is_file() {
             return Some(p);

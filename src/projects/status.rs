@@ -142,7 +142,7 @@ fn diverged(path: &Path, branch: &str) -> (usize, usize) {
 pub fn expand_user_path(p: &Path) -> std::path::PathBuf {
     let s = p.to_string_lossy();
     if let Some(rest) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::infra::paths::home_dir() {
             return home.join(rest);
         }
     }

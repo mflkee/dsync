@@ -3,6 +3,7 @@
 
 pub mod atomic;
 pub mod fingerprint;
+pub mod paths;
 pub mod retry;
 pub mod shell;
 pub mod time;

@@ -284,7 +284,7 @@ fn src_to_live(cfg: &Config, src: &Path) -> Option<PathBuf> {
         return None;
     }
     let transf = transform_rel(rel);
-    dirs::home_dir().map(|h| h.join(transf))
+    crate::infra::paths::home_dir().map(|h| h.join(transf))
 }
 
 /// Трансформация относительного пути исходника chezmoi в относительный путь
@@ -345,7 +345,7 @@ struct CaptureState {
 
 impl CaptureState {
     fn path() -> PathBuf {
-        dirs::data_dir()
+        crate::infra::paths::data_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp/dsync"))
             .join("dsync/capture-state.json")
     }
@@ -418,7 +418,7 @@ fn file_hash(path: &Path) -> Result<String> {
 }
 
 fn file_label(path: &Path) -> String {
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::infra::paths::home_dir() {
         if let Ok(rel) = path.strip_prefix(&home) {
             return rel.to_string_lossy().to_string();
         }
@@ -427,7 +427,7 @@ fn file_label(path: &Path) -> String {
 }
 
 fn home_join(p: &str) -> PathBuf {
-    dirs::home_dir()
+    crate::infra::paths::home_dir()
         .map(|h| h.join(p))
         .unwrap_or_else(|| PathBuf::from(p))
 }
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn to_abs_expands_tilde_and_home() {
-        let home = dirs::home_dir().expect("home");
+        let home = crate::infra::paths::home_dir().expect("home");
         assert_eq!(to_abs(Path::new("~/zshrc")), home.join("zshrc"));
         assert_eq!(to_abs(Path::new(".zshrc")), home.join(".zshrc"));
         assert_eq!(to_abs(Path::new("/etc/hosts")), PathBuf::from("/etc/hosts"));

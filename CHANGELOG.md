@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Machine-readable diagnostics**: `dsync doctor --json` и
+  `dsync state list --json`; `dsync status --json` получил `schema_version` и
+  `local_state`. Логи в не-TUI режиме переехали в stderr, поэтому stdout
+  `--json` — ровно один JSON-документ (удобно для веб-панели и `jq`).
 - **State sync hardening** (`state-sync-hardening`), по итогам аудита 11.11.2026:
   - *Pagination*: `state_pull` отдаёт состояние страницами (`max_bytes`,
     `next_seq`, `has_more`). Раньше весь стор (61 элемент ≈ 66 МБ

@@ -46,7 +46,7 @@ enum Mode {
 type Sessions = Arc<Mutex<HashMap<ChatId, ChatSession>>>;
 
 fn sessions_path() -> PathBuf {
-    dirs::data_dir()
+    crate::infra::paths::data_dir()
         .unwrap_or_default()
         .join("dsync")
         .join("bot-sessions.json")

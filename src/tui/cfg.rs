@@ -858,7 +858,7 @@ fn chezmoi_source_path(path: &Path) -> Option<PathBuf> {
 
 /// `<target>` для `chezmoi apply`: живой путь относительно home (`.config/...`).
 fn live_target(live: &Path) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::infra::paths::home_dir()?;
     live.strip_prefix(&home)
         .ok()
         .map(|r| r.display().to_string())
@@ -1165,7 +1165,7 @@ bind = "0.0.0.0:42069"
 
     #[test]
     fn live_target_strips_home() {
-        let home = dirs::home_dir().unwrap();
+        let home = crate::infra::paths::home_dir().unwrap();
         let live = home.join(".config/dsync/dsync/config.toml");
         let t = live_target(&live).unwrap();
         assert_eq!(t, ".config/dsync/dsync/config.toml");

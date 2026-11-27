@@ -27,7 +27,7 @@ impl Default for TrustStore {
 
 impl TrustStore {
     pub fn path() -> PathBuf {
-        dirs::data_dir()
+        crate::infra::paths::data_dir()
             .unwrap_or_default()
             .join("dsync")
             .join("known_hosts.toml")

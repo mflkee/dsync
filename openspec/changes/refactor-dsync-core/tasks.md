@@ -2,11 +2,11 @@
 
 ## 1. Инфраструктурные модули
 
-- [ ] 1.1 Создать `src/infra/{atomic,time,retry,shell,fingerprint}.rs`, подключить в `lib.rs`; каждый модуль получает unit-тесты. Проверка: `cargo test infra::` зелёный.
-- [ ] 1.2 Перевести hub- и SSH-TOFU-сторы на общий `FingerprintStore` с параметрами пути/прав. Проверка: существующие тесты `trust`/`ssh::trust` проходят без правок ожиданий.
-- [ ] 1.3 Перевести `retry_pull` и клиентский connect на общий `infra::retry` с политикой transient. Проверка: тесты backoff/`tokio::time::pause` зелёные, число попыток не изменилось.
-- [ ] 1.4 Собрать все remote-команды через `infra::shell` (`quote`, `join_posix`), убрать `Path::join` из `build_pull_command`. Проверка: новые snapshot-тесты для путей с пробелом, кавычкой, кириллицей и Windows-хоста; `cargo test shell` зелёный.
-- [ ] 1.5 Добавить в `CHANGELOG.md` запись о внутренних переездах (без пользовательских изменений кроме JSON-вывода). Проверка: запись присутствует, `cargo fmt --check` проходит.
+- [x] 1.1 Создать `src/infra/{atomic,time,retry,shell,fingerprint}.rs`, подключить в `lib.rs`; каждый модуль получает unit-тесты. Проверка: `cargo test infra::` зелёный.
+- [x] 1.2 Перевести hub- и SSH-TOFU-сторы на общий `FingerprintStore` с параметрами пути/прав. Проверка: существующие тесты `trust`/`ssh::trust` проходят без правок ожиданий.
+- [x] 1.3 Перевести `retry_pull` и клиентский connect на общий `infra::retry` с политикой transient. Проверка: тесты backoff/`tokio::time::pause` зелёные, число попыток не изменилось.
+- [x] 1.4 Собрать все remote-команды через `infra::shell` (`quote`, `join_posix`), убрать `Path::join` из `build_pull_command`. Проверка: новые snapshot-тесты для путей с пробелом, кавычкой, кириллицей и Windows-хоста; `cargo test shell` зелёный.
+- [x] 1.5 Добавить в `CHANGELOG.md` запись о внутренних переездах (без пользовательских изменений кроме JSON-вывода). Проверка: запись присутствует, `cargo fmt --check` проходит.
 
 ## 2. Hub state: индекс, payload, merge, статус
 
@@ -33,16 +33,16 @@
 
 ## 6. Один lib-крейт вместо lib+bin копии
 
-- [ ] 6.1 Перенести все `mod`-объявления в `lib.rs`, `main.rs` использует `dsync::…`; видимость по умолчанию `pub(crate)`. Проверка: `cargo build` и `cargo test --all-targets` зелёные, в `cargo build -v` каждый модуль компилируется один раз.
-- [ ] 6.2 Добавить `cargo test --doc` в CI и локальную проверку. Проверка: job зелёный, doc-тесты (если есть) проходят.
+- [x] 6.1 Перенести все `mod`-объявления в `lib.rs`, `main.rs` использует `dsync::…`; видимость по умолчанию `pub(crate)`. Проверка: `cargo build` и `cargo test --all-targets` зелёные, в `cargo build -v` каждый модуль компилируется один раз.
+- [x] 6.2 Добавить `cargo test --doc` в CI и локальную проверку. Проверка: job зелёный, doc-тесты (если есть) проходят.
 
 ## 7. JSON-диагностика
 
-- [ ] 7.1 Переключить `tracing` в не-TUI режиме на stderr; TUI по-прежнему пишет в `~/.local/share/dsync/tui.log`. Проверка: `dsync status --json 2>/dev/null | jq .` парсится, логи видны только в stderr.
-- [ ] 7.2 Добавить `schema_version` и `local_state` в `status --json` через `diagnostics::StatusReport`; снапшот-тест имён/типов полей. Проверка: тест сериализации + `jq -e '.schema_version'`.
-- [ ] 7.3 Реализовать `doctor --json` (`Check { id,label,status,detail,error }`, коды возврата 0/≠0) по сценариям спецификации. Проверка: тесты «всё ок», «хаб недоступен», «warn без fail».
-- [ ] 7.4 Реализовать `state list --json` с сортировкой и запретом payload'ов/секретов. Проверка: тесты пустого индекса, dead-letter и отсутствия `data`/токенов.
-- [ ] 7.5 Описать контракты в `README.md` (раздел «Machine-readable output») с примерами `jq`. Проверка: команды из документации выполняются как написано.
+- [x] 7.1 Переключить `tracing` в не-TUI режиме на stderr; TUI по-прежнему пишет в `~/.local/share/dsync/tui.log`. Проверка: `dsync status --json 2>/dev/null | jq .` парсится, логи видны только в stderr.
+- [x] 7.2 Добавить `schema_version` и `local_state` в `status --json` через `diagnostics::StatusReport`; снапшот-тест имён/типов полей. Проверка: тест сериализации + `jq -e '.schema_version'`.
+- [x] 7.3 Реализовать `doctor --json` (`Check { id,label,status,detail,error }`, коды возврата 0/≠0) по сценариям спецификации. Проверка: тесты «всё ок», «хаб недоступен», «warn без fail».
+- [x] 7.4 Реализовать `state list --json` с сортировкой и запретом payload'ов/секретов. Проверка: тесты пустого индекса, dead-letter и отсутствия `data`/токенов.
+- [x] 7.5 Описать контракты в `README.md` (раздел «Machine-readable output») с примерами `jq`. Проверка: команды из документации выполняются как написано.
 
 ## 8. Интеграционные тесты и CI
 

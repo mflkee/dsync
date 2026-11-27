@@ -1,7 +1,14 @@
+pub mod bot;
 pub mod cli;
+pub mod client;
 pub mod config;
 pub mod diagnostics;
+pub mod doctor;
+pub mod hub;
 pub mod infra;
+pub mod init;
 pub mod projects;
 pub mod protocol;
 pub mod ssh;
+pub mod trust;
+pub mod tui;

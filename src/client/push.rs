@@ -123,7 +123,7 @@ fn auto_projects_path() -> std::path::PathBuf {
             return std::path::PathBuf::from(p);
         }
     }
-    dirs::data_dir()
+    crate::infra::paths::data_dir()
         .unwrap_or_default()
         .join("dsync/auto-projects.json")
 }

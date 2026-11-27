@@ -46,7 +46,7 @@ fn sanitize_key(s: &str) -> String {
 fn expand(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
     if let Some(rest) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::infra::paths::home_dir() {
             return home.join(rest);
         }
     }
