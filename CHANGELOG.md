@@ -124,6 +124,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI на новом stable Rust (1.100)**: `cargo clippy --all-targets -- -D warnings`
+  падал в `src/bot.rs` на `unreachable_code` внутри derive-макроса
+  `teloxide 0.12 BotCommands` — код чужой, lint подавлен на уровне модуля
+  (на самом enum `#[allow]` сгенерированные sibling-элементы не покрывает).
+  Локально CI был зелёным только потому, что там стоял Rust 1.98.
 - **tmux-раскладки машин больше не смешиваются** (21.11.2026). Канал `tmux`
   хранил один общий элемент с ключом `latest`, а hub сравнивал его версии по
   хешу содержимого как по «времени»: побеждала раскладка с численно большим
