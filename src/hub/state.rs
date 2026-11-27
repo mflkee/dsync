@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tokio::sync::RwLock;
 
+use crate::infra::time::now_secs;
 use crate::protocol::{MachineState, PullOutcome, StateItem};
 
 /// Метаданные одного элемента состояния (сам payload — в отдельном файле).
@@ -88,13 +89,6 @@ pub fn cleanup_stale_temp_files(dir: &Path, max_age: std::time::Duration) -> usi
 
 const ONLINE_TIMEOUT_SECS: i64 = 35 * 60;
 
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
 /// Приводит timestamp к секундам: opencode-канал пишет миллисекунды,
 /// tmux — секунды. Значения > 1e12 — это однозначно ms (секунды сейчас
 /// ~1.7e9, и ещё ~век до 1e12).
@@ -171,7 +165,7 @@ impl HubState {
             return false;
         }
         let window = (window_days as i64).saturating_mul(86400);
-        let now = unix_now();
+        let now = now_secs();
         let mut removed = false;
         {
             let mut machines = self.machines.write().await;
@@ -584,7 +578,7 @@ impl HubState {
 
     pub async fn status(&self) -> Result<crate::protocol::StatusResponse> {
         let machines = self.machines.read().await;
-        let now = unix_now();
+        let now = now_secs();
         let mut resp = std::collections::HashMap::new();
 
         for (name, state) in machines.iter() {
@@ -794,7 +788,7 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let state = HubState::new(None, 30); // 30 дней
-            let now = unix_now();
+            let now = now_secs();
             state.update_machine(machine("recent", now - 10)).await;
             state
                 .update_machine(machine("stale", now - (31 * 86400)))
@@ -817,7 +811,7 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let state = HubState::new(None, 1); // 1 день
-            let now = unix_now();
+            let now = now_secs();
             state
                 .update_machine(machine("old", now - (2 * 86400)))
                 .await;
@@ -837,7 +831,7 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let state = HubState::new(None, 0);
-            let now = unix_now();
+            let now = now_secs();
             state
                 .update_machine(machine("ancient", now - (365 * 86400)))
                 .await;
@@ -1152,7 +1146,7 @@ mod tests {
                     vec![StateItem {
                         channel: "tmux".into(),
                         key: "notebook".into(),
-                        updated: unix_now() - 120,
+                        updated: now_secs() - 120,
                         data: "{}".into(),
                         ..Default::default()
                     }],

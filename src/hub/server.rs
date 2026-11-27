@@ -528,24 +528,23 @@ fn build_pull_command(
     url: &str,
     post_pull: Option<&str>,
 ) -> String {
-    let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
     let path_str = path.display().to_string();
-    let dir = q(&path_str);
+    let dir = crate::infra::shell::quote(&path_str);
     // Команда исполняется в POSIX-шелле на удалённой машине, поэтому путь к
     // `.git` склеиваем через `/`, а не `Path::join` — на Windows-хосте (CI)
     // он дал бы `...\.git` и сломал бы guard.
-    let dot_git = q(&format!("{}/.git", path_str.trim_end_matches('/')));
+    let dot_git = crate::infra::shell::quote(&crate::infra::shell::join_posix(&path_str, ".git"));
     let pull = format!(
         "cd {dir} && git pull --rebase --autostash origin {}",
-        q(branch)
+        crate::infra::shell::quote(branch)
     );
     let mut cmd = if url.trim().is_empty() {
         pull.clone()
     } else {
         format!(
             "if [ -d {dot_git} ]; then {pull}; else git clone {} {dir} && cd {dir} && git checkout {}; fi",
-            q(url.trim()),
-            q(branch)
+            crate::infra::shell::quote(url.trim()),
+            crate::infra::shell::quote(branch)
         )
     };
     if let Some(post) = post_pull {
@@ -570,23 +569,17 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<(), String>>,
 {
-    let mut attempts: u32 = 0;
-    let mut backoff = Duration::from_secs(5);
-    loop {
-        attempts += 1;
-        match attempt().await {
-            Ok(()) => return PullOutcome::success(attempts),
-            Err(err) => {
-                if attempts > pull_retries || !is_transient_error(&err) {
-                    return PullOutcome::failure(err, attempts);
-                }
-                let wait = backoff.min(Duration::from_secs(60));
-                if !wait.is_zero() {
-                    tokio::time::sleep(wait).await;
-                }
-                backoff = backoff.saturating_mul(2);
-            }
-        }
+    let out = crate::infra::retry::retry(
+        pull_retries.saturating_add(1),
+        Duration::from_secs(5),
+        Duration::from_secs(60),
+        |_| attempt(),
+        |e: &String| is_transient_error(e),
+    )
+    .await;
+    match out.value {
+        Ok(()) => PullOutcome::success(out.attempts),
+        Err(err) => PullOutcome::failure(err, out.attempts),
     }
 }
 

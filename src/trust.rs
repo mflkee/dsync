@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::infra::fingerprint::{FingerprintStore, StoreFormat};
 
 /// Хранилище доверенных отпечатков хаба (TOFU known-hosts).
 ///
@@ -13,15 +13,16 @@ use sha2::{Digest, Sha256};
 /// [hosts."100.89.126.211:42069"]
 /// fingerprint = "sha256:ab12..."
 /// ```
-#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TrustStore {
-    #[serde(default)]
-    hosts: BTreeMap<String, Entry>,
+    inner: FingerprintStore,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Entry {
-    fingerprint: String,
+impl Default for TrustStore {
+    fn default() -> Self {
+        Self {
+            inner: FingerprintStore::new(Self::path(), StoreFormat::Nested, Some(0o600)),
+        }
+    }
 }
 
 impl TrustStore {
@@ -33,57 +34,30 @@ impl TrustStore {
     }
 
     pub fn load() -> Self {
-        let path = Self::path();
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
+        Self {
+            inner: FingerprintStore::load(Self::path(), StoreFormat::Nested, Some(0o600)),
+        }
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        // 0600: известные хосты не секрет, но и не для всех.
-        #[cfg(unix)]
-        {
-            use std::io::Write as _;
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create(true).truncate(true).mode(0o600);
-            let mut f = opts.open(&path)?;
-            f.write_all(toml::to_string(self)?.as_bytes())?;
-            Ok(())
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&path, toml::to_string(self)?)?;
-            Ok(())
-        }
+        self.inner.save()?;
+        Ok(())
     }
 
     pub fn get(&self, addr: &str) -> Option<&str> {
-        self.hosts.get(addr).map(|e| e.fingerprint.as_str())
+        self.inner.get(addr)
     }
 
     pub fn insert(&mut self, addr: &str, fingerprint: &str) {
-        self.hosts.insert(
-            addr.to_string(),
-            Entry {
-                fingerprint: fingerprint.to_string(),
-            },
-        );
+        self.inner.insert(addr, fingerprint);
     }
 
     pub fn remove(&mut self, addr: &str) -> bool {
-        self.hosts.remove(addr).is_some()
+        self.inner.remove(addr)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.hosts
-            .iter()
-            .map(|(a, e)| (a.as_str(), e.fingerprint.as_str()))
+        self.inner.iter()
     }
 }
 

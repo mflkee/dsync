@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::{Config, OpencodeStateConfig};
+use crate::infra::time::now_secs;
 use crate::protocol::{StateItem, StatePullRequest, StatePushRequest};
 
 const TMUX_CHANNEL: &str = "tmux";
@@ -1011,13 +1012,6 @@ fn sanitize_filename(s: &str) -> String {
             }
         })
         .collect()
-}
-
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

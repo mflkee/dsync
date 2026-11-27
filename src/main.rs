@@ -4,6 +4,7 @@ mod client;
 mod config;
 mod doctor;
 mod hub;
+mod infra;
 mod init;
 mod projects;
 mod protocol;

@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::infra::fingerprint::{FingerprintStore, StoreFormat};
 
 /// TOFU-хранилище отпечатков SSH host-keys, которым доверяет хаб.
 ///
@@ -11,12 +11,11 @@ use sha2::{Digest, Sha256};
 /// отпечаток:
 ///
 /// ```toml
-/// host = "sha256:ab12..."
+/// [hosts]
+/// "100.89.198.212:22" = "sha256:ab12..."
 /// ```
-#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct SshHostTrustStore {
-    #[serde(default)]
-    hosts: BTreeMap<String, String>,
+    inner: FingerprintStore,
 }
 
 impl SshHostTrustStore {
@@ -26,34 +25,30 @@ impl SshHostTrustStore {
 
     /// Загрузка из файла; отсутствующий/битый файл = пустой store.
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
+        Self {
+            inner: FingerprintStore::load(path, StoreFormat::Flat, None),
+        }
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(path, toml::to_string(self)?)?;
+        self.inner.save_to(path)?;
         Ok(())
     }
 
     pub fn get(&self, host: &str) -> Option<&str> {
-        self.hosts.get(host).map(String::as_str)
+        self.inner.get(host)
     }
 
     pub fn insert(&mut self, host: String, fp: String) {
-        self.hosts.insert(host, fp);
+        self.inner.insert(&host, &fp);
     }
 
     pub fn remove(&mut self, host: &str) -> bool {
-        self.hosts.remove(host).is_some()
+        self.inner.remove(host)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.hosts.iter().map(|(h, f)| (h.as_str(), f.as_str()))
+        self.inner.iter()
     }
 }
 

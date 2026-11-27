@@ -114,59 +114,79 @@ pub async fn connect_with_retry(cfg: &Config) -> Result<Connection> {
 
     let endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
 
-    let mut last_connect_err = String::new();
-    for attempt in 1..=4 {
-        let config = make_client_config(expected.clone(), observed.clone())?;
-        match endpoint.connect_with(config, addr.parse()?, "dsync.local") {
-            Ok(connecting) => {
-                // Жёсткий таймаут на рукопожатие: к мёртвому хабу quinn сам
-                // висит 20-30+ с на ретраях PTO, и весь цикл из 4 попыток
-                // растягивался бы на минуты (TUI при этом висел на
-                // «⟳ refresh…» без ошибки). 5с на попытку достаточно даже
-                // для медленного разогрева хаба (спящий/загрузка).
-                match tokio::time::timeout(Duration::from_secs(5), connecting).await {
-                    Ok(Ok(conn)) => {
-                        // Первый контакт: запоминаем отпечаток (TOFU).
-                        if let Ok(obs) = observed.lock() {
-                            if let Some(fp) = obs.as_ref() {
-                                if store.get(&addr).is_none() {
-                                    warn!(
-                                        "first connection to hub {addr}: trusting \
-                                         fingerprint {fp} (add `dsync trust list` to verify)"
-                                    );
-                                    store.insert(&addr, fp);
-                                    if let Err(e) = store.save() {
-                                        warn!(
-                                            "can't persist known_hosts ({}): \
-                                             future connections will re-trust",
-                                            e
-                                        );
-                                    }
-                                }
+    // 4 попытки, пауза 2/4/8 секунд (как раньше). Жёсткий таймаут 5с на
+    // рукопожатие: к мёртвому хабу quinn сам висит 20-30+ с на ретраях PTO.
+    let out = crate::infra::retry::retry(
+        4,
+        Duration::from_secs(2),
+        Duration::from_secs(8),
+        |attempt| {
+            let expected = expected.clone();
+            let observed = observed.clone();
+            let addr = addr.clone();
+            let endpoint = &endpoint;
+            async move {
+                let config = make_client_config(expected, observed)
+                    .map_err(|e| format!("client config: {e:#}"))?;
+                let peer = addr
+                    .parse()
+                    .map_err(|e| format!("bad hub address {addr}: {e}"))?;
+                match endpoint.connect_with(config, peer, "dsync.local") {
+                    Ok(connecting) => {
+                        match tokio::time::timeout(Duration::from_secs(5), connecting).await {
+                            Ok(Ok(conn)) => Ok(conn),
+                            Ok(Err(e)) => {
+                                info!("connect attempt {attempt}/4 failed: {e}");
+                                Err(format!("{e}"))
+                            }
+                            Err(_) => {
+                                info!(
+                                    "connect attempt {attempt}/4 failed: timed out after 5s"
+                                );
+                                Err("handshake timed out after 5s".to_string())
                             }
                         }
-                        info!("connected to hub at {addr}");
-                        return Ok(conn);
                     }
-                    Ok(Err(e)) => {
-                        last_connect_err = format!("{e}");
+                    Err(e) => {
                         info!("connect attempt {attempt}/4 failed: {e}");
-                    }
-                    Err(_) => {
-                        last_connect_err = "handshake timed out after 5s".into();
-                        info!("connect attempt {attempt}/4 failed: timed out after 5s");
+                        Err(format!("{e}"))
                     }
                 }
             }
-            Err(e) => {
-                last_connect_err = format!("{e}");
-                info!("connect attempt {attempt}/4 failed: {e}");
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-    }
+        },
+        |_: &String| true,
+    )
+    .await;
 
-    anyhow::bail!("failed to connect to hub after 4 attempts: {last_connect_err}")
+    match out.value {
+        Ok(conn) => {
+            // Первый контакт: запоминаем отпечаток (TOFU).
+            if let Ok(obs) = observed.lock() {
+                if let Some(fp) = obs.as_ref() {
+                    if store.get(&addr).is_none() {
+                        warn!(
+                            "first connection to hub {addr}: trusting \
+                             fingerprint {fp} (add `dsync trust list` to verify)"
+                        );
+                        store.insert(&addr, fp);
+                        if let Err(e) = store.save() {
+                            warn!(
+                                "can't persist known_hosts ({}): \
+                                 future connections will re-trust",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+            info!("connected to hub at {addr}");
+            Ok(conn)
+        }
+        Err(err) => anyhow::bail!(
+            "failed to connect to hub after {} attempts: {err}",
+            out.attempts
+        ),
+    }
 }
 
 async fn send_recv(conn: &Connection, msg: &serde_json::Value) -> Result<Vec<u8>> {
