@@ -52,7 +52,11 @@ pub enum Commands {
         action: StateAction,
     },
     /// Run diagnostics
-    Doctor,
+    Doctor {
+        /// Machine-readable JSON (schema_version in the document)
+        #[arg(long)]
+        json: bool,
+    },
     /// Start Telegram bot
     Bot,
     /// Start interactive TUI
@@ -62,7 +66,11 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum StateAction {
     /// Show local state index (seq, failing items, dead letters)
-    List,
+    List {
+        /// Machine-readable JSON (schema_version in the document)
+        #[arg(long)]
+        json: bool,
+    },
     /// Retry dead-letter items (all, or a single `channel:key`)
     Retry { key: Option<String> },
 }

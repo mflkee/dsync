@@ -14,10 +14,7 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 pub fn write_atomic(path: &Path, data: &[u8], mode: Option<u32>) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file");
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let tmp = parent.join(format!(
         ".{name}.tmp-{}-{}",
         std::process::id(),

@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::config::Config;
+use crate::diagnostics::{Check, CheckStatus, DoctorReport};
 use crate::protocol::{StateStatusResponse, StatusResponse};
 
 enum Status {
@@ -9,7 +10,26 @@ enum Status {
     Warn(String),
 }
 
-pub async fn run(cfg: Config) -> Result<()> {
+pub async fn run(cfg: Config, json: bool) -> Result<()> {
+    if json {
+        let report = json_report(&cfg).await;
+        println!("{}", report.to_json_pretty()?);
+        if report.has_failures() {
+            anyhow::bail!(
+                "doctor: {} check(s) failed",
+                report
+                    .checks
+                    .iter()
+                    .filter(|c| c.status == crate::diagnostics::CheckStatus::Fail)
+                    .count()
+            );
+        }
+        return Ok(());
+    }
+    run_text(&cfg).await
+}
+
+async fn run_text(cfg: &Config) -> Result<()> {
     println!("dsync doctor\n");
 
     check("config", || Status::Ok);
@@ -115,7 +135,7 @@ pub async fn run(cfg: Config) -> Result<()> {
     }
 
     println!("\nchecking hub connectivity...");
-    match hub_snapshot(&cfg).await {
+    match hub_snapshot(cfg).await {
         Ok((resp, state_resp)) => {
             let hub_v = resp
                 .hub_version
@@ -291,6 +311,292 @@ fn check(label: &str, f: impl FnOnce() -> Status) {
         Status::Warn(r) => format!(" ({r})"),
     };
     println!("{sym} {label}{suffix}");
+}
+
+fn push_status(checks: &mut Vec<Check>, id: &str, label: &str, status: Status) {
+    let (level, detail) = match status {
+        Status::Ok => (CheckStatus::Ok, None),
+        Status::Skip(reason) => (CheckStatus::Skip, Some(reason.to_string())),
+        Status::Warn(reason) => (CheckStatus::Warn, Some(reason)),
+    };
+    checks.push(Check {
+        id: id.to_string(),
+        label: label.to_string(),
+        status: level,
+        detail,
+        error: None,
+    });
+}
+
+async fn json_report(cfg: &Config) -> DoctorReport {
+    let mut checks: Vec<Check> = Vec::new();
+    let mut hub_version = None;
+
+    push_status(&mut checks, "config", "config", Status::Ok);
+    push_status(&mut checks, "hub_connect", "hub_connect", {
+        match &cfg.hub_connect {
+            Some(h) if h.address.is_empty() => {
+                Status::Warn("hub_connect.address is empty".into())
+            }
+            Some(_) => Status::Ok,
+            None => Status::Skip("no hub_connect in config"),
+        }
+    });
+    push_status(&mut checks, "machine", "machine name", {
+        if cfg.machine.name.is_empty() {
+            Status::Warn("machine name is empty".into())
+        } else {
+            Status::Ok
+        }
+    });
+    push_status(&mut checks, "hub_token", "hub token", {
+        if cfg.hub_connect.is_none() {
+            Status::Skip("no hub_connect in config")
+        } else if crate::client::connect::hub_token(cfg).is_empty() {
+            Status::Warn("hub token is empty — hub will reject requests".into())
+        } else {
+            Status::Ok
+        }
+    });
+    push_status(&mut checks, "hub_trust", "hub trust (TOFU)", {
+        match &cfg.hub_connect {
+            Some(h) => {
+                if crate::trust::TrustStore::load().get(&h.address).is_some() {
+                    Status::Ok
+                } else {
+                    Status::Warn("not trusted yet — first connect will trust the hub (TOFU)".into())
+                }
+            }
+            None => Status::Skip("no hub_connect in config"),
+        }
+    });
+    push_status(&mut checks, "ssh_key", "ssh key", {
+        let key = cfg.machine.ssh_key_path();
+        if key.exists() {
+            Status::Ok
+        } else {
+            Status::Warn(format!("not found at {}", key.display()))
+        }
+    });
+    push_status(&mut checks, "netbird", "netbird route", {
+        let has_route = std::net::UdpSocket::bind("0.0.0.0:0")
+            .ok()
+            .and_then(|s| {
+                s.connect("100.89.0.1:1").ok()?;
+                s.local_addr().ok()
+            })
+            .is_some();
+        if has_route {
+            Status::Ok
+        } else {
+            Status::Warn("no 100.89.x.x route (netbird down?)".into())
+        }
+    });
+
+    if let Some(projects) = &cfg.projects {
+        for (name, p) in projects {
+            let path = crate::projects::status::expand_user_path(&p.path);
+            let status = if !path.exists() {
+                Status::Warn(format!("path not found: {}", path.display()))
+            } else if !path.join(".git").exists() {
+                Status::Warn(format!("not a git repo at {}", path.display()))
+            } else {
+                Status::Ok
+            };
+            push_status(
+                &mut checks,
+                &format!("projects.{name}"),
+                name,
+                status,
+            );
+        }
+    }
+    if let Some(ap) = &cfg.auto_projects {
+        let root = ap
+            .root
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("~/projects"));
+        checks.push(
+            Check::new("auto_projects", "auto_projects", CheckStatus::Ok)
+                .detail(format!("watching {}", root.display())),
+        );
+    }
+
+    match hub_snapshot(cfg).await {
+        std::result::Result::Ok((resp, state_resp)) => {
+            hub_version = resp.hub_version.clone();
+            let hub_v = resp
+                .hub_version
+                .as_deref()
+                .unwrap_or("unknown (old hub — обновите dsync-hub)");
+            let local_v = crate::protocol::version_string();
+            let reachable = Check::new("hub.reachable", "hub", CheckStatus::Ok)
+                .detail(format!("hub {hub_v}"));
+            checks.push(reachable);
+
+            let mut names: Vec<&String> = resp.machines.keys().collect();
+            names.sort();
+            for name in names {
+                let m = &resp.machines[name];
+                let v = m.version.as_deref().unwrap_or("unknown");
+                let matches = m.version.as_deref() == Some(local_v.as_str());
+                checks.push(
+                    Check::new(
+                        format!("hub.machine.{name}"),
+                        name,
+                        if matches { CheckStatus::Ok } else { CheckStatus::Warn },
+                    )
+                    .detail(format!("online={}, version={v}", m.online)),
+                );
+            }
+
+            if resp.hub_version.as_deref() == Some(local_v.as_str()) {
+                checks.push(
+                    Check::new("hub.version", "hub version", CheckStatus::Ok)
+                        .detail(format!("hub {hub_v} matches this client")),
+                );
+            } else {
+                checks.push(
+                    Check::new("hub.version", "hub version", CheckStatus::Warn)
+                        .detail(format!("hub {hub_v} ≠ client {local_v}"))
+                        .error("обновите хаб: git pull && cargo build --release && systemctl --user restart dsync-hub"),
+                );
+            }
+
+            if let Some(state) = state_resp {
+                for ch in &state.channels {
+                    let status = if ch.error.is_some() { CheckStatus::Warn } else { CheckStatus::Ok };
+                    let mut check = Check::new(
+                        format!("state.store.{}", ch.channel),
+                        format!("state store: {}", ch.channel),
+                        status,
+                    )
+                    .detail(format!(
+                        "{} item(s), {}, last {}",
+                        ch.item_count,
+                        human_bytes(ch.bytes),
+                        ch.last_origin
+                    ));
+                    if let Some(e) = &ch.error {
+                        check = check.error(e);
+                    }
+                    checks.push(check);
+                }
+            }
+        }
+        Err(e) => {
+            checks.push(
+                Check::new("hub.reachable", "hub", CheckStatus::Fail)
+                    .error(format!("{e:#}")),
+            );
+        }
+    }
+
+    if cfg.state.is_some() {
+        let health = crate::client::state::health();
+        let status = if health.dead.is_empty() && health.failures.is_empty() {
+            CheckStatus::Ok
+        } else {
+            CheckStatus::Warn
+        };
+        checks.push(
+            Check::new("state.local", "state (local)", status).detail(format!(
+                "seq={}, applied={}, failing={}, dead-letter={}",
+                health.seq,
+                health.applied,
+                health.failures.len(),
+                health.dead.len()
+            )),
+        );
+        for (key, d) in &health.dead {
+            checks.push(
+                Check::new(format!("state.dead.{key}"), key, CheckStatus::Warn)
+                    .error(d.error.clone()),
+            );
+        }
+        for (key, f) in &health.failures {
+            checks.push(
+                Check::new(format!("state.failure.{key}"), key, CheckStatus::Warn)
+                    .detail(format!("{} неудачн. попыт(ки), будет повторено", f.attempts)),
+            );
+        }
+    }
+
+    let data_dir = cfg.hub_data_dir();
+    if data_dir.is_dir() {
+        let orphans = count_tmp_files(&data_dir);
+        if orphans > 0 {
+            checks.push(
+                Check::new("hygiene.tmp_files", "tmp-файлы хаба", CheckStatus::Warn).detail(format!(
+                    "{orphans} осиротевш. tmp-файл(ов) в {} — удалит сам хаб при старте (старше 1 ч)",
+                    data_dir.display()
+                )),
+            );
+        }
+    }
+
+    if cfg
+        .state
+        .as_ref()
+        .and_then(|s| s.opencode.as_ref())
+        .map(|oc| oc.enabled())
+        .unwrap_or(false)
+    {
+        let status = match crate::client::state::opencode_binary() {
+            None => Status::Warn("opencode не найден — сессии не будут ни экспортироваться, ни импортироваться".into()),
+            Some(bin) => match std::process::Command::new(&bin)
+                .args(["session", "import", "--help"])
+                .output()
+            {
+                Ok(o) if String::from_utf8_lossy(&o.stdout).contains("import") => Status::Ok,
+                Ok(_) => Status::Warn(format!(
+                    "{} не поддерживает `session import` (opencode V1?) — сессии не применяются",
+                    bin.display()
+                )),
+                Err(e) => Status::Warn(format!("не удалось запустить {}: {e}", bin.display())),
+            },
+        };
+        push_status(&mut checks, "opencode.state", "opencode state", status);
+    }
+
+    if let Some(remotes) = &cfg.remote {
+        let store_path = crate::ssh::trust::SshHostTrustStore::path(&cfg.hub_data_dir());
+        for (name, r) in remotes {
+            let hostport = format!("{}:{}", r.host, r.port);
+            let state =
+                crate::ssh::client::probe_host_trust(&r.host, r.port, store_path.clone()).await;
+            let check = match state {
+                crate::ssh::trust::SshTrustState::Trusted => {
+                    Check::new(format!("ssh.{name}"), format!("{name} ({hostport})"), CheckStatus::Ok)
+                }
+                crate::ssh::trust::SshTrustState::Untrusted => Check::new(
+                    format!("ssh.{name}"),
+                    format!("{name} ({hostport})"),
+                    CheckStatus::Warn,
+                )
+                .detail("untrusted — first contact will be recorded (TOFU)"),
+                crate::ssh::trust::SshTrustState::Mismatch { expected, observed } => Check::new(
+                    format!("ssh.{name}"),
+                    format!("{name} ({hostport})"),
+                    CheckStatus::Fail,
+                )
+                .error(format!(
+                    "stored {expected}, presented {observed}; accept with `dsync trust ssh rm {hostport}`"
+                )),
+                crate::ssh::trust::SshTrustState::Unreachable(reason) => Check::new(
+                    format!("ssh.{name}"),
+                    format!("{name} ({hostport})"),
+                    CheckStatus::Warn,
+                )
+                .detail(format!("unreachable ({reason})")),
+            };
+            checks.push(check);
+        }
+    }
+
+    let mut report = DoctorReport::new(checks);
+    report.hub_version = hub_version;
+    report
 }
 
 async fn hub_snapshot(cfg: &Config) -> Result<(StatusResponse, Option<StateStatusResponse>)> {

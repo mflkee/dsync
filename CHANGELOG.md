@@ -148,6 +148,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Внутренняя инфраструктура сведена в `src/infra/`: атомарная запись,
+  time-хелперы, общий retry/backoff, POSIX-shell quoting и единое
+  TOFU-хранилище отпечатков (hub-сертификат и SSH host-key). Поведение
+  команд не меняется; remote-команды по-прежнему собираются только с `/` в
+  путях, теперь это закреплено тестами.
 - Repository cleaned: legacy Python v1 implementation removed (see git history).
 - Hub binary deployment path documented as `dsync-hub`.
 - Old `machines.json` files (with or without `pulls`) still load; the new binary

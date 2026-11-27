@@ -2,6 +2,7 @@ mod bot;
 mod cli;
 mod client;
 mod config;
+mod diagnostics;
 mod doctor;
 mod hub;
 mod infra;
@@ -83,7 +84,13 @@ async fn main() -> Result<()> {
         }
         cli::Commands::State { action } => {
             match action {
-                cli::StateAction::List => print_lines(client::state::describe()),
+                cli::StateAction::List { json } => {
+                    if json {
+                        println!("{}", client::state::report().to_json_pretty()?);
+                    } else {
+                        print_lines(client::state::describe());
+                    }
+                }
                 cli::StateAction::Retry { key } => {
                     let n = client::state::retry_dead(key.as_deref());
                     if n == 0 {
@@ -95,7 +102,7 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        cli::Commands::Doctor => doctor::run(cfg).await,
+        cli::Commands::Doctor { json } => doctor::run(cfg, json).await,
         cli::Commands::Bot => bot::run(cfg).await,
         cli::Commands::Tui => tui::run(cfg),
         cli::Commands::Init | cli::Commands::Trust { .. } => unreachable!(),
@@ -112,7 +119,12 @@ fn init_tracing(tui_mode: bool) {
     };
 
     if !tui_mode {
-        tracing_subscriber::fmt().with_env_filter(filter()).init();
+        tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            // stdout — только результат команды (JSON/строки); логи в stderr,
+            // иначе `dsync status --json | jq` ломается на info-строках.
+            .with_writer(std::io::stderr)
+            .init();
         return;
     }
 

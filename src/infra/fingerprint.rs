@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use super::atomic::write_atomic;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StoreFormat {
+    #[default]
     Nested,
     Flat,
 }
@@ -44,12 +45,6 @@ struct NestedEntry {
 struct FlatDoc {
     #[serde(default)]
     hosts: BTreeMap<String, String>,
-}
-
-impl Default for StoreFormat {
-    fn default() -> Self {
-        Self::Nested
-    }
 }
 
 impl FingerprintStore {

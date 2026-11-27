@@ -140,9 +140,7 @@ pub async fn connect_with_retry(cfg: &Config) -> Result<Connection> {
                                 Err(format!("{e}"))
                             }
                             Err(_) => {
-                                info!(
-                                    "connect attempt {attempt}/4 failed: timed out after 5s"
-                                );
+                                info!("connect attempt {attempt}/4 failed: timed out after 5s");
                                 Err("handshake timed out after 5s".to_string())
                             }
                         }
@@ -353,7 +351,14 @@ pub async fn status(cfg: Config) -> Result<Vec<String>> {
 /// JSON-вывод статуса для мониторинга/скриптов (`dsync status --json`).
 pub async fn status_json(cfg: Config) -> Result<String> {
     let resp = status_response(&cfg).await?;
-    Ok(serde_json::to_string_pretty(&resp)?)
+    let h = crate::client::state::health();
+    let local = crate::diagnostics::StateSummary {
+        seq: h.seq,
+        applied: h.applied,
+        failing: h.failures.len(),
+        dead_letter: h.dead.len(),
+    };
+    crate::diagnostics::StatusReport::from_protocol(resp, local).to_json_pretty()
 }
 
 async fn status_response(cfg: &Config) -> Result<StatusResponse> {

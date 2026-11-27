@@ -169,6 +169,38 @@ pub fn health() -> StateHealth {
     }
 }
 
+/// Машиночитаемая сводка локального state-индекса (`dsync state list --json`).
+pub fn report() -> crate::diagnostics::StateReport {
+    use crate::diagnostics::{DeadReport, FailureReport, StateReport, SCHEMA_VERSION};
+    let h = health();
+    StateReport {
+        schema_version: SCHEMA_VERSION,
+        seq: h.seq,
+        applied: h.applied,
+        failures: h
+            .failures
+            .into_iter()
+            .map(|(key, f)| FailureReport {
+                key,
+                attempts: f.attempts,
+                updated: f.updated,
+                seq: f.seq,
+            })
+            .collect(),
+        dead_letters: h
+            .dead
+            .into_iter()
+            .map(|(key, d)| DeadReport {
+                key,
+                updated: d.updated,
+                seq: d.seq,
+                error: d.error,
+                at: d.at,
+            })
+            .collect(),
+    }
+}
+
 /// Человекочитаемая сводка локального state-индекса (`dsync state list`).
 pub fn describe() -> Vec<String> {
     let h = health();
