@@ -12,6 +12,8 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// Записать `data` в `path` атомарно. `mode` — права файла на Unix
 /// (например `Some(0o600)`); на других платформах игнорируется.
 pub fn write_atomic(path: &Path, data: &[u8], mode: Option<u32>) -> io::Result<()> {
+    #[cfg(not(unix))]
+    let _ = mode;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
