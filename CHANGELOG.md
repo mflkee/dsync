@@ -129,6 +129,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `teloxide 0.12 BotCommands` — код чужой, lint подавлен на уровне модуля
   (на самом enum `#[allow]` сгенерированные sibling-элементы не покрывает).
   Локально CI был зелёным только потому, что там стоял Rust 1.98.
+  Заодно починен Windows-тест `pull_command_clones_when_dir_missing_else_pulls`:
+  путь к `.git` для удалённой POSIX-команды склеивается через `/`, а не
+  `Path::join` (на Windows он давал `...\.git` и ломал clone-guard).
 - **tmux-раскладки машин больше не смешиваются** (21.11.2026). Канал `tmux`
   хранил один общий элемент с ключом `latest`, а hub сравнивал его версии по
   хешу содержимого как по «времени»: побеждала раскладка с численно большим

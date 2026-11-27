@@ -529,8 +529,12 @@ fn build_pull_command(
     post_pull: Option<&str>,
 ) -> String {
     let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-    let dir = q(&path.display().to_string());
-    let dot_git = q(&path.join(".git").display().to_string());
+    let path_str = path.display().to_string();
+    let dir = q(&path_str);
+    // Команда исполняется в POSIX-шелле на удалённой машине, поэтому путь к
+    // `.git` склеиваем через `/`, а не `Path::join` — на Windows-хосте (CI)
+    // он дал бы `...\.git` и сломал бы guard.
+    let dot_git = q(&format!("{}/.git", path_str.trim_end_matches('/')));
     let pull = format!(
         "cd {dir} && git pull --rebase --autostash origin {}",
         q(branch)
