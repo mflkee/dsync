@@ -4,7 +4,7 @@ use super::*;
 
 /// Счётчик неудачных применений элемента (для retry/backoff).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub pub(crate) struct Failure {
+pub struct Failure {
     pub attempts: u32,
     pub updated: i64,
     /// hub-seq элемента — чтобы вернуться к нему на следующем pull.
@@ -15,7 +15,7 @@ pub pub(crate) struct Failure {
 /// канал: следующие элементы применяются, а этот ждёт нового `updated`
 /// (тогда origin пришлёт новую версию) или `dsync state retry`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub pub(crate) struct DeadItem {
+pub struct DeadItem {
     pub updated: i64,
     pub seq: i64,
     pub error: String,
@@ -106,7 +106,7 @@ impl StateIndex {
 }
 
 /// Публичная сводка локального state-индекса (для `doctor`/`state list`).
-pub pub(crate) struct StateHealth {
+pub struct StateHealth {
     pub seq: i64,
     pub applied: usize,
     pub failures: Vec<(String, Failure)>,
@@ -120,7 +120,7 @@ pub fn health() -> StateHealth {
     let mut dead: Vec<_> = idx.dead.into_iter().collect();
     dead.sort_by(|a, b| a.0.cmp(&b.0));
     StateHealth {
-        pub(crate) seq: idx.seq,
+        seq: idx.seq,
         applied: idx.items.len(),
         failures,
         dead,
@@ -133,16 +133,16 @@ pub fn report() -> crate::diagnostics::StateReport {
     let h = health();
     StateReport {
         schema_version: SCHEMA_VERSION,
-        pub(crate) seq: h.seq,
+        seq: h.seq,
         applied: h.applied,
-        pub(crate) failures: h
+        failures: h
             .failures
             .into_iter()
             .map(|(key, f)| FailureReport {
                 key,
                 attempts: f.attempts,
                 updated: f.updated,
-                pub(crate) seq: f.seq,
+                seq: f.seq,
             })
             .collect(),
         dead_letters: h
@@ -151,7 +151,7 @@ pub fn report() -> crate::diagnostics::StateReport {
             .map(|(key, d)| DeadReport {
                 key,
                 updated: d.updated,
-                pub(crate) seq: d.seq,
+                seq: d.seq,
                 error: d.error,
                 at: d.at,
             })
@@ -275,7 +275,7 @@ pub(crate) fn record_failures(
         let f = idx.failures.entry(k.clone()).or_insert(Failure {
             attempts: 0,
             updated: it.updated,
-            pub(crate) seq: it.seq,
+            seq: it.seq,
         });
         if f.updated != it.updated {
             // Пришла новая версия сбойного элемента — считаем попытки заново.
@@ -295,7 +295,7 @@ pub(crate) fn record_failures(
                 k.clone(),
                 DeadItem {
                     updated: it.updated,
-                    pub(crate) seq: it.seq,
+                    seq: it.seq,
                     error,
                     at: now_secs(),
                 },

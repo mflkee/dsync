@@ -29,21 +29,20 @@ use crate::config::{Config, OpencodeStateConfig};
 use crate::infra::time::now_secs;
 use crate::protocol::{StateItem, StatePullRequest, StatePushRequest};
 
-const TMUX_CHANNEL: &str = "tmux";
-const OPENCODE_CHANNEL: &str = "opencode";
+pub(crate) const TMUX_CHANNEL: &str = "tmux";
+pub(crate) const OPENCODE_CHANNEL: &str = "opencode";
 /// Не приближаемся к hub `max_message_size` (8 MB по умолчанию).
-const MAX_BATCH_BYTES: usize = 6 * 1024 * 1024;
+pub(crate) const MAX_BATCH_BYTES: usize = 6 * 1024 * 1024;
 /// Размер страницы при pull состояния: хаб отдаёт стор порциями.
-const PAGE_BYTES: u64 = 6 * 1024 * 1024;
+pub(crate) const PAGE_BYTES: u64 = 6 * 1024 * 1024;
 /// Предохранитель от бесконечной пагинации (баг/старый хаб).
-const MAX_PAGES: usize = 64;
+pub(crate) const MAX_PAGES: usize = 64;
 /// Таймаут одной state-операции: загрузка/выгрузка может быть многомегабайтной.
-const STATE_TIMEOUT: Duration = Duration::from_secs(180);
+pub(crate) const STATE_TIMEOUT: Duration = Duration::from_secs(180);
 
 // ---------------------------------------------------------------------------
 // Локальный индекс
 // ---------------------------------------------------------------------------
-
 
 mod apply;
 mod index;
@@ -57,22 +56,13 @@ pub use apply::{apply, ApplyReport};
 pub use index::{
     describe, get_seq, health, report, retry_dead, set_seq, DeadItem, Failure, StateHealth,
 };
-pub use opencode::opencode_binary;
 pub(crate) use index::{
     mark_synced, prune_unwanted_index, record_failures, set_seq_force, StateIndex,
 };
+pub use opencode::opencode_binary;
+pub(crate) use opencode::refresh_opencode_index;
+#[cfg(test)]
 pub(crate) use tmux::content_hash;
-
-pub(crate) const TMUX_CHANNEL: &str = "tmux";
-pub(crate) const OPENCODE_CHANNEL: &str = "opencode";
-/// Не приближаемся к hub `max_message_size` (8 MB по умолчанию).
-pub(crate) const MAX_BATCH_BYTES: usize = 6 * 1024 * 1024;
-/// Размер страницы при pull состояния: хаб отдаёт стор порциями.
-pub(crate) const PAGE_BYTES: u64 = 6 * 1024 * 1024;
-/// Предохранитель от бесконечной пагинации (баг/старый хаб).
-pub(crate) const MAX_PAGES: usize = 64;
-/// Таймаут одной state-операции: загрузка/выгрузка может быть многомегабайтной.
-pub(crate) const STATE_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Поведение одного канала состояния (tmux/opencode).
 pub(crate) trait StateChannel {

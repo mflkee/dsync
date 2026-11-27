@@ -1,5 +1,7 @@
 //! Канал opencode: экспорт/импорт сессий по проектам.
 
+use serde::Deserialize;
+
 use super::*;
 
 pub(crate) struct OpencodeChannel;
@@ -88,7 +90,10 @@ impl StateChannel for OpencodeChannel {
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        Ok(format!("opencode: импортирована сессия {} → {dir}", item.key))
+        Ok(format!(
+            "opencode: импортирована сессия {} → {dir}",
+            item.key
+        ))
     }
 }
 
@@ -118,6 +123,7 @@ pub(crate) fn refresh_opencode_index(projects: &[PathBuf]) {
     }
 }
 
+#[derive(Debug, Deserialize)]
 struct SessionRow {
     id: String,
     #[serde(default)]
@@ -209,4 +215,3 @@ fn export_session(bin: &Path, project: &Path, id: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 // Утилиты
 // ---------------------------------------------------------------------------
-

@@ -22,9 +22,9 @@
 
 ## 4. Client state: каналы и оркестрация
 
-- [ ] 4.1 Вынести локальный индекс (`seq`, failures, dead-letter) в `client/state/index.rs`. Проверка: тесты retry/dead-letter/`prune_unwanted_index` зелёные.
-- [ ] 4.2 Ввести trait `StateChannel` и разнести `tmux`/`opencode` по модулям; оркестрация тестируется с фейковым каналом. Проверка: `cargo test client::state` зелёный, есть тест оркестрации на фейке.
-- [ ] 4.3 Вынести батчи/пагинацию/применение в `client/state/mod.rs`; поведение «уже применённое не применяем» сохранено. Проверка: тесты `apply_skips_already_applied_items`, `foreign_tmux_snapshot_is_never_applied` зелёные.
+- [x] 4.1 Вынести локальный индекс (`seq`, failures, dead-letter) в `client/state/index.rs`. Проверка: тесты retry/dead-letter/`prune_unwanted_index` зелёные.
+- [x] 4.2 Ввести trait `StateChannel` и разнести `tmux`/`opencode` по модулям; оркестрация тестируется с фейковым каналом. Проверка: `cargo test client::state` зелёный, есть тест оркестрации на фейке.
+- [x] 4.3 Вынести батчи/пагинацию/применение в `client/state/mod.rs`; поведение «уже применённое не применяем» сохранено. Проверка: тесты `apply_skips_already_applied_items`, `foreign_tmux_snapshot_is_never_applied` зелёные.
 
 ## 5. TUI: экраны и редактор конфига
 

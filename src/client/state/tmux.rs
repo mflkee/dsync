@@ -64,8 +64,7 @@ impl StateChannel for TmuxChannel {
         update_last_symlink(&dir, &fname)?;
 
         let mut msg = format!("tmux: снапшот от {} → {fname}", item.origin);
-        if cfg.state.as_ref().map(|s| s.tmux_restore).unwrap_or(false) && trigger_tmux_restore()
-        {
+        if cfg.state.as_ref().map(|s| s.tmux_restore).unwrap_or(false) && trigger_tmux_restore() {
             msg.push_str(" (restore запущен)");
         }
         Ok(msg)
@@ -187,5 +186,3 @@ fn update_last_symlink(_dir: &Path, _target: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Хелперы: opencode
 // ---------------------------------------------------------------------------
-
-
