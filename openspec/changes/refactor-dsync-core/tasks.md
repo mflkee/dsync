@@ -16,8 +16,8 @@
 
 ## 3. Hub server: serve, dispatch, pull
 
-- [ ] 3.1 Вынести accept-loop и диспетчер запросов в `hub/{serve,dispatch}.rs`; envelope-ошибки не меняются. Проверка: тесты конкуренции/лимитов и `serve_loop` зелёные.
-- [ ] 3.2 Вынести pull-planner/executor в `hub/pull/{mod,command,retry}.rs`; `pull_skip_reason` и порядок «started/unchanged/offline» сохраняются. Проверка: тесты pull-plan и snapshot remote-команды зелёные.
+- [x] 3.1 Вынести accept-loop и диспетчер запросов в `hub/{serve,dispatch}.rs`; envelope-ошибки не меняются. Проверка: тесты конкуренции/лимитов и `serve_loop` зелёные.
+- [x] 3.2 Вынести pull-planner/executor в `hub/pull/{mod,command,retry}.rs`; `pull_skip_reason` и порядок «started/unchanged/offline» сохраняются. Проверка: тесты pull-plan и snapshot remote-команды зелёные.
 - [ ] 3.3 Ввести `HubError` на границах и заменить `Result<_, String>` там, где это не wire-формат; строкой остаётся только `PullOutcome.error`. Проверка: `cargo clippy --all-targets -- -D warnings`, тесты протокола/пуллов зелёные.
 
 ## 4. Client state: каналы и оркестрация
