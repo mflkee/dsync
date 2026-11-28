@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Activity, AlertTriangle, Clock3, Server, Skull } from "lucide-react";
 
 import { ActionButton } from "@/components/action-button";
@@ -54,6 +55,11 @@ function Stat({
 
 export default function DashboardPage() {
   const [interval] = useRefreshInterval();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(id);
+  }, []);
   const { data, error, updatedAt, loading, reload } = usePolling<Payload>(
     "/api/status",
     interval * 1000,
@@ -72,7 +78,7 @@ export default function DashboardPage() {
     (n, m) => n + Object.values(m.pulls).filter((p) => !p.ok).length,
     0,
   );
-  const stale = !!updatedAt && Date.now() - updatedAt > interval * 3 * 1000;
+  const stale = !!updatedAt && now - updatedAt > interval * 3 * 1000;
 
   return (
     <div>
@@ -145,7 +151,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Server className="h-4 w-4" /> Последние push'и
+              <Server className="h-4 w-4" /> Последние push&apos;и
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">

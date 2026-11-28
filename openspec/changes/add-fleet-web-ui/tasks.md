@@ -22,7 +22,7 @@
 - [x] 3.3 `lib/jobs.ts`: очередь, один worker, конфликт на цель, TTL, ring-buffer вывода. Проверка: тесты конфликта, таймаута, перехода `queued→running→ok/failed`.
 - [x] 3.4 `lib/audit.ts`: JSONL 0600, ротация 5 МБ, чтение последних N, без секретов. Проверка: тесты записи/чтения/ротации.
 - [x] 3.5 Route handlers: `GET /api/health|status|state|jobs|jobs/{id}|audit`, `POST /api/actions|doctor`; единый формат ошибок, `no-store`. Проверка: тесты route handlers с фиктивным `DSYNC_BIN` (200/400/409/500).
-- [ ] 3.6 Проверка Origin/Host и Content-Type на POST, лимит тела 16 КБ, CSP/заголовки безопасности. Проверка: тесты «cross-origin POST → 403», «не-JSON → 415», «большое тело → 413».
+- [x] 3.6 Проверка Origin/Host и Content-Type на POST, лимит тела 16 КБ, CSP/заголовки безопасности. Проверка: тесты «cross-origin POST → 403», «не-JSON → 415», «большое тело → 413».
 
 ## 4. Экраны: Dashboard и Machines
 
@@ -36,7 +36,7 @@
 - [x] 5.2 State: tabs tmux/opencode, dead-letter с причиной, retry одного/всех с подтверждением, подпись «локальный state машины панели». Проверка: Playwright + тест 400 на несуществующий ключ.
 - [x] 5.3 Doctor: запуск, индикатор, ok/warn/fail-бейджи, версии и время, сохранение прошлого результата до завершения нового. Проверка: Playwright на трёх фикстурах.
 - [x] 5.4 Activity: список задач и аудит, обновление по опросу, отметка «задача прервана» после рестарта. Проверка: тест с перезапуском процесса/фикстурой.
-- [ ] 5.5 Settings: интервал 5–60 с в localStorage, тема, read-only хаб/наличие токена; несовместимость `schema_version` и proto < 3 → баннер и disabled deploy. Проверка: Playwright «старый хаб».
+- [x] 5.5 Settings: интервал 5–60 с в localStorage, тема, read-only хаб/наличие токена; несовместимость `schema_version` и proto < 3 → баннер и disabled deploy. Проверка: Playwright «старый хаб».
 
 ## 6. Тесты, CI и запуск
 

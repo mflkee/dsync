@@ -32,7 +32,7 @@ export function usePolling<T>(url: string, intervalMs = 10_000): Polled<T> {
   }, [url]);
 
   useEffect(() => {
-    void load();
+    const kickoff = setTimeout(() => void load(), 0);
     const id = setInterval(() => {
       if (!document.hidden) void load();
     }, intervalMs);
@@ -41,6 +41,7 @@ export function usePolling<T>(url: string, intervalMs = 10_000): Polled<T> {
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
+      clearTimeout(kickoff);
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
