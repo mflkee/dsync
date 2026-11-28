@@ -1,6 +1,6 @@
 //! Обработчики запросов клиентов: push/pull/state/status.
 
-use super::pull::trigger_remote_pulls;
+use super::pull::{deploy_all, deploy_named, trigger_remote_pulls};
 use super::*;
 
 pub(super) async fn handle_push(
@@ -34,6 +34,66 @@ pub(super) async fn handle_push(
     } else {
         error_envelope("invalid push request")
     }
+}
+
+pub(crate) async fn handle_deploy(
+    val: serde_json::Value,
+    state: &Arc<HubState>,
+    cfg: &Config,
+) -> serde_json::Value {
+    let req = match serde_json::from_value::<DeployRequest>(val) {
+        Ok(req) => req,
+        Err(_) => return error_envelope("invalid deploy request"),
+    };
+    if req.target_machine == req.machine {
+        return error_envelope("target machine is the requesting machine");
+    }
+    let Some(remotes) = cfg.remote.as_ref() else {
+        return error_envelope("no [remote.*] config on hub");
+    };
+    if !remotes.contains_key(&req.target_machine) {
+        return error_envelope(format!(
+            "unknown target machine {} (known: {})",
+            req.target_machine,
+            remotes.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    let results = match req.project.as_deref() {
+        Some(project) => match deploy_named(
+            cfg,
+            state,
+            &req.machine,
+            &req.target_machine,
+            project,
+            req.force,
+        )
+        .await
+        {
+            Some(r) => vec![r],
+            None => {
+                return error_envelope(format!("unknown project {project}"));
+            }
+        },
+        None => deploy_all(cfg, state, &req.machine, &req.target_machine, req.force).await,
+    };
+    if results.is_empty() {
+        return error_envelope(format!(
+            "no projects configured for machine {}",
+            req.target_machine
+        ));
+    }
+    let ok = results.iter().all(|r| r.ok);
+    serde_json::to_value(DeployResponse {
+        ok,
+        results,
+        error: if ok {
+            None
+        } else {
+            Some("one or more deploys failed".into())
+        },
+    })
+    .unwrap_or_default()
 }
 
 pub(super) async fn handle_pull(val: serde_json::Value, state: &HubState) -> serde_json::Value {

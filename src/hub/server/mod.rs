@@ -11,12 +11,16 @@ mod serve;
 mod tests;
 
 #[cfg(test)]
+pub(crate) use dispatch::handle_deploy;
+#[cfg(test)]
 pub(crate) use pull::{
     build_pull_command, is_transient_error, pull_skip_reason, retry_pull, should_pull_project,
 };
 use serve::serve_loop;
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,8 +34,9 @@ use tracing::{error, info, warn};
 use crate::config::{Config, SecretTokens};
 use crate::infra::time::now_secs;
 use crate::protocol::{
-    error_envelope, PullOutcome, PullRequest, PullResponse, PushRequest, PushResponse,
-    StatePullRequest, StatePullResponse, StatePushRequest, StatePushResponse, StateStatusRequest,
+    error_envelope, DeployRequest, DeployResponse, DeployResult, PullOutcome, PullRequest,
+    PullResponse, PushRequest, PushResponse, StatePullRequest, StatePullResponse, StatePushRequest,
+    StatePushResponse, StateStatusRequest,
 };
 
 use super::error::HubError;

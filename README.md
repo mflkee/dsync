@@ -63,6 +63,7 @@ dsync tui
 | `dsync status` | Show online/offline machines, their sync state, last per-project SSH-pull outcomes, hub version and local state (seq/failing/dead-letter). `--json` for monitoring |
 | `dsync state list` | Local non-git state index: seq, failing items, dead letters |
 | `dsync state retry [channel:key]` | Re-queue dead-letter items for the next pull |
+| `dsync deploy --machine <m> [--project <p>] [--force]` | Deploy a project (or all applicable) on a machine now via the hub; `--force` bypasses change-detection |
 | `dsync doctor` | Diagnose config, SSH keys, hub auth token, SSH host trust, network, hub reachability, hub/client version drift, state store, orphan tmp files, opencode V1/V2 |
 | `dsync tui` | Full TUI: dashboard, projects, machines, doctor, log, config editor |
 | `dsync hub` | Run the hub daemon (QUIC server + SSH-pull coordinator) |

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dsync deploy`**: целевой SSH-пулл проекта на машину через хаб
+  (`--force` игнорирует change-detection). Новый QUIC-запрос `deploy`,
+  протокол поднят до **v3**; старые сообщения не изменились. Хаб проверяет
+  токен, цель и проект, не запускает дубли и пишет аудит в лог.
 - **Machine-readable diagnostics**: `dsync doctor --json` и
   `dsync state list --json`; `dsync status --json` получил `schema_version` и
   `local_state`. Логи в не-TUI режиме переехали в stderr, поэтому stdout

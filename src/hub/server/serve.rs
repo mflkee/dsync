@@ -1,8 +1,8 @@
 //! Accept-loop QUIC и проверка hub-токена.
 
 use super::dispatch::{
-    handle_pull, handle_push, handle_state_pull, handle_state_push, handle_state_status,
-    handle_status,
+    handle_deploy, handle_pull, handle_push, handle_state_pull, handle_state_push,
+    handle_state_status, handle_status,
 };
 use super::*;
 
@@ -80,7 +80,7 @@ async fn handle_connection(
                         let kind = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
                         let resp = match kind {
                             "push" | "pull" | "status" | "state_push" | "state_pull"
-                            | "state_status"
+                            | "state_status" | "deploy"
                                 if authorized(&val, cfg.hub.as_ref()) =>
                             {
                                 match kind {
@@ -89,11 +89,12 @@ async fn handle_connection(
                                     "state_push" => handle_state_push(val, &state).await,
                                     "state_pull" => handle_state_pull(val, &state, &cfg).await,
                                     "state_status" => handle_state_status(val, &state).await,
+                                    "deploy" => handle_deploy(val, &state, &cfg).await,
                                     _ => handle_status(&state).await,
                                 }
                             }
                             "push" | "pull" | "status" | "state_push" | "state_pull"
-                            | "state_status" => {
+                            | "state_status" | "deploy" => {
                                 let machine =
                                     val.get("machine").and_then(|v| v.as_str()).unwrap_or("?");
                                 warn!("authentication failed for machine '{machine}'");

@@ -306,3 +306,241 @@ pub(crate) fn is_transient_error(err: &str) -> bool {
         && !e.contains("host key mismatch")
         && !e.contains("authentication failed")
 }
+
+/// Разобранный план деплоя проекта на конкретную машину.
+struct DeployPlan {
+    name: String,
+    path: PathBuf,
+    branch: String,
+    url: String,
+    post_pull: Option<String>,
+    commit: String,
+}
+
+fn resolve_deploy_plan(
+    cfg: &Config,
+    machines: &HashMap<String, crate::protocol::MachineState>,
+    name: &str,
+) -> Option<DeployPlan> {
+    let static_cfg = cfg.projects.as_ref().and_then(|p| p.get(name));
+    let source = machines
+        .values()
+        .flat_map(|m| m.projects.iter())
+        .find(|p| p.name == name);
+    if static_cfg.is_none() && source.is_none() {
+        return None;
+    }
+    let path = static_cfg
+        .map(|p| crate::projects::status::expand_user_path(&p.path))
+        .or_else(|| {
+            source.map(|p| crate::projects::status::expand_user_path(Path::new(&p.path)))
+        })?;
+    let branch = static_cfg
+        .and_then(|p| p.branch.clone())
+        .filter(|b| !b.is_empty())
+        .or_else(|| source.map(|p| p.branch.clone()).filter(|b| !b.is_empty()))
+        .or_else(|| {
+            cfg.auto_projects
+                .as_ref()
+                .and_then(|a| a.branch.clone())
+                .filter(|b| !b.is_empty())
+        })
+        .unwrap_or_else(|| "main".to_string());
+    Some(DeployPlan {
+        name: name.to_string(),
+        path,
+        branch,
+        url: source.map(|p| p.url.clone()).unwrap_or_default(),
+        post_pull: static_cfg.and_then(|p| p.post_pull.clone()),
+        commit: source.map(|p| p.commit_hash.clone()).unwrap_or_default(),
+    })
+}
+
+/// On-demand деплой одного проекта на машину (в отличие от push-плана —
+/// синхронный: панель/CLI ждут результат).
+async fn deploy_one(
+    cfg: &Config,
+    state: &Arc<HubState>,
+    requester: &str,
+    target: &str,
+    plan: &DeployPlan,
+    force: bool,
+) -> DeployResult {
+    let started_at = now_secs();
+    let mut result = DeployResult {
+        machine: target.to_string(),
+        project: plan.name.clone(),
+        force,
+        ok: false,
+        attempts: 0,
+        started_at,
+        finished_at: started_at,
+        message: None,
+        error: None,
+    };
+    let key = format!("{target}/{}", plan.name);
+    if !state.try_begin_deploy(&key).await {
+        result.error = Some("deploy уже выполняется для этой цели".into());
+        result.finished_at = now_secs();
+        return result;
+    }
+
+    let Some(remote_cfg) = cfg.remote.as_ref() else {
+        result.error = Some("no [remote.*] config on hub".into());
+        state.finish_deploy(&key).await;
+        result.finished_at = now_secs();
+        return result;
+    };
+    let Some(remote) = remote_cfg.get(target) else {
+        result.error = Some(format!("unknown target machine {target}"));
+        state.finish_deploy(&key).await;
+        result.finished_at = now_secs();
+        return result;
+    };
+
+    let offline_skip = cfg
+        .hub
+        .as_ref()
+        .map(|h| h.offline_skip_after_secs)
+        .unwrap_or_else(crate::config::default_offline_skip_after_secs);
+    let last_push = state.last_push(target).await;
+    let now = now_secs();
+    let offline = match last_push {
+        Some(ts) => now.saturating_sub(ts) > offline_skip as i64,
+        None => true,
+    };
+    if offline {
+        result.error = Some("машина офлайн — SSH-пулл не запускался".into());
+        state.finish_deploy(&key).await;
+        result.finished_at = now_secs();
+        return result;
+    }
+
+    if !force
+        && !plan.commit.is_empty()
+        && state.deployed_commit(target, &plan.name).await.as_deref() == Some(&plan.commit)
+    {
+        result.ok = true;
+        result.message = Some("уже развёрнуто (commit совпадает)".into());
+        state.finish_deploy(&key).await;
+        result.finished_at = now_secs();
+        return result;
+    }
+
+    let cmd = build_pull_command(
+        &plan.path,
+        &plan.branch,
+        &plan.url,
+        plan.post_pull.as_deref(),
+    );
+    let retries = cfg
+        .hub
+        .as_ref()
+        .map(|h| h.pull_retries)
+        .unwrap_or(crate::config::default_pull_retries());
+    let pull_timeout = cfg
+        .hub
+        .as_ref()
+        .map(|h| h.pull_timeout_secs)
+        .unwrap_or_else(crate::config::default_pull_timeout_secs);
+    let store_path = crate::ssh::trust::SshHostTrustStore::path(&cfg.hub_data_dir());
+    let ssh_key = cfg.machine.ssh_key_path();
+
+    info!(
+        "deploy from {requester}: {target}/{} force={force}",
+        plan.name
+    );
+    let outcome = retry_pull(retries, || {
+        let cmd = cmd.clone();
+        let host = remote.host.clone();
+        let user = remote.user.clone();
+        let store_path = store_path.clone();
+        let ssh_key = ssh_key.clone();
+        async move {
+            match crate::ssh::client::exec_with_key_verifying_split(
+                &host,
+                remote.port,
+                &user,
+                &cmd,
+                &ssh_key,
+                store_path,
+                crate::ssh::client::DEFAULT_SSH_TIMEOUT,
+                Duration::from_secs(pull_timeout),
+            )
+            .await
+            {
+                Ok(_) => Ok(()),
+                Err(e) => Err(format!("{e:#}")),
+            }
+        }
+    })
+    .await;
+
+    state.record_pull(target, &plan.name, &outcome).await;
+    result.ok = outcome.ok;
+    result.attempts = outcome.attempts;
+    result.error = outcome.error.clone();
+    if outcome.ok {
+        state
+            .record_deployed(target, &plan.name, &plan.commit)
+            .await;
+    }
+    result.finished_at = now_secs();
+    info!(
+        "deploy {target}/{}: ok={} attempts={} ({}s)",
+        plan.name,
+        result.ok,
+        result.attempts,
+        result.finished_at.saturating_sub(started_at)
+    );
+    state.finish_deploy(&key).await;
+    result
+}
+
+/// Деплой всех явных проектов, применимых к машине (когда проект не указан).
+pub(super) async fn deploy_all(
+    cfg: &Config,
+    state: &Arc<HubState>,
+    requester: &str,
+    target: &str,
+    force: bool,
+) -> Vec<DeployResult> {
+    let machines = state.all_machines().await;
+    let mut names: Vec<String> = cfg
+        .projects
+        .as_ref()
+        .map(|p| {
+            p.iter()
+                .filter(|(_, pc)| {
+                    pc.machines
+                        .as_ref()
+                        .map(|m| m.iter().any(|x| x == target))
+                        .unwrap_or(true)
+                })
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let mut out = Vec::new();
+    for name in names {
+        if let Some(plan) = resolve_deploy_plan(cfg, &machines, &name) {
+            out.push(deploy_one(cfg, state, requester, target, &plan, force).await);
+        }
+    }
+    out
+}
+
+/// Найти план для одного проекта; None — неизвестный проект.
+pub(super) async fn deploy_named(
+    cfg: &Config,
+    state: &Arc<HubState>,
+    requester: &str,
+    target: &str,
+    project: &str,
+    force: bool,
+) -> Option<DeployResult> {
+    let machines = state.all_machines().await;
+    let plan = resolve_deploy_plan(cfg, &machines, project)?;
+    Some(deploy_one(cfg, state, requester, target, &plan, force).await)
+}

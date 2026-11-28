@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Версия протокола hub↔client. Растёт при изменении семантики сообщений;
 /// обе стороны показывают её в `dsync status`/`doctor`, чтобы дрейф версий
 /// было видно, а не угадывалось по таймаутам.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Человекочитаемая версия бинаря: `0.1.0+abc1234 (proto 2)`.
 /// Git-хеш приходит из `build.rs`; без него (сборка из tarball) — просто версия.
@@ -251,6 +251,46 @@ pub struct StatePullResponse {
     /// Остались элементы после этой страницы.
     #[serde(default)]
     pub has_more: bool,
+}
+
+/// Client → hub: deploy one project (or all applicable) on a target machine now.
+///
+/// `machine` — requester (token owner). The hub validates the target against
+/// `[remote.*]` and the project against its config/announced projects.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeployRequest {
+    pub machine: String,
+    #[serde(default)]
+    pub token: String,
+    pub target_machine: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeployResult {
+    pub machine: String,
+    pub project: String,
+    pub force: bool,
+    pub ok: bool,
+    pub attempts: u32,
+    pub started_at: i64,
+    pub finished_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeployResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub results: Vec<DeployResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Client → hub: read-only summary of the state store (State tab in the TUI).

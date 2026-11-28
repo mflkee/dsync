@@ -93,6 +93,18 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
+        cli::Commands::Deploy {
+            machine,
+            project,
+            force,
+        } => {
+            let (lines, ok) = client::deploy(cfg, machine, project, force).await?;
+            print_lines(lines);
+            if !ok {
+                anyhow::bail!("deploy failed");
+            }
+            Ok(())
+        }
         cli::Commands::Doctor { json } => doctor::run(cfg, json).await,
         cli::Commands::Bot => bot::run(cfg).await,
         cli::Commands::Tui => tui::run(cfg),

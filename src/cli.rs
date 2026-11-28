@@ -51,6 +51,18 @@ pub enum Commands {
         #[command(subcommand)]
         action: StateAction,
     },
+    /// Deploy a project (or all applicable) on a machine now, via hub
+    Deploy {
+        /// Target machine name (must exist in [remote.*])
+        #[arg(long)]
+        machine: String,
+        /// Project name (default: all projects configured for the machine)
+        #[arg(long)]
+        project: Option<String>,
+        /// Bypass change-detection and deploy even if the commit is unchanged
+        #[arg(long)]
+        force: bool,
+    },
     /// Run diagnostics
     Doctor {
         /// Machine-readable JSON (schema_version in the document)

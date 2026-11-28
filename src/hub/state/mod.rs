@@ -54,6 +54,8 @@ pub struct HubState {
     /// Нужен, чтобы не гонять SSH-пулл (и `post_pull`) на каждый push, когда
     /// на машине-источнике ничего не изменилось.
     deployed: RwLock<HashMap<String, String>>,
+    /// Активные on-demand deploy'и (`machine/project`) — защита от дублей.
+    deploying: tokio::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl HubState {
@@ -89,6 +91,7 @@ impl HubState {
             state_dir,
             state_errors: RwLock::new(HashMap::new()),
             deployed: RwLock::new(deployed),
+            deploying: tokio::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 }

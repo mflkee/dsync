@@ -4,6 +4,21 @@
 use super::*;
 
 impl HubState {
+    /// Начать on-demand deploy; false — такая пара уже деплоится.
+    pub async fn try_begin_deploy(&self, key: &str) -> bool {
+        let mut active = self.deploying.lock().await;
+        if active.contains(key) {
+            false
+        } else {
+            active.insert(key.to_string());
+            true
+        }
+    }
+
+    pub async fn finish_deploy(&self, key: &str) {
+        self.deploying.lock().await.remove(key);
+    }
+
     /// Удаляет машины, не подававшие признаков жизни дольше retention.
     /// Машины с `last_push == 0` (только добавленные) не трогаем.
     /// Возвращает true, если что-то удалили (и сохранили).

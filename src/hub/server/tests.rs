@@ -494,3 +494,57 @@ fn pull_command_pull_only_without_url_and_appends_post_pull() {
     assert!(cmd.ends_with("&& bash ./deploy.sh"));
     assert!(!cmd.contains("git clone"));
 }
+
+#[tokio::test]
+async fn deploy_rejects_self_and_unknown_target() {
+    let cfg = test_config(&[("notebook", "tok")], 1024, 4);
+    let state = Arc::new(HubState::new(None, 30));
+
+    let self_target = serde_json::json!({
+        "machine": "notebook",
+        "target_machine": "notebook"
+    });
+    let resp = handle_deploy(self_target, &state, &cfg).await;
+    assert!(resp["error"]
+        .as_str()
+        .unwrap()
+        .contains("requesting machine"));
+
+    let ghost = serde_json::json!({
+        "machine": "notebook",
+        "target_machine": "ghost"
+    });
+    let resp = handle_deploy(ghost, &state, &cfg).await;
+    assert!(resp["error"].as_str().unwrap().contains("unknown target"));
+}
+
+#[tokio::test]
+async fn deploy_unknown_project_and_offline_machine() {
+    let cfg = test_config(&[("notebook", "tok")], 1024, 4);
+    let state = Arc::new(HubState::new(None, 30));
+
+    let unknown = serde_json::json!({
+        "machine": "notebook",
+        "target_machine": "notebook",
+        "project": "nope"
+    });
+    let resp = handle_deploy(unknown, &state, &cfg).await;
+    assert!(resp["error"]
+        .as_str()
+        .unwrap()
+        .contains("requesting machine"));
+
+    let offline = serde_json::json!({
+        "machine": "hub-machine",
+        "target_machine": "notebook",
+        "project": "dotfiles"
+    });
+    let resp = handle_deploy(offline, &state, &cfg).await;
+    let results = resp["results"].as_array().expect("results");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["ok"], false);
+    assert!(
+        results[0]["error"].as_str().unwrap().contains("офлайн"),
+        "offline machine is rejected before SSH: {resp}"
+    );
+}
