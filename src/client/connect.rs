@@ -439,6 +439,7 @@ mod tests {
             last_push: 1_700_000_000,
             pulls,
             version: Some("0.1.0+deadbee (proto 2)".into()),
+            projects: Vec::new(),
         };
         let lines = machine_status_lines("desktop", &status);
         assert!(lines[0].contains("desktop: online=true"));
@@ -458,6 +459,7 @@ mod tests {
             last_push: 0,
             pulls: std::collections::HashMap::new(),
             version: None,
+            projects: Vec::new(),
         };
         let lines = machine_status_lines("notebook", &status);
         assert_eq!(lines.len(), 1);
