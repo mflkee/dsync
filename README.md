@@ -143,6 +143,13 @@ retry_limit = 3                   # apply attempts before an item goes to dead-l
 # projects = []                           # explicit off: neither export nor apply
 ```
 
+### Web panel
+
+`web/` — локальная Next.js-панель (BFF над `dsync` CLI): Dashboard, Machines,
+Projects, State, Doctor, Activity, Settings. Запуск: `cd web && pnpm install &&
+pnpm dev` → `http://127.0.0.1:3133`. Действия выполняются фоновыми задачами;
+`dsync deploy` требует proto 3. Подробности — `web/README.md`.
+
 ### Machine-readable output (`--json`)
 
 Diagnostic commands emit exactly one JSON document on stdout; logs go to

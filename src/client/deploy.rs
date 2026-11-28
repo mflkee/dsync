@@ -14,20 +14,22 @@ pub async fn deploy(
     project: Option<String>,
     force: bool,
 ) -> Result<(Vec<String>, bool)> {
-    let Some(remotes) = cfg.remote.as_ref() else {
-        bail!("no [remote.*] config — nothing to deploy to");
-    };
-    if !remotes.contains_key(&machine) {
-        let mut known: Vec<&String> = remotes.keys().collect();
-        known.sort();
-        bail!(
-            "unknown machine '{machine}' (known: {})",
-            known
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+    // На клиенте [remote.*] может отсутствовать: список машин и адреса знает
+    // хаб. Локально проверяем только если секция есть (понятная ошибка на
+    // опечатку), иначе окончательную проверку делает хаб.
+    if let Some(remotes) = cfg.remote.as_ref() {
+        if !remotes.contains_key(&machine) {
+            let mut known: Vec<&String> = remotes.keys().collect();
+            known.sort();
+            bail!(
+                "unknown machine '{machine}' (known: {})",
+                known
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
     }
     if let Some(name) = &project {
         let explicit = cfg

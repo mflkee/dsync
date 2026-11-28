@@ -45,6 +45,7 @@ export async function runDsync(args: string[], timeout = 60_000): Promise<RunRes
 /** Убрать из вывода строки, похожие на секреты (токены/пароли/ключи). */
 export function redact(text: string): string {
   return text
+    .replace(/\x1b\[[0-9;]*m/g, "")
     .split("\n")
     .filter((line) => !/token|password|passphrase|private key/i.test(line))
     .join("\n")

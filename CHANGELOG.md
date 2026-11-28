@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Веб-панель `web/`** (локальная, Next.js + Tailwind + shadcn-style):
+  Dashboard, Machines, Projects, State, Doctor, Activity, Settings; BFF над
+  `dsync` CLI, фоновые задачи, аудит, origin-проверки. Слушает
+  `127.0.0.1:3133` (3131/3132 заняты awgq-web).
 - **`dsync deploy`**: целевой SSH-пулл проекта на машину через хаб
   (`--force` игнорирует change-detection). Новый QUIC-запрос `deploy`,
   протокол поднят до **v3**; старые сообщения не изменились. Хаб проверяет

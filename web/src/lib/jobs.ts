@@ -39,9 +39,16 @@ export function createJob(
       job.code = result.code;
       job.state = result.ok ? "ok" : "failed";
       job.finishedAt = Date.now();
-      const output = redact(`${result.stdout}\n${result.stderr}`.trim());
+      // stdout — результат команды; stderr — логи/ошибки. На успехе показываем
+      // только stdout, чтобы последняя строка не была info-логом.
+      const text = result.ok
+        ? result.stdout
+        : `${result.stdout}\n${result.stderr}`;
+      const output = redact(text.trim());
       job.output = output.split("\n").filter(Boolean).slice(-200);
-      job.error = result.ok ? undefined : job.output.at(-1) ?? "failed";
+      job.error = result.ok
+        ? undefined
+        : redact(result.stderr).split("\n").filter(Boolean).at(-1) ?? "failed";
       active.delete(target);
       await appendAudit({
         ts: Date.now(),
