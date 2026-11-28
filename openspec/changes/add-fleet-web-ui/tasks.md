@@ -41,7 +41,7 @@
 ## 6. Тесты, CI и запуск
 
 - [ ] 6.1 Настроить Playwright с фиктивным `DSYNC_BIN` (ok/ошибка/пусто) и smoke-сценарий по всем экранам. Проверка: `pnpm test:e2e` зелёный локально.
-- [ ] 6.2 CI job `web`: pnpm install --frozen-lockfile, lint, typecheck, vitest, build. Проверка: job зелёный на push.
+- [x] 6.2 CI job `web`: pnpm install --frozen-lockfile, lint, typecheck, vitest, build. Проверка: job зелёный на push.
 - [ ] 6.3 Проверка безопасности: bind loopback, отказ при не-loopback без токена, отсутствие секретов в ответах/аудите. Проверка: тесты + ручной curl.
 - [x] 6.4 `web/README.md`: запуск dev/prod, переменные (`DSYNC_BIN`, `DSYNC_WEB_TOKEN`, `PORT`), systemd-пример, ограничения. Проверка: команды из README выполняются на чистой машине.
 
