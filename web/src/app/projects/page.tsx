@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import type { StatusReport } from "@/lib/types";
 import { usePolling } from "@/lib/use-polling";
+import { useRefreshInterval } from "@/lib/use-refresh-interval";
 import { fmtAgo } from "@/lib/utils";
 
 type Payload = { updatedAt: number; status: StatusReport };
@@ -32,7 +33,11 @@ type Row = {
 };
 
 export default function ProjectsPage() {
-  const { data, error, reload, loading } = usePolling<Payload>("/api/status", 10_000);
+  const [interval] = useRefreshInterval();
+  const { data, error, reload, loading } = usePolling<Payload>(
+    "/api/status",
+    interval * 1000,
+  );
   const [onlyProblems, setOnlyProblems] = useState(false);
 
   const rows: Row[] = [];

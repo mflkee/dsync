@@ -19,12 +19,17 @@ import {
 } from "@/components/ui";
 import type { StateReport } from "@/lib/types";
 import { usePolling } from "@/lib/use-polling";
+import { useRefreshInterval } from "@/lib/use-refresh-interval";
 import { fmtAgo } from "@/lib/utils";
 
 type Payload = { updatedAt: number; state: StateReport };
 
 export default function StatePage() {
-  const { data, error, loading, reload } = usePolling<Payload>("/api/state", 10_000);
+  const [interval] = useRefreshInterval();
+  const { data, error, loading, reload } = usePolling<Payload>(
+    "/api/state",
+    interval * 1000,
+  );
   const state = data?.state;
 
   return (

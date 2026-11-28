@@ -1,5 +1,5 @@
 import { statusJson } from "@/lib/dsync";
-import { checkAccess, errorJson } from "@/lib/http";
+import { checkAccess, errorJson, readJson } from "@/lib/http";
 import { createJob } from "@/lib/jobs";
 import { resolveAction } from "@/lib/allowlist";
 
@@ -10,15 +10,14 @@ export async function POST(req: Request) {
   const denied = checkAccess(req);
   if (denied) return errorJson(denied, 403);
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return errorJson("invalid JSON body", 400);
-  }
+  const parsed = await readJson(req);
+  if (!parsed.ok) return errorJson(parsed.message, parsed.status);
 
   const status = await statusJson().catch(() => null);
-  const resolved = resolveAction((body ?? {}) as Record<string, unknown>, status);
+  const resolved = resolveAction(
+    (parsed.body ?? {}) as Record<string, unknown>,
+    status,
+  );
   if ("error" in resolved) return errorJson(resolved.error, 400);
 
   const result = createJob(resolved.action, resolved.target, resolved.args, resolved.timeout);
