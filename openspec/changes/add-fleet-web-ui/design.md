@@ -37,7 +37,7 @@
 ### 1. Стек и структура приложения
 
 `web/`: Next.js (App Router) + React + TypeScript + Tailwind + shadcn/ui,
-пакетный менеджер pnpm, `dev`/`start` на `127.0.0.1:3132` (3131 занят
+пакетный менеджер pnpm, `dev`/`start` на `127.0.0.1:3133` (3131 занят
 awgq). Структура:
 
 ```
@@ -199,7 +199,7 @@ per-project и force, и смешивает семантику push и deploy.
 `web/README.md`: `pnpm install`, `pnpm dev`; прод — `pnpm build && pnpm
 start`. Опционально — systemd user unit `dsync-web.service`
 (`WorkingDirectory=~/projects/dsync/web`, `ExecStart=pnpm start`,
-`Environment=PORT=3132`), но в этом изменении не включается автоматически.
+`Environment=PORT=3133`), но в этом изменении не включается автоматически.
 Приложение не добавляется в `[projects.*]`-автозапуск и не стартует на
 каждой машине.
 

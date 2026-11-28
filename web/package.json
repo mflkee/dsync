@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -H 127.0.0.1 -p 3132",
+    "dev": "next dev -H 127.0.0.1 -p 3133",
     "build": "next build",
-    "start": "next start -H 127.0.0.1 -p 3132",
+    "start": "next start -H 127.0.0.1 -p 3133",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

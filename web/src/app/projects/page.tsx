@@ -37,7 +37,7 @@ export default function ProjectsPage() {
 
   const rows: Row[] = [];
   for (const [machine, m] of Object.entries(data?.status.machines ?? {})) {
-    for (const p of m.projects) {
+    for (const p of m.projects ?? []) {
       rows.push({
         machine,
         project: p.name,
@@ -48,7 +48,7 @@ export default function ProjectsPage() {
       });
     }
     for (const [project, pull] of Object.entries(m.pulls)) {
-      if (!m.projects.some((p) => p.name === project)) {
+      if (!(m.projects ?? []).some((p) => p.name === project)) {
         rows.push({ machine, project, branch: "—", commit: "", dirty: false, pull });
       }
     }

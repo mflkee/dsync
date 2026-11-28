@@ -55,7 +55,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
         <div className="border-t border-slate-800 p-3 text-[11px] leading-relaxed text-slate-500">
-          127.0.0.1:3132
+          127.0.0.1:3133
           <br />
           данные: локальный dsync CLI
         </div>

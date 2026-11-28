@@ -28,3 +28,10 @@ SESSION-HANDOFF*.md
 src/dsync/
 src/dsync.egg-info/
 /dist/
+
+# Web panel build artifacts
+web/node_modules/
+web/.next/
+web/.pnpm-store/
+web/*.tsbuildinfo
+.playwright-mcp/

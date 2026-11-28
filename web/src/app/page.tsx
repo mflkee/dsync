@@ -59,7 +59,10 @@ export default function DashboardPage() {
     interval * 1000,
   );
   const status = data?.status;
-  const machines = Object.values(status?.machines ?? {});
+  const machineEntries = Object.entries(status?.machines ?? {}).sort(
+    (a, b) => b[1].last_push - a[1].last_push,
+  );
+  const machines = machineEntries.map(([, m]) => m);
   const online = machines.filter((m) => m.online).length;
   const offline = machines.length - online;
   const drift = status
@@ -149,12 +152,9 @@ export default function DashboardPage() {
             {machines.length === 0 ? (
               <p className="text-sm text-slate-500">Нет данных о машинах.</p>
             ) : (
-              machines
-                .slice()
-                .sort((a, b) => b.last_push - a.last_push)
+              machineEntries
                 .slice(0, 6)
-                .map((m, i) => {
-                  const name = Object.keys(status?.machines ?? {})[i];
+                .map(([name, m]) => {
                   return (
                     <div key={name} className="flex items-center justify-between gap-3 text-sm">
                       <span className="flex items-center gap-2 text-slate-300">

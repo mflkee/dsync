@@ -53,7 +53,7 @@ export default function SettingsPage() {
           <CardHeader><CardTitle>Панель</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm text-slate-400">
             <p>
-              Bind: <span className="text-slate-200">127.0.0.1:3132</span>
+              Bind: <span className="text-slate-200">127.0.0.1:3133</span>
             </p>
             <p>
               Версия панели: <span className="text-slate-200">{health.data?.version ?? "—"}</span>

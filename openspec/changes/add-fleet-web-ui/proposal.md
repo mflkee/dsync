@@ -16,7 +16,7 @@
 ## What Changes
 
 - Новое приложение **`web/`** в репозитории: Next.js (App Router) + React +
-  Tailwind + **shadcn/ui**, pnpm; dev/start слушают `127.0.0.1:3132`.
+  Tailwind + **shadcn/ui**, pnpm; dev/start слушают `127.0.0.1:3133`.
 - **BFF на route handlers**, который на сервере вызывает локальный `dsync`
   (`status --json`, `doctor --json`, `state list --json`, `push`, `pull`,
   `state retry`) без shell-интерполяции; браузер получает только JSON.
