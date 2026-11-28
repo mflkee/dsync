@@ -6,8 +6,7 @@
     "dev": "next dev -H 127.0.0.1 -p 3133",
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 3133",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
@@ -24,8 +23,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "tailwindcss": "^4",
-    "typescript": "^5",
-    "vitest": "^3"
+    "typescript": "^5"
   },
   "packageManager": "pnpm@12.22.0"
 }

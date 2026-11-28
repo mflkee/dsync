@@ -252,7 +252,7 @@ mod tests {
                 .into_iter()
                 .collect(),
                 version: Some("0.1.0+abc (proto 2)".into()),
-            projects: Vec::new(),
+                projects: Vec::new(),
             },
         );
         let report = StatusReport::from_protocol(
