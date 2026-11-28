@@ -1,0 +1,34 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/doctor/layout,_N_T_/doctor/page,_N_T_/doctor"
+  },
+  "segmentPaths": [
+    "/_tree",
+    "/_full",
+    "/doctor/__PAGE__"
+  ],
+  "prefetchHints": {
+    "hints": 64,
+    "slots": {
+      "children": {
+        "hints": 96,
+        "slots": {
+          "children": {
+            "hints": 160,
+            "slots": null
+          }
+        }
+      }
+    }
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/173b436b8c7af2911d1a2eabc395fb7a7e7f1eaed7811435f0b215814109aa96/$/doctor",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/doctor/page"
+    },
+    "isFallback": false
+  }
+}

@@ -94,6 +94,16 @@ pub struct PullReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectReport {
+    pub name: String,
+    pub branch: String,
+    pub commit_hash: String,
+    pub dirty: bool,
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineReport {
     pub online: bool,
     pub last_seen: i64,
@@ -101,6 +111,7 @@ pub struct MachineReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub pulls: BTreeMap<String, PullReport>,
+    pub projects: Vec<ProjectReport>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -150,6 +161,18 @@ impl StatusReport {
                         last_push: m.last_push,
                         version: m.version,
                         pulls,
+                        projects: m
+                            .projects
+                            .into_iter()
+                            .map(|p| ProjectReport {
+                                name: p.name,
+                                branch: p.branch,
+                                commit_hash: p.commit_hash,
+                                dirty: p.dirty,
+                                ahead: p.ahead,
+                                behind: p.behind,
+                            })
+                            .collect(),
                     },
                 )
             })
@@ -229,6 +252,7 @@ mod tests {
                 .into_iter()
                 .collect(),
                 version: Some("0.1.0+abc (proto 2)".into()),
+            projects: Vec::new(),
             },
         );
         let report = StatusReport::from_protocol(

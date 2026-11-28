@@ -160,6 +160,9 @@ pub struct MachineStatus {
     /// Версия dsync на машине (последний push).
     #[serde(default)]
     pub version: Option<String>,
+    /// Проекты, анонсированные последним push (для панели/скриптов).
+    #[serde(default)]
+    pub projects: Vec<ProjectState>,
 }
 
 // ---------------------------------------------------------------------------

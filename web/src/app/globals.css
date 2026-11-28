@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+:root {
+  --background: #020617;
+  --foreground: #e2e8f0;
+}
+
+html,
+body {
+  min-height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04";
+}
+
+::selection {
+  background: #0ea5e9;
+  color: #020617;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}

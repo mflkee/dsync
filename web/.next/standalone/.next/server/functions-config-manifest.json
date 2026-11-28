@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "functions": {
+    "/api/actions": {},
+    "/api/audit": {},
+    "/api/doctor": {},
+    "/api/health": {},
+    "/api/jobs": {},
+    "/api/jobs/[id]": {},
+    "/api/state": {},
+    "/api/status": {}
+  }
+}

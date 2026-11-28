@@ -98,6 +98,7 @@ impl HubState {
                     last_push: state.last_push,
                     pulls: state.pulls.clone(),
                     version: state.version.clone(),
+                    projects: state.projects.clone(),
                 },
             );
         }

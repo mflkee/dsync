@@ -1,0 +1,19 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/activity/page": "/activity",
+  "/api/actions/route": "/api/actions",
+  "/api/audit/route": "/api/audit",
+  "/api/doctor/route": "/api/doctor",
+  "/api/health/route": "/api/health",
+  "/api/jobs/[id]/route": "/api/jobs/[id]",
+  "/api/jobs/route": "/api/jobs",
+  "/api/state/route": "/api/state",
+  "/api/status/route": "/api/status",
+  "/doctor/page": "/doctor",
+  "/machines/page": "/machines",
+  "/page": "/",
+  "/projects/page": "/projects",
+  "/settings/page": "/settings",
+  "/state/page": "/state"
+}
